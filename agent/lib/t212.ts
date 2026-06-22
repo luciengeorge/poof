@@ -169,10 +169,14 @@ export class T212Client {
 
 export function t212FromEnv(fetchImpl?: typeof fetch): T212Client {
   const apiKey = process.env.TRADING212_API_KEY;
-  const apiSecret = process.env.TRADING212_API_SECRET;
+  // Accept either name: TRADING212_API_SECRET (docs) or TRADING212_SECRET_KEY.
+  const apiSecret =
+    process.env.TRADING212_API_SECRET ?? process.env.TRADING212_SECRET_KEY;
   const env = (process.env.TRADING212_ENV ?? "demo") as T212Env;
   if (!apiKey || !apiSecret) {
-    throw new Error("TRADING212_API_KEY and TRADING212_API_SECRET must be set");
+    throw new Error(
+      "TRADING212_API_KEY and TRADING212_API_SECRET (or TRADING212_SECRET_KEY) must be set",
+    );
   }
   return new T212Client({ apiKey, apiSecret, env, fetchImpl });
 }

@@ -1,22 +1,30 @@
-import { T212Client, type T212Env } from "./t212.ts";
+import { t212FromEnv } from "./t212.ts";
 
-const apiKey = process.env.TRADING212_API_KEY;
-const apiSecret = process.env.TRADING212_API_SECRET;
-const env = (process.env.TRADING212_ENV ?? "demo") as T212Env;
-
-if (!apiKey || !apiSecret) {
-  console.error("skip: set TRADING212_API_KEY and TRADING212_API_SECRET in .env.local.");
+const hasSecret =
+  process.env.TRADING212_API_SECRET || process.env.TRADING212_SECRET_KEY;
+if (!process.env.TRADING212_API_KEY || !hasSecret) {
+  console.error(
+    "skip: set TRADING212_API_KEY and TRADING212_API_SECRET (or TRADING212_SECRET_KEY) in .env.local.",
+  );
   process.exit(2);
 }
-// Read-only smoke: live is safe here (no orders are placed).
-if (env === "live") console.warn("note: smoke-testing against LIVE (read-only — no orders).");
 
-const client = new T212Client({ apiKey, apiSecret, env });
+const env = process.env.TRADING212_ENV ?? "demo";
+if (env === "live") {
+  console.warn("note: smoke-testing against LIVE (read-only — no orders).");
+}
+
+const client = t212FromEnv();
 
 try {
   const cash = await client.getCash();
   const positions = await client.getPortfolio();
-  console.log("✅ auth OK. cash.free =", cash.free, "| positions:", positions.length);
+  console.log(
+    "✅ auth OK. cash.free =",
+    cash.free,
+    "| positions:",
+    positions.length,
+  );
   console.log("rate limit:", client.lastRateLimit());
 } catch (err) {
   console.error("❌ smoke-test failed:", err);
