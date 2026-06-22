@@ -20,6 +20,10 @@ export default defineTool({
   inputSchema: z.object({
     proposals: z.array(proposalSchema).min(1).max(10),
   }),
+  // Phase 1b: require human approval (Slack) before REAL orders. Only meaningful when
+  // actually executing — dry-run/simulated orders never need approval.
+  needsApproval: () =>
+    process.env.REQUIRE_APPROVAL === "true" && process.env.DRY_RUN === "false",
   async execute({ proposals }) {
     const client = t212FromEnv();
     return evaluateAndExecute(proposals, {
