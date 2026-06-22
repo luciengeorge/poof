@@ -166,3 +166,13 @@ export class T212Client {
     await this.request<void>("DELETE", `/equity/orders/${id}`);
   }
 }
+
+export function t212FromEnv(fetchImpl?: typeof fetch): T212Client {
+  const apiKey = process.env.TRADING212_API_KEY;
+  const apiSecret = process.env.TRADING212_API_SECRET;
+  const env = (process.env.TRADING212_ENV ?? "demo") as T212Env;
+  if (!apiKey || !apiSecret) {
+    throw new Error("TRADING212_API_KEY and TRADING212_API_SECRET must be set");
+  }
+  return new T212Client({ apiKey, apiSecret, env, fetchImpl });
+}
