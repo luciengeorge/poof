@@ -1,0 +1,86 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { notionalToShares, buildRiskSnapshot } from "./execution.ts";
+import type { CashBalance, T212Position } from "./t212.ts";
+
+function cash(over: Partial<CashBalance> = {}): CashBalance {
+  return {
+    total: 0,
+    free: 0,
+    blocked: 0,
+    invested: 0,
+    pieCash: 0,
+    result: 0,
+    ppl: 0,
+    ...over,
+  };
+}
+
+function pos(over: Partial<T212Position> = {}): T212Position {
+  return {
+    ticker: "AAPL_US_EQ",
+    quantity: 1,
+    averagePrice: 50,
+    currentPrice: 50,
+    ppl: 0,
+    maxBuy: 0,
+    maxSell: 0,
+    pieQuantity: 0,
+    ...over,
+  };
+}
+
+// --- notionalToShares ---
+
+test("notionalToShares converts account-ccy notional to shares via price*fx", () => {
+  // £100 into a $50 stock at fx 0.8 (USD->GBP): price in GBP = 40 => 2.5 shares
+  assert.equal(notionalToShares(100, 50, 0.8), 2.5);
+});
+
+test("notionalToShares keeps the sign (negative notional = SELL)", () => {
+  assert.equal(notionalToShares(-100, 50, 0.8), -2.5);
+});
+
+test("notionalToShares rounds to 6 dp", () => {
+  // 1 / (3 * 1) = 0.3333... -> 0.333333
+  assert.equal(notionalToShares(1, 3, 1), 0.333333);
+});
+
+test("notionalToShares rejects non-positive price or fx", () => {
+  assert.throws(() => notionalToShares(100, 0, 0.8), /positive/);
+  assert.throws(() => notionalToShares(100, 50, 0), /positive/);
+});
+
+// --- buildRiskSnapshot ---
+
+test("buildRiskSnapshot maps cash + positions into a risk snapshot (account ccy)", () => {
+  const snap = buildRiskSnapshot({
+    cash: cash({ free: 20 }),
+    positions: [pos({ ticker: "X", quantity: 1, currentPrice: 50 })],
+    fxRate: 0.8, // position value = 1 * 50 * 0.8 = 40
+    peakEquity: 0,
+    dayPnl: -1,
+    newPositionsToday: 1,
+    consecutiveLossDays: 0,
+  });
+  assert.equal(snap.cash, 20);
+  assert.equal(snap.positions[0].value, 40);
+  assert.equal(snap.equity, 60); // 20 free + 40 deployed
+  assert.equal(snap.peakEquity, 60); // max(0, 60)
+  assert.equal(snap.dayPnl, -1);
+  assert.equal(snap.newPositionsToday, 1);
+});
+
+test("buildRiskSnapshot keeps a higher stored peakEquity", () => {
+  const snap = buildRiskSnapshot({
+    cash: cash({ free: 10 }),
+    positions: [],
+    fxRate: 1,
+    peakEquity: 100,
+    dayPnl: 0,
+    newPositionsToday: 0,
+    consecutiveLossDays: 0,
+  });
+  assert.equal(snap.equity, 10);
+  assert.equal(snap.peakEquity, 100); // stored peak wins over current
+});
