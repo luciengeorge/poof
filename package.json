@@ -10,7 +10,8 @@
     "build": "eve build",
     "dev": "eve dev",
     "start": "eve start",
-    "typecheck": "tsc"
+    "typecheck": "tsc",
+    "test": "node --test --experimental-strip-types \"agent/**/*.test.ts\""
   },
   "dependencies": {
     "@vercel/connect": "0.2.2",
