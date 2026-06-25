@@ -1,11 +1,12 @@
 import { defineTool } from "eve/tools";
 import { z } from "zod";
-import { checkHalt, DEFAULT_LIMITS } from "../lib/risk.ts";
+import { checkHalt } from "../lib/risk.ts";
 import { t212FromEnv } from "../lib/t212.ts";
 import { evaluateAndExecute } from "../lib/orders.ts";
 import {
   deriveRiskState,
   loadRiskState,
+  resolveLimits,
   fxRateFromEnv,
   isDryRun,
   type RiskState,
@@ -31,7 +32,7 @@ async function resolveRiskState(currentEquity: number): Promise<RiskState> {
         positions: [],
         ...derived.fields,
       },
-      DEFAULT_LIMITS,
+      resolveLimits(),
     );
     await memory.saveRiskState({
       env: env(),
@@ -87,6 +88,7 @@ export default defineTool({
       fxRate: fxRateFromEnv(),
       dryRun: isDryRun(),
       resolveRiskState,
+      limits: resolveLimits(),
     });
 
     // Record every placed/simulated trade to durable memory. Best-effort:

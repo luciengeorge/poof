@@ -58,12 +58,16 @@ export interface RunningState {
   newPositionsToday: number;
 }
 
+// "Full deploy, keep diversification": no idle-cash floor and large per-trade size so the
+// whole account can be put to work, but a per-name cap stops it going all-in on one stock.
+// The daily-loss + drawdown circuit breakers below are ruin-prevention and stay tight.
+// Every field is overridable per-deployment via resolveLimits()/TRADING_* env vars.
 export const DEFAULT_LIMITS: RiskLimits = {
-  maxPerNamePct: 0.18,
-  maxDeployedPct: 0.8,
-  maxNewPositionsPerDay: 3,
+  maxPerNamePct: 0.3,
+  maxDeployedPct: 1.0,
+  maxNewPositionsPerDay: 6,
   minTradePct: 0.02,
-  maxTradePct: 0.08,
+  maxTradePct: 0.3,
   dailyLossHaltPct: 0.04,
   maxConcurrentPositions: 10,
   minPrice: 5,
