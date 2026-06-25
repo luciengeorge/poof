@@ -53,7 +53,7 @@ export const saveRiskState = mutation({
       .unique();
     const patch = { ...args, updatedAt: Date.now() };
     if (existing) {
-      await ctx.db.patch(existing._id, patch);
+      await ctx.db.patch("riskState", existing._id, patch);
       return existing._id;
     }
     return await ctx.db.insert("riskState", patch);
@@ -91,8 +91,9 @@ export const recallRecent = query({
     env: v.string(),
     cycleLimit: v.optional(v.number()),
     tradeLimit: v.optional(v.number()),
+    messageLimit: v.optional(v.number()),
   },
-  handler: async (ctx, { env, cycleLimit, tradeLimit }) => {
+  handler: async (ctx, { env, cycleLimit, tradeLimit, messageLimit }) => {
     const cycles = await ctx.db
       .query("cycles")
       .withIndex("by_env", (q) => q.eq("env", env))
@@ -103,10 +104,15 @@ export const recallRecent = query({
       .withIndex("by_env", (q) => q.eq("env", env))
       .order("desc")
       .take(tradeLimit ?? 20);
+    const messages = await ctx.db
+      .query("messages")
+      .withIndex("by_env", (q) => q.eq("env", env))
+      .order("desc")
+      .take(messageLimit ?? 20);
     const riskState = await ctx.db
       .query("riskState")
       .withIndex("by_env", (q) => q.eq("env", env))
       .unique();
-    return { cycles, trades, riskState };
+    return { cycles, trades, messages, riskState };
   },
 });

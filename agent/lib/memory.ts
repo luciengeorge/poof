@@ -88,7 +88,11 @@ export class Memory {
   }
   recallRecent(
     env: Env,
-    limits: { cycleLimit?: number; tradeLimit?: number } = {},
+    limits: {
+      cycleLimit?: number;
+      tradeLimit?: number;
+      messageLimit?: number;
+    } = {},
   ): Promise<unknown> {
     return this.client.query(ref("recallRecent"), { env, ...limits });
   }

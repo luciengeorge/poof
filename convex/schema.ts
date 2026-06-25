@@ -44,7 +44,7 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_env", ["env"])
-    .index("by_ticker", ["env", "ticker"]),
+    .index("by_env_and_ticker", ["env", "ticker"]),
 
   messages: defineTable({
     env: v.string(),
