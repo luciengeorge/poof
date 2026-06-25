@@ -49,7 +49,7 @@ test("dry-run: accepted proposal is reported but not sent to T212", async () => 
     client,
     fxRate: 1,
     dryRun: true,
-    riskState: noState,
+    resolveRiskState: async () => noState,
   });
   assert.equal(res.placed.length, 1);
   assert.equal(res.placed[0].dryRun, true);
@@ -63,7 +63,7 @@ test("live: accepted proposal is sent with signed share quantity", async () => {
     client,
     fxRate: 1,
     dryRun: false,
-    riskState: noState,
+    resolveRiskState: async () => noState,
   });
   assert.equal(res.placed[0].dryRun, false);
   assert.equal(placed.length, 1);
@@ -87,7 +87,7 @@ test("live SELL sends a negative quantity", async () => {
   });
   const res = await evaluateAndExecute(
     [{ ticker: "AAPL_US_EQ", side: "SELL", notional: 300, price: 100, thesis: "t" }],
-    { client, fxRate: 1, dryRun: false, riskState: noState },
+    { client, fxRate: 1, dryRun: false, resolveRiskState: async () => noState },
   );
   assert.equal(res.placed.length, 1);
   assert.equal(placed[0].quantity, -3);
@@ -99,7 +99,7 @@ test("risk gate rejects an oversize trade (not placed)", async () => {
     client,
     fxRate: 1,
     dryRun: false,
-    riskState: noState,
+    resolveRiskState: async () => noState,
   });
   assert.equal(res.placed.length, 0);
   assert.equal(res.rejected.length, 1);
@@ -115,7 +115,7 @@ test("reconciliation: skips a ticker that already has a pending order", async ()
     client,
     fxRate: 1,
     dryRun: false,
-    riskState: noState,
+    resolveRiskState: async () => noState,
   });
   assert.equal(res.placed.length, 1);
   assert.match(res.placed[0].skipped ?? "", /pending/i);
@@ -128,7 +128,7 @@ test("halt: a tripped daily-loss state rejects everything", async () => {
     client,
     fxRate: 1,
     dryRun: false,
-    riskState: { ...noState, dayPnl: -500 }, // -5% of 10000 > 4% cap
+    resolveRiskState: async () => ({ ...noState, dayPnl: -500 }), // -5% of 10000 > 4% cap
   });
   assert.equal(res.placed.length, 0);
   assert.match(res.rejected[0].reason, /halted/i);

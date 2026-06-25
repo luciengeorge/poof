@@ -22,3 +22,13 @@ export function isUsMarketOpen(date: Date): boolean {
   const minutes = hour * 60 + minute;
   return minutes >= 9 * 60 + 30 && minutes < 16 * 60;
 }
+
+/** Calendar date in America/New_York as YYYY-MM-DD (the trading "day" key). */
+export function etDateString(date: Date): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+}
