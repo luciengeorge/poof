@@ -77,6 +77,37 @@ export function deriveRiskState(
   };
 }
 
+import { DEFAULT_LIMITS, type RiskLimits } from "./risk.ts";
+
+type EnvLike = Record<string, string | undefined>;
+
+function numFromEnv(env: EnvLike, key: string, fallback: number): number {
+  const raw = env[key];
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+/**
+ * Active risk limits = DEFAULT_LIMITS overlaid with optional `TRADING_*` env overrides,
+ * so aggression can be tuned per-deployment (e.g. on Vercel) without a code change.
+ * An unset/blank/non-numeric var falls back to the shipped default.
+ */
+export function resolveLimits(env: EnvLike = process.env): RiskLimits {
+  return {
+    maxPerNamePct: numFromEnv(env, "TRADING_MAX_PER_NAME_PCT", DEFAULT_LIMITS.maxPerNamePct),
+    maxDeployedPct: numFromEnv(env, "TRADING_MAX_DEPLOYED_PCT", DEFAULT_LIMITS.maxDeployedPct),
+    maxNewPositionsPerDay: numFromEnv(env, "TRADING_MAX_NEW_POSITIONS_PER_DAY", DEFAULT_LIMITS.maxNewPositionsPerDay),
+    minTradePct: numFromEnv(env, "TRADING_MIN_TRADE_PCT", DEFAULT_LIMITS.minTradePct),
+    maxTradePct: numFromEnv(env, "TRADING_MAX_TRADE_PCT", DEFAULT_LIMITS.maxTradePct),
+    dailyLossHaltPct: numFromEnv(env, "TRADING_DAILY_LOSS_HALT_PCT", DEFAULT_LIMITS.dailyLossHaltPct),
+    maxConcurrentPositions: numFromEnv(env, "TRADING_MAX_CONCURRENT_POSITIONS", DEFAULT_LIMITS.maxConcurrentPositions),
+    minPrice: numFromEnv(env, "TRADING_MIN_PRICE", DEFAULT_LIMITS.minPrice),
+    maxDrawdownPct: numFromEnv(env, "TRADING_MAX_DRAWDOWN_PCT", DEFAULT_LIMITS.maxDrawdownPct),
+    maxConsecutiveLossDays: numFromEnv(env, "TRADING_MAX_CONSECUTIVE_LOSS_DAYS", DEFAULT_LIMITS.maxConsecutiveLossDays),
+  };
+}
+
 /** Neutral risk state for display-only reads that don't gate trades (e.g. get_account). */
 export function loadRiskState(): RiskState {
   return { peakEquity: 0, dayPnl: 0, newPositionsToday: 0, consecutiveLossDays: 0 };

@@ -1,6 +1,24 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { deriveRiskState, type StoredRiskState } from "./state.ts";
+import { deriveRiskState, resolveLimits, type StoredRiskState } from "./state.ts";
+import { DEFAULT_LIMITS } from "./risk.ts";
+
+test("resolveLimits: returns the shipped defaults when no env overrides", () => {
+  assert.deepEqual(resolveLimits({}), DEFAULT_LIMITS);
+});
+
+test("resolveLimits: TRADING_* env vars override individual limits", () => {
+  const limits = resolveLimits({
+    TRADING_MAX_DEPLOYED_PCT: "0.5",
+    TRADING_MAX_TRADE_PCT: "0.1",
+    TRADING_MAX_PER_NAME_PCT: "",
+    TRADING_MIN_PRICE: "not-a-number",
+  });
+  assert.equal(limits.maxDeployedPct, 0.5);
+  assert.equal(limits.maxTradePct, 0.1);
+  assert.equal(limits.maxPerNamePct, DEFAULT_LIMITS.maxPerNamePct); // blank -> default
+  assert.equal(limits.minPrice, DEFAULT_LIMITS.minPrice); // non-numeric -> default
+});
 
 test("first run: seeds peak + day-start at current equity, no loss days", () => {
   const d = deriveRiskState(null, 50, "2026-06-25");

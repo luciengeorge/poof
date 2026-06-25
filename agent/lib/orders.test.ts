@@ -94,8 +94,8 @@ test("live SELL sends a negative quantity", async () => {
 });
 
 test("risk gate rejects an oversize trade (not placed)", async () => {
-  const { client, placed } = fakeClient(); // equity 10000 => max trade 800
-  const res = await evaluateAndExecute([buy(900)], {
+  const { client, placed } = fakeClient(); // equity 10000 => max trade 3000 (30%)
+  const res = await evaluateAndExecute([buy(3500)], {
     client,
     fxRate: 1,
     dryRun: false,
