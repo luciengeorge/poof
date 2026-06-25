@@ -22,6 +22,9 @@ export interface Proposal {
   price: number;
   thesis: string;
   redTeamVerdict?: string;
+  stopLossPct?: number;
+  takeProfitPct?: number;
+  maxHoldDays?: number;
 }
 
 export interface PlacedResult {

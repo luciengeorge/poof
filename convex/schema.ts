@@ -38,13 +38,27 @@ export default defineSchema({
     thesis: v.string(),
     redTeamVerdict: v.optional(v.string()),
     status: v.string(), // "placed" | "dry-run" | "skipped" | "closed"
+    // Exit levels set at entry (fractions of entry price), read by the exit engine.
+    stopLossPct: v.optional(v.number()),
+    takeProfitPct: v.optional(v.number()),
+    maxHoldDays: v.optional(v.number()),
     fillPrice: v.optional(v.number()),
+    exitPrice: v.optional(v.number()),
     pnl: v.optional(v.number()),
     closedAt: v.optional(v.number()),
     createdAt: v.number(),
   })
     .index("by_env", ["env"])
     .index("by_env_and_ticker", ["env", "ticker"]),
+
+  // Buy-and-hold SPY baseline, captured once at inception, for alpha reporting.
+  benchmark: defineTable({
+    env: v.string(),
+    inceptionEquity: v.number(),
+    inceptionSpyPrice: v.number(),
+    inceptionDate: v.string(), // YYYY-MM-DD (ET)
+    updatedAt: v.number(),
+  }).index("by_env", ["env"]),
 
   messages: defineTable({
     env: v.string(),

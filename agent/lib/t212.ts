@@ -74,6 +74,22 @@ function buildAuthHeader(apiKey: string, apiSecret: string): string {
   return "Basic " + Buffer.from(`${apiKey}:${apiSecret}`).toString("base64");
 }
 
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Backoff for a 429: prefer Retry-After (seconds), else the rate-limit period, else 2^attempt s. Capped at 10s. */
+function retryDelayMs(h: Headers, attempt: number): number {
+  const retryAfter = Number(h.get("retry-after"));
+  if (Number.isFinite(retryAfter) && retryAfter > 0) {
+    return Math.min(retryAfter * 1000, 10_000);
+  }
+  const period = Number(h.get("x-ratelimit-period"));
+  if (Number.isFinite(period) && period > 0) {
+    return Math.min(period * 1000, 10_000);
+  }
+  return Math.min(2 ** attempt * 1000, 10_000);
+}
+
 export class T212Client {
   private readonly base: string;
   private readonly auth: string;
@@ -112,18 +128,28 @@ export class T212Client {
     path: string,
     body?: unknown,
   ): Promise<T> {
-    const res = await this.fetchImpl(`${this.base}${path}`, {
-      method,
-      headers: {
-        Authorization: this.auth,
-        ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
-      },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    });
-    this.captureRateLimit(res.headers);
-    const text = await res.text();
-    if (!res.ok) throw new T212Error(res.status, text);
-    return (text ? JSON.parse(text) : undefined) as T;
+    // The T212 API is tightly rate-limited (some endpoints 1 req / few seconds). Back off
+    // and retry on 429 honoring Retry-After / the reset window, so a cycle's several reads
+    // don't fail on a transient limit.
+    const maxRetries = 3;
+    for (let attempt = 0; ; attempt++) {
+      const res = await this.fetchImpl(`${this.base}${path}`, {
+        method,
+        headers: {
+          Authorization: this.auth,
+          ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+        },
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+      });
+      this.captureRateLimit(res.headers);
+      const text = await res.text();
+      if (res.ok) return (text ? JSON.parse(text) : undefined) as T;
+      if (res.status === 429 && attempt < maxRetries) {
+        await sleep(retryDelayMs(res.headers, attempt));
+        continue;
+      }
+      throw new T212Error(res.status, text);
+    }
   }
 
   getCash(): Promise<CashBalance> {

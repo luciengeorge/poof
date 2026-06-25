@@ -16,9 +16,48 @@ export const recordTrade = mutation({
     thesis: v.string(),
     redTeamVerdict: v.optional(v.string()),
     status: v.string(),
+    stopLossPct: v.optional(v.number()),
+    takeProfitPct: v.optional(v.number()),
+    maxHoldDays: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     return await ctx.db.insert("trades", { ...args, createdAt: Date.now() });
+  },
+});
+
+// Mark an open trade closed with its realized P&L (called when a position is exited or
+// is no longer held on reconciliation).
+export const closeTrade = mutation({
+  args: {
+    tradeId: v.id("trades"),
+    pnl: v.number(),
+    exitPrice: v.optional(v.number()),
+  },
+  handler: async (ctx, { tradeId, pnl, exitPrice }) => {
+    await ctx.db.patch("trades", tradeId, {
+      status: "closed",
+      pnl,
+      exitPrice,
+      closedAt: Date.now(),
+    });
+    return tradeId;
+  },
+});
+
+export const saveBenchmark = mutation({
+  args: {
+    env: v.string(),
+    inceptionEquity: v.number(),
+    inceptionSpyPrice: v.number(),
+    inceptionDate: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query("benchmark")
+      .withIndex("by_env", (q) => q.eq("env", args.env))
+      .unique();
+    if (existing) return existing._id; // baseline captured once, never overwritten
+    return await ctx.db.insert("benchmark", { ...args, updatedAt: Date.now() });
   },
 });
 
@@ -86,6 +125,31 @@ export const getRiskState = query({
   },
 });
 
+export const getBenchmark = query({
+  args: { env: v.string() },
+  handler: async (ctx, { env }) => {
+    return await ctx.db
+      .query("benchmark")
+      .withIndex("by_env", (q) => q.eq("env", env))
+      .unique();
+  },
+});
+
+// Open BUY positions for this account: placed (not dry-run, not closed/skipped) buys,
+// most recent first. Used by the exit engine + performance review to recover each
+// position's entry, thesis, and exit levels.
+export const openBuys = query({
+  args: { env: v.string(), limit: v.optional(v.number()) },
+  handler: async (ctx, { env, limit }) => {
+    const rows = await ctx.db
+      .query("trades")
+      .withIndex("by_env", (q) => q.eq("env", env))
+      .order("desc")
+      .take(limit ?? 100);
+    return rows.filter((t) => t.side === "BUY" && t.status === "placed");
+  },
+});
+
 export const recallRecent = query({
   args: {
     env: v.string(),
@@ -113,6 +177,10 @@ export const recallRecent = query({
       .query("riskState")
       .withIndex("by_env", (q) => q.eq("env", env))
       .unique();
-    return { cycles, trades, messages, riskState };
+    const benchmark = await ctx.db
+      .query("benchmark")
+      .withIndex("by_env", (q) => q.eq("env", env))
+      .unique();
+    return { cycles, trades, messages, riskState, benchmark };
   },
 });

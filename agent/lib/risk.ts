@@ -155,16 +155,9 @@ export function validateOrders(
   p: PortfolioSnapshot,
   limits: RiskLimits,
 ): ValidationResult {
+  // A halt blocks NEW RISK (buys) but never de-risking: SELLs (incl. stop-losses)
+  // must still go through so the agent can exit while halted.
   const halt = checkHalt(p, limits);
-  if (halt.halted) {
-    return {
-      accepted: [],
-      rejected: orders.map((order) => ({
-        order,
-        reason: `trading halted: ${halt.reason}`,
-      })),
-    };
-  }
 
   const accepted: ProposedOrder[] = [];
   const rejected: Rejection[] = [];
@@ -197,6 +190,10 @@ export function validateOrders(
       continue;
     }
 
+    if (halt.halted) {
+      rejected.push({ order, reason: `trading halted: ${halt.reason}` });
+      continue;
+    }
     const reason = evaluateBuy(order, p, limits, running);
     if (reason) {
       rejected.push({ order, reason });
