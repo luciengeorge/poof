@@ -1,9 +1,20 @@
-import { localDev, vercelOidc } from 'eve/channels/auth';
+import { randomUUID } from 'node:crypto';
+import { httpBasic, localDev, vercelOidc } from 'eve/channels/auth';
 import { eveChannel } from 'eve/channels/eve';
 
-// Phase 1 has no browser UI — the agent runs via the cycle schedule and the Slack
-// channel. So we fail closed for anonymous browser traffic (no placeholderAuth) and
-// allow only loopback dev + Vercel OIDC (the eve TUI and in-deployment callers).
+// Fail closed for anonymous traffic. Accepted callers:
+// - localDev(): loopback (your `eve dev`)
+// - vercelOidc(): tokens scoped to THIS Vercel project (your team + in-deployment callers)
+// - httpBasic(): an operator username/password you control, independent of Vercel.
+// Password comes from ROUTE_AUTH_BASIC_PASSWORD at boot; the random fallback ensures the
+// password is never empty/guessable if the env var is missing (so no accidental open door).
 export default eveChannel({
-  auth: [localDev(), vercelOidc()],
+  auth: [
+    localDev(),
+    vercelOidc(),
+    httpBasic({
+      username: process.env.ROUTE_AUTH_BASIC_USERNAME ?? 'operator',
+      password: process.env.ROUTE_AUTH_BASIC_PASSWORD ?? randomUUID(),
+    }),
+  ],
 });
