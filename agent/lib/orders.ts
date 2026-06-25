@@ -1,6 +1,7 @@
 import { validateOrders, DEFAULT_LIMITS, type RiskLimits } from "./risk.ts";
 import { buildRiskSnapshot, notionalToShares } from "./execution.ts";
 import type { CashBalance, T212Position, T212Order } from "./t212.ts";
+import type { RiskState } from "./state.ts";
 
 /** The subset of T212Client the executor needs (T212Client satisfies it structurally). */
 export interface OrderExecClient {
@@ -40,12 +41,11 @@ export interface ExecuteOpts {
   client: OrderExecClient;
   fxRate: number;
   dryRun: boolean;
-  riskState: {
-    peakEquity: number;
-    dayPnl: number;
-    newPositionsToday: number;
-    consecutiveLossDays: number;
-  };
+  /**
+   * Resolve the cross-cycle risk state given the freshly-computed current equity.
+   * Lets the caller load durable state (Convex) + derive day-rollover/peak/halt fields.
+   */
+  resolveRiskState: (currentEquity: number) => Promise<RiskState>;
   limits?: RiskLimits;
 }
 
@@ -60,7 +60,7 @@ export async function evaluateAndExecute(
   proposals: Proposal[],
   opts: ExecuteOpts,
 ): Promise<ExecutionResult> {
-  const { client, fxRate, dryRun, riskState } = opts;
+  const { client, fxRate, dryRun, resolveRiskState } = opts;
   const limits = opts.limits ?? DEFAULT_LIMITS;
 
   const [cash, positions, pending] = await Promise.all([
@@ -68,6 +68,14 @@ export async function evaluateAndExecute(
     client.getPortfolio(),
     client.getPendingOrders(),
   ]);
+
+  // Equity (account ccy) = free cash + Σ position market value (instrument ccy → account ccy).
+  const deployed = positions.reduce(
+    (sum, p) => sum + p.quantity * p.currentPrice * fxRate,
+    0,
+  );
+  const currentEquity = cash.free + deployed;
+  const riskState = await resolveRiskState(currentEquity);
 
   const snapshot = buildRiskSnapshot({ cash, positions, fxRate, ...riskState });
   // Pass full proposals through; validateOrders only reads ticker/side/notional/price,

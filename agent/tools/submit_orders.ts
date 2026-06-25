@@ -1,9 +1,56 @@
 import { defineTool } from "eve/tools";
 import { z } from "zod";
+import { checkHalt, DEFAULT_LIMITS } from "../lib/risk.ts";
 import { t212FromEnv } from "../lib/t212.ts";
 import { evaluateAndExecute } from "../lib/orders.ts";
-import { loadRiskState, fxRateFromEnv, isDryRun } from "../lib/state.ts";
+import {
+  deriveRiskState,
+  loadRiskState,
+  fxRateFromEnv,
+  isDryRun,
+  type RiskState,
+  type StoredRiskState,
+} from "../lib/state.ts";
+import { etDateString } from "../lib/clock.ts";
 import { memoryFromEnv, type Env } from "../lib/memory.ts";
+
+const env = (): Env => (process.env.TRADING212_ENV ?? "demo") as Env;
+
+// Load durable risk state from Convex, derive this cycle's fields (day rollover, peak,
+// consecutive-loss days), persist the update, and return the gate fields. Best-effort:
+// if memory is unavailable, fall back to a neutral state (no halt) so trading isn't blocked.
+async function resolveRiskState(currentEquity: number): Promise<RiskState> {
+  try {
+    const memory = memoryFromEnv();
+    const stored = (await memory.getRiskState(env())) as StoredRiskState | null;
+    const derived = deriveRiskState(stored, currentEquity, etDateString(new Date()));
+    const halt = checkHalt(
+      {
+        equity: currentEquity,
+        cash: 0,
+        positions: [],
+        ...derived.fields,
+      },
+      DEFAULT_LIMITS,
+    );
+    await memory.saveRiskState({
+      env: env(),
+      ...derived.persist,
+      haltState: halt.halted
+        ? halt.manualResumeRequired
+          ? "circuit"
+          : "daily"
+        : "none",
+    });
+    return derived.fields;
+  } catch (err) {
+    console.warn(
+      "[memory] risk-state resolve failed; using neutral state (no halt):",
+      err,
+    );
+    return loadRiskState();
+  }
+}
 
 const proposalSchema = z.object({
   ticker: z.string().min(1).describe("Trading 212 instrument ticker, e.g. AAPL_US_EQ"),
@@ -39,18 +86,17 @@ export default defineTool({
       client,
       fxRate: fxRateFromEnv(),
       dryRun: isDryRun(),
-      riskState: loadRiskState(),
+      resolveRiskState,
     });
 
     // Record every placed/simulated trade to durable memory. Best-effort:
     // a memory failure must never break trading.
     try {
       const memory = memoryFromEnv();
-      const env = (process.env.TRADING212_ENV ?? "demo") as Env;
       await Promise.all(
         result.placed.map((p) =>
           memory.recordTrade({
-            env,
+            env: env(),
             ticker: p.proposal.ticker,
             side: p.proposal.side,
             notional: p.proposal.notional,

@@ -4,6 +4,32 @@ import {
   loadThreadContextMessages,
   slackChannel,
 } from "eve/channels/slack";
+import { memoryFromEnv, type Env } from "../lib/memory.ts";
+
+// Best-effort capture of an inbound user message to durable memory. Fire-and-forget;
+// a memory failure must never affect message handling. (Agent replies are captured
+// separately by the message.completed hook in agent/hooks/record-messages.ts.)
+function recordUserMessage(m: {
+  markdown: string;
+  threadTs: string;
+  author?: { userId: string };
+}): void {
+  if (!m.markdown) return;
+  void (async () => {
+    try {
+      const env = (process.env.TRADING212_ENV ?? "demo") as Env;
+      await memoryFromEnv().recordMessage({
+        env,
+        role: "user",
+        text: m.markdown,
+        slackUser: m.author?.userId,
+        threadTs: m.threadTs,
+      });
+    } catch (err) {
+      console.warn("[memory] record user message failed (non-fatal):", err);
+    }
+  })();
+}
 
 export default slackChannel({
   credentials: connectSlackCredentials("slack/poof"),
@@ -13,6 +39,7 @@ export default slackChannel({
   async onAppMention(ctx, message) {
     const auth = defaultSlackAuth(message, ctx);
     if (!auth) return null;
+    recordUserMessage(message);
     const prior = await loadThreadContextMessages(ctx.thread, message, {
       since: "last-agent-reply",
     });
@@ -26,5 +53,12 @@ export default slackChannel({
         `Recent thread messages since your last reply:\n\n${transcript}`,
       ],
     };
+  },
+  // DMs deliver every message (no @mention needed). Record them too.
+  async onDirectMessage(ctx, message) {
+    const auth = defaultSlackAuth(message, ctx);
+    if (!auth) return null;
+    recordUserMessage(message);
+    return { auth };
   },
 });
