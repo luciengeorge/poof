@@ -1,5 +1,7 @@
 import { defineAgent } from "eve";
 
 export default defineAgent({
-  model: "openai/gpt-5.4-nano",
+  // Orchestrator: sequences the trading pipeline. Research + red-team subagents
+  // run on Opus (see agent/subagents/*). Design lives in the Obsidian vault.
+  model: "anthropic/claude-sonnet-4.6",
 });
