@@ -159,12 +159,28 @@ test("evaluateBuy: rejects 4th new position of the day", () => {
 
 // --- Task 4: batch validation ---
 
-test("validateOrders: halts reject everything", () => {
+test("validateOrders: a halt rejects BUYs", () => {
   const p = basePortfolio({ dayPnl: -500 });
   const res = validateOrders([buy()], p, LIMITS);
   assert.equal(res.accepted.length, 0);
   assert.equal(res.rejected.length, 1);
   assert.match(res.rejected[0].reason, /halted/i);
+});
+
+test("validateOrders: a halt still ALLOWS de-risking SELLs", () => {
+  const p = basePortfolio({ dayPnl: -500, positions: [{ ticker: "NVDA", value: 1000 }] });
+  const res = validateOrders(
+    [
+      { ticker: "NVDA", side: "SELL", notional: 600, price: 100 },
+      buy({ ticker: "AAA" }),
+    ],
+    p,
+    LIMITS,
+  );
+  assert.equal(res.accepted.length, 1);
+  assert.equal(res.accepted[0].side, "SELL");
+  assert.equal(res.rejected.length, 1);
+  assert.match(res.rejected[0].reason, /halted/i); // the buy
 });
 
 test("validateOrders: cumulative cash floor rejects the later buy", () => {

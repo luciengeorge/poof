@@ -1,57 +1,10 @@
 import { defineTool } from "eve/tools";
 import { z } from "zod";
-import { checkHalt } from "../lib/risk.ts";
 import { t212FromEnv } from "../lib/t212.ts";
 import { evaluateAndExecute } from "../lib/orders.ts";
-import {
-  deriveRiskState,
-  loadRiskState,
-  resolveLimits,
-  fxRateFromEnv,
-  isDryRun,
-  type RiskState,
-  type StoredRiskState,
-} from "../lib/state.ts";
-import { etDateString } from "../lib/clock.ts";
-import { memoryFromEnv, type Env } from "../lib/memory.ts";
-
-const env = (): Env => (process.env.TRADING212_ENV ?? "demo") as Env;
-
-// Load durable risk state from Convex, derive this cycle's fields (day rollover, peak,
-// consecutive-loss days), persist the update, and return the gate fields. Best-effort:
-// if memory is unavailable, fall back to a neutral state (no halt) so trading isn't blocked.
-async function resolveRiskState(currentEquity: number): Promise<RiskState> {
-  try {
-    const memory = memoryFromEnv();
-    const stored = (await memory.getRiskState(env())) as StoredRiskState | null;
-    const derived = deriveRiskState(stored, currentEquity, etDateString(new Date()));
-    const halt = checkHalt(
-      {
-        equity: currentEquity,
-        cash: 0,
-        positions: [],
-        ...derived.fields,
-      },
-      resolveLimits(),
-    );
-    await memory.saveRiskState({
-      env: env(),
-      ...derived.persist,
-      haltState: halt.halted
-        ? halt.manualResumeRequired
-          ? "circuit"
-          : "daily"
-        : "none",
-    });
-    return derived.fields;
-  } catch (err) {
-    console.warn(
-      "[memory] risk-state resolve failed; using neutral state (no halt):",
-      err,
-    );
-    return loadRiskState();
-  }
-}
+import { resolveLimits, fxRateFromEnv, isDryRun } from "../lib/state.ts";
+import { memoryFromEnv } from "../lib/memory.ts";
+import { resolveRiskState, tradingEnv } from "../lib/risk-runtime.ts";
 
 const proposalSchema = z.object({
   ticker: z.string().min(1).describe("Trading 212 instrument ticker, e.g. AAPL_US_EQ"),
@@ -69,11 +22,28 @@ const proposalSchema = z.object({
     .string()
     .optional()
     .describe("The red_team subagent's verdict on this thesis, if reviewed"),
+  // Exit plan, set on BUYs. Stop-loss/take-profit are fractions of entry price
+  // (e.g. 0.1 = 10%). The exit engine clamps to sane bounds and applies defaults if omitted.
+  stopLossPct: z
+    .number()
+    .positive()
+    .optional()
+    .describe("Stop-loss as a fraction of entry price (e.g. 0.1 = sell if down 10%)"),
+  takeProfitPct: z
+    .number()
+    .positive()
+    .optional()
+    .describe("Take-profit as a fraction of entry price (e.g. 0.2 = sell if up 20%)"),
+  maxHoldDays: z
+    .number()
+    .positive()
+    .optional()
+    .describe("Exit the position after this many days regardless of price"),
 });
 
 export default defineTool({
   description:
-    "Validate proposed trades against the hard risk limits on the LIVE account, then place the accepted ones as market orders. The risk gate runs INSIDE this tool and is authoritative — it cannot be bypassed. Honors DRY_RUN (default on: orders are simulated, not sent). Returns `placed` (with share quantity; `dryRun`/`skipped` flags) and `rejected` (with reasons). Always report both back to the user.",
+    "Validate proposed trades against the hard risk limits on the LIVE account, then place the accepted ones as market orders. The risk gate runs INSIDE this tool and is authoritative — it cannot be bypassed. Honors DRY_RUN (default on: orders are simulated, not sent). On BUYs, set stopLossPct/takeProfitPct (and optionally maxHoldDays) — the exit engine enforces them automatically on later cycles. Returns `placed` (with share quantity; `dryRun`/`skipped` flags) and `rejected` (with reasons). Always report both back to the user.",
   inputSchema: z.object({
     proposals: z.array(proposalSchema).min(1).max(10),
   }),
@@ -98,7 +68,7 @@ export default defineTool({
       await Promise.all(
         result.placed.map((p) =>
           memory.recordTrade({
-            env: env(),
+            env: tradingEnv(),
             ticker: p.proposal.ticker,
             side: p.proposal.side,
             notional: p.proposal.notional,
@@ -108,6 +78,9 @@ export default defineTool({
             thesis: p.proposal.thesis,
             redTeamVerdict: p.proposal.redTeamVerdict,
             status: p.skipped ? "skipped" : p.dryRun ? "dry-run" : "placed",
+            stopLossPct: p.proposal.stopLossPct,
+            takeProfitPct: p.proposal.takeProfitPct,
+            maxHoldDays: p.proposal.maxHoldDays,
           }),
         ),
       );

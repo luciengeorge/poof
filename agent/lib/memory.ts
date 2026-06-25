@@ -27,6 +27,16 @@ export interface TradeRecord {
   thesis: string;
   redTeamVerdict?: string;
   status: string;
+  stopLossPct?: number;
+  takeProfitPct?: number;
+  maxHoldDays?: number;
+}
+
+export interface BenchmarkRecord {
+  env: Env;
+  inceptionEquity: number;
+  inceptionSpyPrice: number;
+  inceptionDate: string;
 }
 
 export interface CycleRecord {
@@ -73,6 +83,22 @@ export class Memory {
 
   recordTrade(t: TradeRecord): Promise<unknown> {
     return this.client.mutation(ref("recordTrade"), { ...t });
+  }
+  closeTrade(args: {
+    tradeId: string;
+    pnl: number;
+    exitPrice?: number;
+  }): Promise<unknown> {
+    return this.client.mutation(ref("closeTrade"), { ...args });
+  }
+  openBuys(env: Env, limit?: number): Promise<unknown> {
+    return this.client.query(ref("openBuys"), { env, limit });
+  }
+  saveBenchmark(b: BenchmarkRecord): Promise<unknown> {
+    return this.client.mutation(ref("saveBenchmark"), { ...b });
+  }
+  getBenchmark(env: Env): Promise<unknown> {
+    return this.client.query(ref("getBenchmark"), { env });
   }
   recordCycle(c: CycleRecord): Promise<unknown> {
     return this.client.mutation(ref("recordCycle"), { ...c });
