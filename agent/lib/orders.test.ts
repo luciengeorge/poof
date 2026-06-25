@@ -40,7 +40,7 @@ const noState = {
 };
 
 function buy(notional: number, price = 100): Proposal {
-  return { ticker: "AAPL_US_EQ", side: "BUY", notional, price };
+  return { ticker: "AAPL_US_EQ", side: "BUY", notional, price, thesis: "t" };
 }
 
 test("dry-run: accepted proposal is reported but not sent to T212", async () => {
@@ -86,7 +86,7 @@ test("live SELL sends a negative quantity", async () => {
     ],
   });
   const res = await evaluateAndExecute(
-    [{ ticker: "AAPL_US_EQ", side: "SELL", notional: 300, price: 100 }],
+    [{ ticker: "AAPL_US_EQ", side: "SELL", notional: 300, price: 100, thesis: "t" }],
     { client, fxRate: 1, dryRun: false, riskState: noState },
   );
   assert.equal(res.placed.length, 1);

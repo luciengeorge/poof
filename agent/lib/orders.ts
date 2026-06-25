@@ -19,6 +19,8 @@ export interface Proposal {
   side: "BUY" | "SELL";
   notional: number;
   price: number;
+  thesis: string;
+  redTeamVerdict?: string;
 }
 
 export interface PlacedResult {
@@ -68,16 +70,9 @@ export async function evaluateAndExecute(
   ]);
 
   const snapshot = buildRiskSnapshot({ cash, positions, fxRate, ...riskState });
-  const { accepted, rejected } = validateOrders(
-    proposals.map((p) => ({
-      ticker: p.ticker,
-      side: p.side,
-      notional: p.notional,
-      price: p.price,
-    })),
-    snapshot,
-    limits,
-  );
+  // Pass full proposals through; validateOrders only reads ticker/side/notional/price,
+  // but keeping the original objects means thesis/redTeamVerdict ride along to the result.
+  const { accepted, rejected } = validateOrders(proposals, snapshot, limits);
 
   const result: ExecutionResult = {
     placed: [],
