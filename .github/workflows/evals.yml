@@ -1,0 +1,42 @@
+name: Evals
+
+# Behavioral evals run the REAL agent against a live model, so they cost tokens and need
+# credentials. Manual-trigger only (not on every PR). They run in DRY_RUN + demo so no real
+# orders are ever placed. Required repo secrets: AI_GATEWAY_API_KEY (model access),
+# FINNHUB_API_KEY, EXA_API_KEY, CONVEX_URL, TRADING212_API_KEY, TRADING212_SECRET_KEY (demo keys).
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: evals-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    env:
+      DRY_RUN: "true" # never place real orders in evals
+      TRADING212_ENV: "demo" # hit the demo account only
+      AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
+      FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+      EXA_API_KEY: ${{ secrets.EXA_API_KEY }}
+      CONVEX_URL: ${{ secrets.CONVEX_URL }}
+      TRADING212_API_KEY: ${{ secrets.TRADING212_API_KEY }}
+      TRADING212_SECRET_KEY: ${{ secrets.TRADING212_SECRET_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Run evals
+        run: pnpm eval --strict --junit .eve/junit.xml
+      - name: Upload eval artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-artifacts
+          path: .eve/
+          if-no-files-found: ignore
