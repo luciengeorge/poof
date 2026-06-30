@@ -94,6 +94,33 @@ test("mapNews tolerates a missing 'related' field", async () => {
   assert.equal(news[0].related, "");
 });
 
+// --- earnings calendar ---
+
+test("getEarningsCalendar passes symbol+range and maps the earningsCalendar array", async () => {
+  const f = fakeFetch(() => ({
+    body: {
+      earningsCalendar: [
+        { symbol: "NKE", date: "2026-06-26", hour: "amc", epsEstimate: 0.6, year: 2026 },
+        { symbol: "NKE", date: "2026-03-20", hour: "bmo", epsEstimate: null },
+      ],
+    },
+  }));
+  const p = new FinnhubProvider({ apiKey: "KEY", fetchImpl: f.fn });
+  const events = await p.getEarningsCalendar("NKE", "2026-06-25", "2026-09-23");
+  const u = new URL(f.calls[0]);
+  assert.equal(u.pathname, "/api/v1/calendar/earnings");
+  assert.equal(u.searchParams.get("symbol"), "NKE");
+  assert.equal(u.searchParams.get("from"), "2026-06-25");
+  assert.deepEqual(events[0], { symbol: "NKE", date: "2026-06-26", hour: "amc", epsEstimate: 0.6 });
+  assert.equal(events[1].epsEstimate, null);
+});
+
+test("getEarningsCalendar tolerates a missing earningsCalendar field", async () => {
+  const f = fakeFetch(() => ({ body: {} }));
+  const p = new FinnhubProvider({ apiKey: "KEY", fetchImpl: f.fn });
+  assert.deepEqual(await p.getEarningsCalendar("X", "2026-06-01", "2026-06-30"), []);
+});
+
 // --- Task 3: env factory ---
 
 test("finnhubFromEnv throws when FINNHUB_API_KEY is unset", () => {

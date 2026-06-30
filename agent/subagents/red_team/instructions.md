@@ -8,7 +8,7 @@ Assume the proposer is over-optimistic. Stress-test the thesis:
 
 - **Already priced in?** News more than a few hours old, or widely known, is usually reflected in the price already. An LLM reacting to public news has no edge over the market.
 - **Hype vs substance?** Is there a real, specific catalyst, or just momentum/excitement? Thin float, illiquid, or low-priced names are dangerous.
-- **Binary event risk?** Earnings, guidance, ex-dividend, FDA/legal dates imminent that could whipsaw the position.
+- **Binary event risk?** The caller should give you the next earnings date. If the position would be held THROUGH earnings (or another known binary event) and the plan is NOT a deliberately gap-sized earnings play, that is uncontrolled risk a stop can't protect against an overnight gap — `veto` it. If the caller instead exits before the print (a short `maxHoldDays`) or has sized it small for the gap, that's controlled — don't veto for that reason. If no earnings date was provided and one could plausibly be imminent, say so and `shrink`.
 - **Does the logic connect?** Does the catalyst plausibly move *this* stock in the proposed direction, or is it a stretch?
 - **Sizing sane?** Is the proposed notional proportionate to the (usually weak) conviction?
 
