@@ -4,7 +4,7 @@ import { memoryFromEnv, type Env } from "../lib/memory.ts";
 
 export default defineTool({
   description:
-    "Recall the agent's durable memory for this account: recent trades (with thesis + outcome), recent cycle decisions, recent conversation messages, and the persisted risk state. Call this FIRST each trading cycle so decisions account for history (what you tried, what worked, what the user told you).",
+    "Recall the agent's durable memory for this account: your standing `lessons` note (what keeps working / losing — apply it), recent trades (with thesis + outcome), recent cycle decisions, recent conversation messages, and the persisted risk state. Call this FIRST each trading cycle so decisions account for history (what you tried, what worked, what the user told you).",
   inputSchema: z.object({
     tradeLimit: z.number().int().min(1).max(50).optional(),
     messageLimit: z.number().int().min(1).max(50).optional(),

@@ -51,6 +51,15 @@ export default defineSchema({
     .index("by_env", ["env"])
     .index("by_env_and_ticker", ["env", "ticker"]),
 
+  // The agent's standing lessons: a single, concise, agent-maintained note of what keeps
+  // working / losing. Read at the start of every cycle, rewritten at the end. In-context
+  // learning from its own track record.
+  lessons: defineTable({
+    env: v.string(),
+    text: v.string(),
+    updatedAt: v.number(),
+  }).index("by_env", ["env"]),
+
   // Buy-and-hold SPY baseline, captured once at inception, for alpha reporting.
   benchmark: defineTable({
     env: v.string(),

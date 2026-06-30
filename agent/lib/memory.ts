@@ -100,6 +100,12 @@ export class Memory {
   getBenchmark(env: Env): Promise<unknown> {
     return this.client.query(ref("getBenchmark"), { env });
   }
+  saveLessons(env: Env, text: string): Promise<unknown> {
+    return this.client.mutation(ref("saveLessons"), { env, text });
+  }
+  getLessons(env: Env): Promise<unknown> {
+    return this.client.query(ref("getLessons"), { env });
+  }
   recordCycle(c: CycleRecord): Promise<unknown> {
     return this.client.mutation(ref("recordCycle"), { ...c });
   }
