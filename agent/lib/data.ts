@@ -16,6 +16,14 @@ export interface NewsItem {
   related: string;
 }
 
+/** A scheduled earnings report. `hour`: "bmo" (before open), "amc" (after close), "dmh", or "". */
+export interface EarningsEvent {
+  symbol: string;
+  date: string; // YYYY-MM-DD
+  hour: string;
+  epsEstimate: number | null;
+}
+
 export interface MarketDataProvider {
   getQuote(symbol: string): Promise<Quote>;
   getCompanyNews(
@@ -24,6 +32,11 @@ export interface MarketDataProvider {
     toISO: string,
   ): Promise<NewsItem[]>;
   getMarketNews(): Promise<NewsItem[]>;
+  getEarningsCalendar(
+    symbol: string,
+    fromISO: string,
+    toISO: string,
+  ): Promise<EarningsEvent[]>;
 }
 
 export interface FinnhubConfig {
@@ -57,6 +70,13 @@ interface RawNews {
   url: string;
   datetime: number;
   related?: string;
+}
+
+interface RawEarnings {
+  symbol: string;
+  date: string;
+  hour?: string;
+  epsEstimate?: number | null;
 }
 
 function mapNews(r: RawNews): NewsItem {
@@ -113,6 +133,23 @@ export class FinnhubProvider implements MarketDataProvider {
   async getMarketNews(): Promise<NewsItem[]> {
     const raw = await this.get<RawNews[]>("/news", { category: "general" });
     return raw.map(mapNews);
+  }
+
+  async getEarningsCalendar(
+    symbol: string,
+    fromISO: string,
+    toISO: string,
+  ): Promise<EarningsEvent[]> {
+    const raw = await this.get<{ earningsCalendar?: RawEarnings[] }>(
+      "/calendar/earnings",
+      { symbol, from: fromISO, to: toISO },
+    );
+    return (raw.earningsCalendar ?? []).map((e) => ({
+      symbol: e.symbol,
+      date: e.date,
+      hour: e.hour ?? "",
+      epsEstimate: e.epsEstimate ?? null,
+    }));
   }
 }
 
