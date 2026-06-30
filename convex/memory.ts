@@ -44,6 +44,35 @@ export const closeTrade = mutation({
   },
 });
 
+// Replace the standing lessons note (one row per env; the agent rewrites the whole thing).
+export const saveLessons = mutation({
+  args: { env: v.string(), text: v.string() },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query("lessons")
+      .withIndex("by_env", (q) => q.eq("env", args.env))
+      .unique();
+    if (existing) {
+      await ctx.db.patch("lessons", existing._id, {
+        text: args.text,
+        updatedAt: Date.now(),
+      });
+      return existing._id;
+    }
+    return await ctx.db.insert("lessons", { ...args, updatedAt: Date.now() });
+  },
+});
+
+export const getLessons = query({
+  args: { env: v.string() },
+  handler: async (ctx, { env }) => {
+    return await ctx.db
+      .query("lessons")
+      .withIndex("by_env", (q) => q.eq("env", env))
+      .unique();
+  },
+});
+
 export const saveBenchmark = mutation({
   args: {
     env: v.string(),
@@ -181,6 +210,10 @@ export const recallRecent = query({
       .query("benchmark")
       .withIndex("by_env", (q) => q.eq("env", env))
       .unique();
-    return { cycles, trades, messages, riskState, benchmark };
+    const lessons = await ctx.db
+      .query("lessons")
+      .withIndex("by_env", (q) => q.eq("env", env))
+      .unique();
+    return { cycles, trades, messages, riskState, benchmark, lessons };
   },
 });
