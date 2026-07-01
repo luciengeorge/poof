@@ -21,6 +21,42 @@ export function notionalToShares(
   return Math.round(shares * 1e6) / 1e6;
 }
 
+/** First-attempt quantity precision. T212 enforces a per-instrument max (not in metadata),
+ * so we start here and adapt down on an `invalid quantity precision N` error. */
+export const DEFAULT_QUANTITY_PRECISION = 6;
+
+/**
+ * Round a share magnitude DOWN to `decimals` places, cleanly (no float-noise digits, which
+ * themselves trigger "invalid quantity precision"). Always truncates toward zero so a BUY
+ * never spends more than intended and a SELL never exceeds the position. `decimals <= 0`
+ * means whole shares only. Returns a non-negative magnitude; apply the side's sign at send.
+ */
+export function roundQuantity(magnitude: number, decimals: number): number {
+  const m = Math.abs(magnitude);
+  if (!(m > 0)) return 0;
+  if (decimals <= 0) return Math.floor(m + 1e-9);
+  const f = 10 ** decimals;
+  // +epsilon corrects float artifacts (e.g. 0.2234*1e4 = 2233.9999997) before flooring.
+  return Math.floor(m * f + 1e-6) / f;
+}
+
+/**
+ * Extract the allowed decimal precision from a T212 "invalid quantity precision" error.
+ * Handles "invalid quantity precision 4" and "must be limited to 0 decimal spaces".
+ * Returns the allowed dp, 0 if the error is about precision but carries no number, or
+ * null if it isn't a precision error at all.
+ */
+export function parseQuantityPrecision(message: string): number | null {
+  // Anchor to the precision phrase so we don't grab an unrelated number (e.g. the HTTP
+  // status in "Trading 212 API error 400: ...").
+  const m1 = message.match(/quantity precision[^0-9]*(\d+)/i);
+  if (m1) return Number(m1[1]);
+  const m2 = message.match(/limited to\s*(\d+)\s*decimal/i);
+  if (m2) return Number(m2[1]);
+  if (/precision|decimal/i.test(message)) return 0; // precision error, no number → whole shares
+  return null;
+}
+
 /**
  * Build the risk-engine PortfolioSnapshot from a T212 account-cash + positions read.
  *
