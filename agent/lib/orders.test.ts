@@ -12,8 +12,12 @@ function fakeClient(over: {
   free?: number;
   positions?: T212Position[];
   pending?: T212Order[];
+  // Reject any order whose quantity has more than this many decimals with T212's
+  // "invalid quantity precision N" error (simulates the per-instrument precision cap).
+  precisionCap?: number;
 } = {}): { client: OrderExecClient; placed: { ticker: string; quantity: number }[] } {
   const placed: { ticker: string; quantity: number }[] = [];
+  const decimals = (n: number) => (String(Math.abs(n)).split(".")[1] ?? "").length;
   const client: OrderExecClient = {
     async getCash() {
       return cash(over.free ?? 10000);
@@ -25,6 +29,11 @@ function fakeClient(over: {
       return over.pending ?? [];
     },
     async placeMarketOrder(input) {
+      if (over.precisionCap !== undefined && decimals(input.quantity) > over.precisionCap) {
+        throw new Error(
+          `Trading 212 API error 400: {"code":"invalid quantity precision ${over.precisionCap}"}`,
+        );
+      }
       placed.push(input);
       return { id: 1, ticker: input.ticker, quantity: input.quantity } as T212Order;
     },
@@ -105,6 +114,35 @@ test("risk gate rejects an oversize trade (not placed)", async () => {
   assert.equal(res.rejected.length, 1);
   assert.match(res.rejected[0].reason, /trade size/i);
   assert.equal(placed.length, 0);
+});
+
+test("precision: retries at the broker's allowed decimals and places", async () => {
+  const { client, placed } = fakeClient({ precisionCap: 2 }); // instrument allows 2 dp
+  // £1000 / $7 = 142.857142… shares (6dp) → first attempt rejected → retry at 2dp.
+  const res = await evaluateAndExecute([buy(1000, 7)], {
+    client,
+    fxRate: 1,
+    dryRun: false,
+    resolveRiskState: async () => noState,
+  });
+  assert.equal(placed.length, 1); // only the successful (retried) order landed
+  assert.equal(placed[0].quantity, 142.85); // truncated DOWN to 2dp
+  assert.equal(res.placed[0].dryRun, false);
+  assert.ok(res.placed[0].order);
+});
+
+test("precision: skips (not blind-fires) when qty rounds to 0 at whole-shares-only", async () => {
+  // $100 share, £30 notional -> 0.3 shares; instrument is whole-shares-only (0 dp) -> 0.
+  const { client, placed } = fakeClient({ precisionCap: 0 });
+  const res = await evaluateAndExecute([buy(300, 1000)], {
+    client,
+    fxRate: 1,
+    dryRun: false,
+    resolveRiskState: async () => noState,
+  });
+  assert.equal(placed.length, 0); // nothing sent
+  assert.equal(res.placed.length, 1);
+  assert.match(res.placed[0].skipped ?? "", /rounds to 0/i);
 });
 
 test("reconciliation: skips a ticker that already has a pending order", async () => {

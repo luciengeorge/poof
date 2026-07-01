@@ -1,7 +1,47 @@
 import { validateOrders, DEFAULT_LIMITS, type RiskLimits } from "./risk.ts";
-import { buildRiskSnapshot, notionalToShares } from "./execution.ts";
+import {
+  buildRiskSnapshot,
+  notionalToShares,
+  roundQuantity,
+  parseQuantityPrecision,
+  DEFAULT_QUANTITY_PRECISION,
+} from "./execution.ts";
 import type { CashBalance, T212Position, T212Order } from "./t212.ts";
 import type { RiskState } from "./state.ts";
+
+/**
+ * Place a market order, adapting to T212's per-instrument quantity precision. First tries
+ * a clean DEFAULT_QUANTITY_PRECISION quantity; on an "invalid quantity precision N" error,
+ * re-rounds DOWN to N decimals and retries once. If it rounds to 0 (share too dear for this
+ * notional at the allowed precision), returns a skip instead of firing blind orders.
+ */
+async function placeWithPrecision(
+  client: OrderExecClient,
+  ticker: string,
+  magnitude: number,
+  sign: number,
+): Promise<{ quantity: number; order: T212Order } | { skipped: string }> {
+  const attempt = async (qty: number) =>
+    client.placeMarketOrder({ ticker, quantity: sign * qty });
+
+  const first = roundQuantity(magnitude, DEFAULT_QUANTITY_PRECISION);
+  if (first <= 0) return { skipped: "quantity rounds to 0" };
+  try {
+    return { quantity: sign * first, order: await attempt(first) };
+  } catch (err) {
+    const allowed = parseQuantityPrecision(
+      err instanceof Error ? err.message : String(err),
+    );
+    if (allowed === null) throw err; // not a precision problem — surface it
+    const adjusted = roundQuantity(magnitude, allowed);
+    if (adjusted <= 0) {
+      return {
+        skipped: `quantity rounds to 0 at ${allowed}dp (share price too high for this trade size)`,
+      };
+    }
+    return { quantity: sign * adjusted, order: await attempt(adjusted) };
+  }
+}
 
 /** The subset of T212Client the executor needs (T212Client satisfies it structurally). */
 export interface OrderExecClient {
@@ -107,18 +147,25 @@ export async function evaluateAndExecute(
     }
 
     const magnitude = notionalToShares(proposal.notional, proposal.price, fxRate);
-    const quantity = proposal.side === "SELL" ? -magnitude : magnitude;
+    const sign = proposal.side === "SELL" ? -1 : 1;
 
     if (dryRun) {
-      result.placed.push({ proposal, quantity, dryRun: true });
+      const qty = roundQuantity(magnitude, DEFAULT_QUANTITY_PRECISION);
+      result.placed.push({ proposal, quantity: sign * qty, dryRun: true });
       continue;
     }
 
-    const placed = await client.placeMarketOrder({
-      ticker: proposal.ticker,
-      quantity,
-    });
-    result.placed.push({ proposal, quantity, dryRun: false, order: placed });
+    const outcome = await placeWithPrecision(client, proposal.ticker, magnitude, sign);
+    if ("skipped" in outcome) {
+      result.placed.push({ proposal, quantity: 0, dryRun: false, skipped: outcome.skipped });
+    } else {
+      result.placed.push({
+        proposal,
+        quantity: outcome.quantity,
+        dryRun: false,
+        order: outcome.order,
+      });
+    }
   }
 
   return result;

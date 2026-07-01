@@ -1,6 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { notionalToShares, buildRiskSnapshot } from "./execution.ts";
+import {
+  notionalToShares,
+  buildRiskSnapshot,
+  roundQuantity,
+  parseQuantityPrecision,
+} from "./execution.ts";
 import type { CashBalance, T212Position } from "./t212.ts";
 
 function cash(over: Partial<CashBalance> = {}): CashBalance {
@@ -69,6 +74,25 @@ test("buildRiskSnapshot maps cash + positions into a risk snapshot (account ccy)
   assert.equal(snap.peakEquity, 60); // max(0, 60)
   assert.equal(snap.dayPnl, -1);
   assert.equal(snap.newPositionsToday, 1);
+});
+
+test("roundQuantity: truncates DOWN to N decimals, clean of float noise", () => {
+  assert.equal(roundQuantity(0.2234567, 4), 0.2234);
+  assert.equal(roundQuantity(0.2234, 4), 0.2234); // float-noise safe (0.2234*1e4 ≈ 2233.9999)
+  assert.equal(roundQuantity(12.09032128, 4), 12.0903);
+  assert.equal(roundQuantity(3.9, 0), 3); // whole shares only
+  assert.equal(roundQuantity(0.4, 0), 0); // < 1 share, whole-only → 0
+  assert.equal(roundQuantity(0, 6), 0);
+});
+
+test("parseQuantityPrecision: extracts allowed dp, ignores HTTP status", () => {
+  assert.equal(parseQuantityPrecision("invalid quantity precision 4"), 4);
+  assert.equal(
+    parseQuantityPrecision('Trading 212 API error 400: {"code":"invalid quantity precision 4"}'),
+    4,
+  );
+  assert.equal(parseQuantityPrecision("Quantity must be limited to 0 decimal spaces"), 0);
+  assert.equal(parseQuantityPrecision("insufficient funds"), null);
 });
 
 test("buildRiskSnapshot keeps a higher stored peakEquity", () => {
