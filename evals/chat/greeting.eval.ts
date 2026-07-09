@@ -4,7 +4,7 @@ import { defineEval } from "eve/evals";
 export default defineEval({
   async test(t) {
     await t.send("hey, you around?");
-    t.completed();
+    t.succeeded();
     t.notCalledTool("submit_orders");
     t.notCalledTool("manage_positions");
   },
