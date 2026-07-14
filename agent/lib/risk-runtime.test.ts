@@ -11,6 +11,10 @@ import {
   type ProposedOrder,
 } from "./risk.ts";
 
+// memoryFromEnv() requires CONVEX_APP_SECRET (convex shared-secret auth). The injected fake
+// client ignores the token, so a dummy value satisfies the check in these tests.
+process.env.CONVEX_APP_SECRET ??= "test-secret";
+
 const todayET = etDateString(new Date());
 
 /** Run `fn` with TRADING212_ENV pinned, restoring the prior value after. */
