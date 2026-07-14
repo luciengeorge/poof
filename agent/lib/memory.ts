@@ -76,47 +76,62 @@ const ref = (name: string) =>
 
 export class Memory {
   private readonly client: ConvexLike;
+  private readonly token: string;
 
-  constructor(client: ConvexLike) {
+  constructor(client: ConvexLike, token: string) {
     this.client = client;
+    this.token = token;
+  }
+
+  private mutation(
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<unknown> {
+    return this.client.mutation(ref(name), { token: this.token, ...args });
+  }
+  private query(
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<unknown> {
+    return this.client.query(ref(name), { token: this.token, ...args });
   }
 
   recordTrade(t: TradeRecord): Promise<unknown> {
-    return this.client.mutation(ref("recordTrade"), { ...t });
+    return this.mutation("recordTrade", { ...t });
   }
   closeTrade(args: {
     tradeId: string;
     pnl: number;
     exitPrice?: number;
   }): Promise<unknown> {
-    return this.client.mutation(ref("closeTrade"), { ...args });
+    return this.mutation("closeTrade", { ...args });
   }
   openBuys(env: Env): Promise<unknown> {
-    return this.client.query(ref("openBuys"), { env });
+    return this.query("openBuys", { env });
   }
   saveBenchmark(b: BenchmarkRecord): Promise<unknown> {
-    return this.client.mutation(ref("saveBenchmark"), { ...b });
+    return this.mutation("saveBenchmark", { ...b });
   }
   getBenchmark(env: Env): Promise<unknown> {
-    return this.client.query(ref("getBenchmark"), { env });
+    return this.query("getBenchmark", { env });
   }
   saveLessons(env: Env, text: string): Promise<unknown> {
-    return this.client.mutation(ref("saveLessons"), { env, text });
+    return this.mutation("saveLessons", { env, text });
   }
   getLessons(env: Env): Promise<unknown> {
-    return this.client.query(ref("getLessons"), { env });
+    return this.query("getLessons", { env });
   }
   recordCycle(c: CycleRecord): Promise<unknown> {
-    return this.client.mutation(ref("recordCycle"), { ...c });
+    return this.mutation("recordCycle", { ...c });
   }
   saveRiskState(s: RiskStateRecord): Promise<unknown> {
-    return this.client.mutation(ref("saveRiskState"), { ...s });
+    return this.mutation("saveRiskState", { ...s });
   }
   recordMessage(m: MessageRecord): Promise<unknown> {
-    return this.client.mutation(ref("recordMessage"), { ...m });
+    return this.mutation("recordMessage", { ...m });
   }
   getRiskState(env: Env): Promise<unknown> {
-    return this.client.query(ref("getRiskState"), { env });
+    return this.query("getRiskState", { env });
   }
   recallRecent(
     env: Env,
@@ -126,13 +141,15 @@ export class Memory {
       messageLimit?: number;
     } = {},
   ): Promise<unknown> {
-    return this.client.query(ref("recallRecent"), { env, ...limits });
+    return this.query("recallRecent", { env, ...limits });
   }
 }
 
 export function memoryFromEnv(client?: ConvexLike): Memory {
-  if (client) return new Memory(client);
+  const token = process.env.CONVEX_APP_SECRET;
+  if (!token) throw new Error("CONVEX_APP_SECRET is not set");
+  if (client) return new Memory(client, token);
   const url = process.env.CONVEX_URL;
   if (!url) throw new Error("CONVEX_URL is not set");
-  return new Memory(new ConvexHttpClient(url) as unknown as ConvexLike);
+  return new Memory(new ConvexHttpClient(url) as unknown as ConvexLike, token);
 }

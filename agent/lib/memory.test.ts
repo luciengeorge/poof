@@ -7,6 +7,8 @@ import {
   type TradeRecord,
 } from "./memory.ts";
 
+const TOKEN = "test-shared-secret";
+
 function fakeClient() {
   const calls: { kind: "mutation" | "query"; args: Record<string, unknown> }[] =
     [];
@@ -35,17 +37,17 @@ const trade: TradeRecord = {
   status: "dry-run",
 };
 
-test("recordTrade issues a mutation with the trade args", async () => {
+test("recordTrade issues a mutation with the trade args and the token", async () => {
   const { client, calls } = fakeClient();
-  await new Memory(client).recordTrade(trade);
+  await new Memory(client, TOKEN).recordTrade(trade);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].kind, "mutation");
-  assert.deepEqual(calls[0].args, { ...trade });
+  assert.deepEqual(calls[0].args, { token: TOKEN, ...trade });
 });
 
 test("recordCycle and saveRiskState are mutations; getRiskState/recallRecent are queries", async () => {
   const { client, calls } = fakeClient();
-  const m = new Memory(client);
+  const m = new Memory(client, TOKEN);
   await m.recordCycle({
     env: "demo",
     equity: 50,
@@ -67,21 +69,83 @@ test("recordCycle and saveRiskState are mutations; getRiskState/recallRecent are
     calls.map((c) => c.kind),
     ["mutation", "mutation", "query", "query"],
   );
-  assert.deepEqual(calls[3].args, { env: "demo", cycleLimit: 3 });
+  assert.deepEqual(calls[3].args, { token: TOKEN, env: "demo", cycleLimit: 3 });
+});
+
+test("every Memory method includes the token in its args", async () => {
+  const { client, calls } = fakeClient();
+  const m = new Memory(client, TOKEN);
+  await m.recordTrade(trade);
+  await m.closeTrade({ tradeId: "t1", pnl: 1 });
+  await m.openBuys("demo");
+  await m.saveBenchmark({
+    env: "demo",
+    inceptionEquity: 50,
+    inceptionSpyPrice: 500,
+    inceptionDate: "2026-06-25",
+  });
+  await m.getBenchmark("demo");
+  await m.saveLessons("demo", "lesson text");
+  await m.getLessons("demo");
+  await m.recordCycle({
+    env: "demo",
+    equity: 50,
+    freeCash: 50,
+    decision: "no-trade",
+    rationale: "stale catalysts",
+  });
+  await m.saveRiskState({
+    env: "demo",
+    peakEquity: 50,
+    dayStartEquity: 50,
+    dayStartDate: "2026-06-25",
+    consecutiveLossDays: 0,
+    haltState: "none",
+  });
+  await m.recordMessage({ env: "demo", role: "user", text: "hi" });
+  await m.getRiskState("demo");
+  await m.recallRecent("demo");
+  assert.ok(calls.length > 0);
+  for (const call of calls) {
+    assert.equal(call.args.token, TOKEN);
+  }
 });
 
 test("memoryFromEnv throws when CONVEX_URL is unset", () => {
-  const prev = process.env.CONVEX_URL;
+  const prevUrl = process.env.CONVEX_URL;
+  const prevSecret = process.env.CONVEX_APP_SECRET;
   delete process.env.CONVEX_URL;
+  process.env.CONVEX_APP_SECRET = TOKEN;
   try {
     assert.throws(() => memoryFromEnv(), /CONVEX_URL/);
   } finally {
-    if (prev !== undefined) process.env.CONVEX_URL = prev;
+    if (prevUrl !== undefined) process.env.CONVEX_URL = prevUrl;
+    else delete process.env.CONVEX_URL;
+    if (prevSecret !== undefined) process.env.CONVEX_APP_SECRET = prevSecret;
+    else delete process.env.CONVEX_APP_SECRET;
+  }
+});
+
+test("memoryFromEnv throws when CONVEX_APP_SECRET is unset", () => {
+  const prevSecret = process.env.CONVEX_APP_SECRET;
+  delete process.env.CONVEX_APP_SECRET;
+  try {
+    assert.throws(() => memoryFromEnv(), /CONVEX_APP_SECRET/);
+  } finally {
+    if (prevSecret !== undefined) process.env.CONVEX_APP_SECRET = prevSecret;
+    else delete process.env.CONVEX_APP_SECRET;
   }
 });
 
 test("memoryFromEnv uses an injected client when provided", () => {
-  const { client } = fakeClient();
-  const m = memoryFromEnv(client);
-  assert.ok(m instanceof Memory);
+  const prevSecret = process.env.CONVEX_APP_SECRET;
+  process.env.CONVEX_APP_SECRET = TOKEN;
+  try {
+    const { client } = fakeClient();
+    const m = memoryFromEnv(client);
+    assert.ok(m instanceof Memory);
+  } finally {
+    if (prevSecret !== undefined) process.env.CONVEX_APP_SECRET = prevSecret;
+    else delete process.env.CONVEX_APP_SECRET;
+  }
 });
