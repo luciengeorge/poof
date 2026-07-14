@@ -174,12 +174,16 @@ export function validateOrders(
       const held = running.valueByTicker.get(order.ticker);
       if (held === undefined) {
         rejected.push({ order, reason: "no position to sell" });
-      } else if (order.notional > held) {
-        rejected.push({ order, reason: "sell exceeds position value" });
       } else {
-        accepted.push(order);
-        const remaining = held - order.notional;
-        running.cash += order.notional;
+        // Clamp instead of reject: a full-close SELL's notional is set from an earlier
+        // portfolio read, so a downtick before this second read can make it look like it
+        // exceeds the (now lower) held value. Rejecting would leave a stop-loss unprotected
+        // until the next cron; clamping to held closes the position instead.
+        const notional = Math.min(order.notional, held);
+        const clamped = notional === order.notional ? order : { ...order, notional };
+        accepted.push(clamped);
+        const remaining = held - notional;
+        running.cash += notional;
         if (remaining <= 0) {
           running.valueByTicker.delete(order.ticker);
           running.distinctPositions -= 1;

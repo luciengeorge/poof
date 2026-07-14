@@ -205,6 +205,8 @@ test("validateOrders: SELL of held position is accepted", () => {
   );
   assert.equal(res.accepted.length, 1);
   assert.equal(res.rejected.length, 0);
+  // in-range SELL notional passes through unclamped
+  assert.equal(res.accepted[0].notional, 600);
 });
 
 test("validateOrders: SELL with no position is rejected", () => {
@@ -215,5 +217,37 @@ test("validateOrders: SELL with no position is rejected", () => {
     LIMITS,
   );
   assert.equal(res.accepted.length, 0);
+  assert.match(res.rejected[0].reason, /no position/i);
+});
+
+test("validateOrders: SELL above held value is clamped to held instead of rejected", () => {
+  const p = basePortfolio({ positions: [{ ticker: "NVDA", value: 1000 }] });
+  const res = validateOrders(
+    // a downtick between the two portfolio reads can make notional (read #1) exceed
+    // held (read #2); this must close the position, not reject the exit.
+    [{ ticker: "NVDA", side: "SELL", notional: 1200, price: 100 }],
+    p,
+    LIMITS,
+  );
+  assert.equal(res.rejected.length, 0);
+  assert.equal(res.accepted.length, 1);
+  assert.equal(res.accepted[0].notional, 1000);
+  assert.equal(res.accepted[0].ticker, "NVDA");
+  assert.equal(res.accepted[0].side, "SELL");
+});
+
+test("validateOrders: a clamped full-close SELL removes the position from running state", () => {
+  const p = basePortfolio({ positions: [{ ticker: "NVDA", value: 1000 }] });
+  const res = validateOrders(
+    [
+      { ticker: "NVDA", side: "SELL", notional: 1200, price: 100 },
+      { ticker: "NVDA", side: "SELL", notional: 100, price: 100 },
+    ],
+    p,
+    LIMITS,
+  );
+  assert.equal(res.accepted.length, 1);
+  assert.equal(res.accepted[0].notional, 1000);
+  assert.equal(res.rejected.length, 1);
   assert.match(res.rejected[0].reason, /no position/i);
 });
