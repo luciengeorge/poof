@@ -75,3 +75,32 @@ test("checkExits: ignores positions with no valid entry price", () => {
   const r = checkExits([pos({ entryPrice: 0, currentPrice: 50 })], DEFAULT_EXITS, NOW);
   assert.equal(r.length, 0);
 });
+
+test("checkExits: unknown open time (openedAt 0) never triggers max-hold", () => {
+  const r = checkExits(
+    [pos({ currentPrice: 102, openedAt: 0, maxHoldDays: 10 })],
+    DEFAULT_EXITS,
+    NOW,
+  );
+  assert.equal(r.length, 0);
+});
+
+test("checkExits: a real old openedAt still triggers max-hold", () => {
+  const r = checkExits(
+    [pos({ currentPrice: 102, openedAt: NOW - 11 * DAY, maxHoldDays: 10 })],
+    DEFAULT_EXITS,
+    NOW,
+  );
+  assert.equal(r.length, 1);
+  assert.equal(r[0].reason, "max-hold");
+});
+
+test("checkExits: unknown open time still lets stop-loss fire", () => {
+  const r = checkExits(
+    [pos({ currentPrice: 89, stopLossPct: 0.1, openedAt: 0 })],
+    DEFAULT_EXITS,
+    NOW,
+  );
+  assert.equal(r.length, 1);
+  assert.equal(r[0].reason, "stop-loss");
+});
