@@ -76,6 +76,56 @@ test("buildRiskSnapshot maps cash + positions into a risk snapshot (account ccy)
   assert.equal(snap.newPositionsToday, 1);
 });
 
+test("buildRiskSnapshot throws on non-finite cash.free (fail-closed)", () => {
+  assert.throws(
+    () =>
+      buildRiskSnapshot({
+        cash: cash({ free: NaN }),
+        positions: [pos({ ticker: "X", quantity: 1, currentPrice: 50 })],
+        fxRate: 0.8,
+        peakEquity: 0,
+        dayPnl: 0,
+        newPositionsToday: 0,
+        consecutiveLossDays: 0,
+      }),
+    /non-finite/,
+  );
+});
+
+test("buildRiskSnapshot throws on non-finite position currentPrice (fail-closed)", () => {
+  assert.throws(
+    () =>
+      buildRiskSnapshot({
+        cash: cash({ free: 20 }),
+        positions: [pos({ ticker: "X", quantity: 1, currentPrice: NaN })],
+        fxRate: 0.8,
+        peakEquity: 0,
+        dayPnl: 0,
+        newPositionsToday: 0,
+        consecutiveLossDays: 0,
+      }),
+    /non-finite/,
+  );
+});
+
+test("buildRiskSnapshot returns the same values as today for a normal finite snapshot", () => {
+  const snap = buildRiskSnapshot({
+    cash: cash({ free: 20 }),
+    positions: [pos({ ticker: "X", quantity: 1, currentPrice: 50 })],
+    fxRate: 0.8,
+    peakEquity: 0,
+    dayPnl: -1,
+    newPositionsToday: 1,
+    consecutiveLossDays: 0,
+  });
+  assert.equal(snap.cash, 20);
+  assert.equal(snap.positions[0].value, 40);
+  assert.equal(snap.equity, 60);
+  assert.equal(snap.peakEquity, 60);
+  assert.equal(snap.dayPnl, -1);
+  assert.equal(snap.newPositionsToday, 1);
+});
+
 test("roundQuantity: truncates DOWN to N decimals, clean of float noise", () => {
   assert.equal(roundQuantity(0.2234567, 4), 0.2234);
   assert.equal(roundQuantity(0.2234, 4), 0.2234); // float-noise safe (0.2234*1e4 ≈ 2233.9999)
