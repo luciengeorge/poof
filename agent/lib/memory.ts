@@ -91,8 +91,8 @@ export class Memory {
   }): Promise<unknown> {
     return this.client.mutation(ref("closeTrade"), { ...args });
   }
-  openBuys(env: Env, limit?: number): Promise<unknown> {
-    return this.client.query(ref("openBuys"), { env, limit });
+  openBuys(env: Env): Promise<unknown> {
+    return this.client.query(ref("openBuys"), { env });
   }
   saveBenchmark(b: BenchmarkRecord): Promise<unknown> {
     return this.client.mutation(ref("saveBenchmark"), { ...b });
