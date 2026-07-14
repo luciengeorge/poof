@@ -59,6 +59,7 @@ test("dry-run: accepted proposal is reported but not sent to T212", async () => 
     fxRate: 1,
     dryRun: true,
     resolveRiskState: async () => noState,
+    resolvePrice: async () => 100,
   });
   assert.equal(res.placed.length, 1);
   assert.equal(res.placed[0].dryRun, true);
@@ -73,6 +74,7 @@ test("live: accepted proposal is sent with signed share quantity", async () => {
     fxRate: 1,
     dryRun: false,
     resolveRiskState: async () => noState,
+    resolvePrice: async () => 100,
   });
   assert.equal(res.placed[0].dryRun, false);
   assert.equal(placed.length, 1);
@@ -124,6 +126,7 @@ test("precision: retries at the broker's allowed decimals and places", async () 
     fxRate: 1,
     dryRun: false,
     resolveRiskState: async () => noState,
+    resolvePrice: async () => 7,
   });
   assert.equal(placed.length, 1); // only the successful (retried) order landed
   assert.equal(placed[0].quantity, 142.85); // truncated DOWN to 2dp
@@ -139,6 +142,7 @@ test("precision: skips (not blind-fires) when qty rounds to 0 at whole-shares-on
     fxRate: 1,
     dryRun: false,
     resolveRiskState: async () => noState,
+    resolvePrice: async () => 1000,
   });
   assert.equal(placed.length, 0); // nothing sent
   assert.equal(res.placed.length, 1);
@@ -167,8 +171,58 @@ test("halt: a tripped daily-loss state rejects everything", async () => {
     fxRate: 1,
     dryRun: false,
     resolveRiskState: async () => ({ ...noState, dayPnl: -500 }), // -5% of 10000 > 4% cap
+    resolvePrice: async () => 100,
   });
   assert.equal(res.placed.length, 0);
   assert.match(res.rejected[0].reason, /halted/i);
+  assert.equal(placed.length, 0);
+});
+
+test("BUY is sized from the server price, not the model's price", async () => {
+  const { client, placed } = fakeClient();
+  // Model says $100, server says $102 (within 5% tolerance) -> size from $102.
+  const res = await evaluateAndExecute([buy(510, 100)], {
+    client,
+    fxRate: 1,
+    dryRun: false,
+    resolveRiskState: async () => noState,
+    resolvePrice: async () => 102,
+  });
+  assert.equal(res.rejected.length, 0);
+  assert.equal(placed.length, 1);
+  // £510 / $102 = 5 shares (NOT £510 / $100 = 5.1)
+  assert.equal(placed[0].quantity, 5);
+});
+
+test("BUY rejected when model price deviates >5% from server price", async () => {
+  const { client, placed } = fakeClient();
+  // Model says $80, server says $100 -> 20% deviation, well past the 5% tolerance.
+  const res = await evaluateAndExecute([buy(500, 80)], {
+    client,
+    fxRate: 1,
+    dryRun: false,
+    resolveRiskState: async () => noState,
+    resolvePrice: async () => 100,
+  });
+  assert.equal(res.placed.length, 0);
+  assert.equal(res.rejected.length, 1);
+  assert.match(res.rejected[0].reason, /price mismatch/i);
+  assert.equal(placed.length, 0);
+});
+
+test("BUY rejected fail-closed when resolvePrice throws", async () => {
+  const { client, placed } = fakeClient();
+  const res = await evaluateAndExecute([buy(500)], {
+    client,
+    fxRate: 1,
+    dryRun: false,
+    resolveRiskState: async () => noState,
+    resolvePrice: async () => {
+      throw new Error("quote fetch failed");
+    },
+  });
+  assert.equal(res.placed.length, 0);
+  assert.equal(res.rejected.length, 1);
+  assert.match(res.rejected[0].reason, /could not fetch live price/i);
   assert.equal(placed.length, 0);
 });
