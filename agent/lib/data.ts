@@ -1,3 +1,5 @@
+import { sleep, retryDelayMs } from "./http-backoff.ts";
+
 const FINNHUB_BASE = "https://finnhub.io/api/v1";
 
 export interface Quote {
@@ -106,10 +108,19 @@ export class FinnhubProvider implements MarketDataProvider {
     const url = new URL(FINNHUB_BASE + path);
     for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
     url.searchParams.set("token", this.apiKey);
-    const res = await this.fetchImpl(url);
-    const text = await res.text();
-    if (!res.ok) throw new FinnhubError(res.status, text);
-    return JSON.parse(text) as T;
+    // Finnhub's free tier is tightly rate-limited. Back off and retry on 429
+    // honoring Retry-After, so a single busy symbol doesn't fail the request.
+    const maxRetries = 3;
+    for (let attempt = 0; ; attempt++) {
+      const res = await this.fetchImpl(url);
+      const text = await res.text();
+      if (res.ok) return JSON.parse(text) as T;
+      if (res.status === 429 && attempt < maxRetries) {
+        await sleep(retryDelayMs(res.headers, attempt));
+        continue;
+      }
+      throw new FinnhubError(res.status, text);
+    }
   }
 
   async getQuote(symbol: string): Promise<Quote> {

@@ -35,7 +35,7 @@ test("getQuote builds the right URL with token and maps fields", async () => {
   assert.deepEqual(q, { symbol: "AAPL", price: 110, prevClose: 100, changePct: 10 });
 });
 
-test("throws FinnhubError on non-2xx, flags 429", async () => {
+test("persistent 429 retries the full budget then throws FinnhubError", async () => {
   const f = fakeFetch(() => ({ status: 429, body: "limit" }));
   const p = new FinnhubProvider({ apiKey: "KEY", fetchImpl: f.fn });
   await assert.rejects(
@@ -47,6 +47,22 @@ test("throws FinnhubError on non-2xx, flags 429", async () => {
       return true;
     },
   );
+  assert.equal(f.calls.length, 4); // initial attempt + 3 retries
+});
+
+// --- 429 backoff ---
+
+test("retries once on 429 then resolves on 200", async () => {
+  let calls = 0;
+  const f = fakeFetch(() => {
+    calls++;
+    if (calls === 1) return { status: 429, body: "limit" };
+    return { body: { c: 110, pc: 100, dp: 10 } };
+  });
+  const p = new FinnhubProvider({ apiKey: "KEY", fetchImpl: f.fn });
+  const q = await p.getQuote("AAPL");
+  assert.equal(calls, 2);
+  assert.deepEqual(q, { symbol: "AAPL", price: 110, prevClose: 100, changePct: 10 });
 });
 
 // --- Task 2: news ---
@@ -142,5 +158,35 @@ test("finnhubFromEnv returns a provider when the key is set", () => {
   } finally {
     if (prev === undefined) delete process.env.FINNHUB_API_KEY;
     else process.env.FINNHUB_API_KEY = prev;
+  }
+});
+
+// --- get_prices tool: partial results ---
+
+test("get_prices returns quotes for symbols that succeed and failures for symbols that reject", async () => {
+  const prevKey = process.env.FINNHUB_API_KEY;
+  const prevFetch = globalThis.fetch;
+  process.env.FINNHUB_API_KEY = "test-key";
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const symbol = new URL(String(input)).searchParams.get("symbol");
+    if (symbol === "BAD") throw new Error("network down");
+    return new Response(JSON.stringify({ c: 110, pc: 100, dp: 10 }), {
+      status: 200,
+    });
+  }) as typeof fetch;
+  try {
+    const getPrices = (await import("../tools/get_prices.ts")).default;
+    const result = (await (getPrices.execute as any)({
+      symbols: ["AAPL", "BAD"],
+    })) as { quotes: { symbol: string }[]; failures: { symbol: string; error: string }[] };
+    assert.equal(result.quotes.length, 1);
+    assert.equal(result.quotes[0].symbol, "AAPL");
+    assert.equal(result.failures.length, 1);
+    assert.equal(result.failures[0].symbol, "BAD");
+    assert.match(result.failures[0].error, /network down/);
+  } finally {
+    globalThis.fetch = prevFetch;
+    if (prevKey === undefined) delete process.env.FINNHUB_API_KEY;
+    else process.env.FINNHUB_API_KEY = prevKey;
   }
 });
