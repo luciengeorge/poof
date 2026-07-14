@@ -49,7 +49,8 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_env", ["env"])
-    .index("by_env_and_ticker", ["env", "ticker"]),
+    .index("by_env_and_ticker", ["env", "ticker"])
+    .index("by_env_side_status", ["env", "side", "status"]),
 
   // The agent's standing lessons: a single, concise, agent-maintained note of what keeps
   // working / losing. Read at the start of every cycle, rewritten at the end. In-context

@@ -168,15 +168,14 @@ export const getBenchmark = query({
 // most recent first. Used by the exit engine + performance review to recover each
 // position's entry, thesis, and exit levels.
 export const openBuys = query({
-  args: { env: v.string(), limit: v.optional(v.number()) },
-  handler: async (ctx, { env, limit }) => {
-    const rows = await ctx.db
+  args: { env: v.string() },
+  handler: async (ctx, { env }) =>
+    ctx.db
       .query("trades")
-      .withIndex("by_env", (q) => q.eq("env", env))
-      .order("desc")
-      .take(limit ?? 100);
-    return rows.filter((t) => t.side === "BUY" && t.status === "placed");
-  },
+      .withIndex("by_env_side_status", (q) =>
+        q.eq("env", env).eq("side", "BUY").eq("status", "placed"),
+      )
+      .collect(),
 });
 
 export const recallRecent = query({
