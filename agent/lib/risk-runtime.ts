@@ -3,6 +3,12 @@
  * (load from Convex -> derive day-rollover/peak/halt -> persist) and expose it as the
  * `resolveRiskState` callback `evaluateAndExecute` expects. Best-effort: if memory is
  * unavailable, fall back to a neutral state (no halt) so trading is never blocked.
+ *
+ * That fallback is fail-OPEN by design: a Convex outage or transient error must not be
+ * able to halt live trading (e.g. block SELLs/stop-losses) just because the risk-state
+ * read/write failed. The tradeoff is that a real breach (drawdown/daily-loss/consecutive-
+ * loss) will not be enforced during an outage window either. This is a conscious choice,
+ * not a latent surprise.
  */
 import { checkHalt } from "./risk.ts";
 import {
@@ -18,9 +24,11 @@ import { memoryFromEnv, type Env } from "./memory.ts";
 export const tradingEnv = (): Env =>
   (process.env.TRADING212_ENV ?? "demo") as Env;
 
-export async function resolveRiskState(currentEquity: number): Promise<RiskState> {
+export async function resolveRiskState(
+  currentEquity: number,
+  memory = memoryFromEnv(),
+): Promise<RiskState> {
   try {
-    const memory = memoryFromEnv();
     const stored = (await memory.getRiskState(tradingEnv())) as StoredRiskState | null;
     const derived = deriveRiskState(stored, currentEquity, etDateString(new Date()));
     const halt = checkHalt(
