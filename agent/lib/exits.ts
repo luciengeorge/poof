@@ -90,7 +90,7 @@ export function checkExits(
     let reason: ExitReason | null = null;
     if (pnlPct <= -stopLossPct) reason = "stop-loss";
     else if (pnlPct >= takeProfitPct) reason = "take-profit";
-    else {
+    else if (p.openedAt > 0) {
       const ageDays = (now - p.openedAt) / 86_400_000;
       if (ageDays >= maxHoldDays) reason = "max-hold";
     }
