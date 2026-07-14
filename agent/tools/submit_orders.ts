@@ -5,6 +5,8 @@ import { evaluateAndExecute } from "../lib/orders.ts";
 import { resolveLimits, fxRateFromEnv, isDryRun } from "../lib/state.ts";
 import { memoryFromEnv } from "../lib/memory.ts";
 import { resolveRiskState, tradingEnv } from "../lib/risk-runtime.ts";
+import { finnhubFromEnv } from "../lib/data.ts";
+import { t212TickerToFinnhubSymbol } from "../lib/execution.ts";
 
 const proposalSchema = z.object({
   ticker: z.string().min(1).describe("Trading 212 instrument ticker, e.g. AAPL_US_EQ"),
@@ -54,11 +56,19 @@ export default defineTool({
     process.env.REQUIRE_APPROVAL === "true" && process.env.DRY_RUN === "false",
   async execute({ proposals }) {
     const client = t212FromEnv();
+    const finnhub = finnhubFromEnv();
     const result = await evaluateAndExecute(proposals, {
       client,
       fxRate: fxRateFromEnv(),
       dryRun: isDryRun(),
       resolveRiskState,
+      resolvePrice: async (ticker) => {
+        const symbol = t212TickerToFinnhubSymbol(ticker);
+        if (!symbol) {
+          throw new Error(`cannot map ticker ${ticker} to a Finnhub symbol`);
+        }
+        return (await finnhub.getQuote(symbol)).price;
+      },
       limits: resolveLimits(),
     });
 

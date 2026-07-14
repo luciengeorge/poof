@@ -89,8 +89,19 @@ export interface ExecuteOpts {
    * Lets the caller load durable state (Convex) + derive day-rollover/peak/halt fields.
    */
   resolveRiskState: (currentEquity: number) => Promise<RiskState>;
+  /**
+   * Fetch the current live price for a ticker (used to size BUYs, since the LLM-supplied
+   * `proposal.price` is untrusted). Must reject/throw if the price can't be fetched — callers
+   * treat a throw as fail-closed (the BUY is rejected, nothing placed). Only BUY-submitting
+   * callers need to supply this; a SELL-only caller (e.g. exit management) can omit it — an
+   * omitted resolvePrice is likewise treated as fail-closed if a BUY somehow reaches this path.
+   */
+  resolvePrice?: (ticker: string) => Promise<number>;
   limits?: RiskLimits;
 }
+
+/** Max allowed fractional deviation between the model's price and the server-fetched price. */
+const PRICE_DEVIATION_TOLERANCE = 0.05;
 
 /**
  * Authoritative execution path. Fetches live cash + positions + pending orders, runs the
@@ -103,7 +114,7 @@ export async function evaluateAndExecute(
   proposals: Proposal[],
   opts: ExecuteOpts,
 ): Promise<ExecutionResult> {
-  const { client, fxRate, dryRun, resolveRiskState } = opts;
+  const { client, fxRate, dryRun, resolveRiskState, resolvePrice } = opts;
   const limits = opts.limits ?? DEFAULT_LIMITS;
 
   const [cash, positions, pending] = await Promise.all([
@@ -146,7 +157,39 @@ export async function evaluateAndExecute(
       continue;
     }
 
-    const magnitude = notionalToShares(proposal.notional, proposal.price, fxRate);
+    let sizingPrice = proposal.price;
+    if (proposal.side === "BUY") {
+      if (!resolvePrice) {
+        result.rejected.push({
+          proposal,
+          reason: `no live price resolver configured for ${proposal.ticker}`,
+        });
+        continue;
+      }
+      let serverPrice: number;
+      try {
+        serverPrice = await resolvePrice(proposal.ticker);
+      } catch (err) {
+        result.rejected.push({
+          proposal,
+          reason: `could not fetch live price for ${proposal.ticker}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        });
+        continue;
+      }
+      const deviation = Math.abs(proposal.price - serverPrice) / serverPrice;
+      if (deviation > PRICE_DEVIATION_TOLERANCE) {
+        result.rejected.push({
+          proposal,
+          reason: `price mismatch — model $${proposal.price} vs live $${serverPrice}`,
+        });
+        continue;
+      }
+      sizingPrice = serverPrice;
+    }
+
+    const magnitude = notionalToShares(proposal.notional, sizingPrice, fxRate);
     const sign = proposal.side === "SELL" ? -1 : 1;
 
     if (dryRun) {

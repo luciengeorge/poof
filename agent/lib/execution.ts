@@ -58,6 +58,16 @@ export function parseQuantityPrecision(message: string): number | null {
 }
 
 /**
+ * Map a T212 US-equity ticker (e.g. "AAPL_US_EQ") to its plain Finnhub symbol ("AAPL").
+ * Only the `_US_EQ` suffix is recognized; anything else returns null rather than guessing.
+ */
+export function t212TickerToFinnhubSymbol(ticker: string): string | null {
+  if (!ticker.endsWith("_US_EQ")) return null;
+  const symbol = ticker.slice(0, -"_US_EQ".length);
+  return symbol.length > 0 ? symbol : null;
+}
+
+/**
  * Build the risk-engine PortfolioSnapshot from a T212 account-cash + positions read.
  *
  * Currency: T212 position `currentPrice` is in the instrument currency; `fxRate`

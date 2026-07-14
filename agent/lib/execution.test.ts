@@ -5,6 +5,7 @@ import {
   buildRiskSnapshot,
   roundQuantity,
   parseQuantityPrecision,
+  t212TickerToFinnhubSymbol,
 } from "./execution.ts";
 import type { CashBalance, T212Position } from "./t212.ts";
 
@@ -143,6 +144,14 @@ test("parseQuantityPrecision: extracts allowed dp, ignores HTTP status", () => {
   );
   assert.equal(parseQuantityPrecision("Quantity must be limited to 0 decimal spaces"), 0);
   assert.equal(parseQuantityPrecision("insufficient funds"), null);
+});
+
+test("t212TickerToFinnhubSymbol: strips the _US_EQ suffix", () => {
+  assert.equal(t212TickerToFinnhubSymbol("AAPL_US_EQ"), "AAPL");
+});
+
+test("t212TickerToFinnhubSymbol: returns null for a non-matching ticker", () => {
+  assert.equal(t212TickerToFinnhubSymbol("AAPL"), null);
 });
 
 test("buildRiskSnapshot keeps a higher stored peakEquity", () => {
