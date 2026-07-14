@@ -79,12 +79,22 @@ export function buildRiskSnapshot(args: {
   newPositionsToday: number;
   consecutiveLossDays: number;
 }): PortfolioSnapshot {
+  const bad =
+    !Number.isFinite(args.cash.free) ||
+    !Number.isFinite(args.fxRate) ||
+    args.positions.some((p) => !Number.isFinite(p.quantity) || !Number.isFinite(p.currentPrice));
+  if (bad) {
+    throw new Error("non-finite account data from broker; refusing to gate orders (fail-closed)");
+  }
   const positions: Position[] = args.positions.map((p) => ({
     ticker: p.ticker,
     value: p.quantity * p.currentPrice * args.fxRate,
   }));
   const deployed = positions.reduce((sum, p) => sum + p.value, 0);
   const equity = args.cash.free + deployed;
+  if (!Number.isFinite(equity)) {
+    throw new Error("non-finite account data from broker; refusing to gate orders (fail-closed)");
+  }
   return {
     equity,
     cash: args.cash.free,
