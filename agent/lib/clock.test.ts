@@ -36,3 +36,18 @@ test("winter DST offset is handled (EST, UTC-5)", () => {
   // 14:00 UTC = 09:00 EST -> closed
   assert.equal(isUsMarketOpen(new Date("2026-01-05T14:00:00Z")), false);
 });
+
+test("market closed on a US market holiday during regular trading hours", () => {
+  // 2026-01-19 is MLK Day (a Monday). 15:00 UTC = 10:00 EST -> would be open but for the holiday.
+  assert.equal(isUsMarketOpen(new Date("2026-01-19T15:00:00Z")), false);
+});
+
+test("market open on a normal RTH weekday (regression)", () => {
+  // 2026-01-20 is a normal Tuesday. 15:00 UTC = 10:00 EST -> open
+  assert.equal(isUsMarketOpen(new Date("2026-01-20T15:00:00Z")), true);
+});
+
+test("market closed on the weekend (unchanged)", () => {
+  // 2026-06-20 is a Saturday, 15:00 UTC = 11:00 EDT
+  assert.equal(isUsMarketOpen(new Date("2026-06-20T15:00:00Z")), false);
+});
