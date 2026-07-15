@@ -8,6 +8,7 @@ import {
 } from "./execution.ts";
 import type { CashBalance, T212Position, T212Order } from "./t212.ts";
 import type { RiskState } from "./state.ts";
+import { etDateString } from "./clock.ts";
 
 /**
  * Place a market order, adapting to T212's per-instrument quantity precision. First tries
@@ -98,6 +99,13 @@ export interface ExecuteOpts {
    */
   resolvePrice?: (ticker: string) => Promise<number>;
   limits?: RiskLimits;
+  /**
+   * Durable per-cycle intent marker (Convex-backed), guarding against duplicate placement
+   * when a step re-runs after a market order has already filled and vanished from pending.
+   * Both optional: if absent, behaves exactly as today (no marker, no dedupe beyond pending).
+   */
+  hasOrderIntent?: (key: string) => Promise<boolean>;
+  recordOrderIntent?: (key: string) => Promise<void>;
 }
 
 /** Max allowed fractional deviation between the model's price and the server-fetched price. */
@@ -114,7 +122,8 @@ export async function evaluateAndExecute(
   proposals: Proposal[],
   opts: ExecuteOpts,
 ): Promise<ExecutionResult> {
-  const { client, fxRate, dryRun, resolveRiskState, resolvePrice } = opts;
+  const { client, fxRate, dryRun, resolveRiskState, resolvePrice, hasOrderIntent, recordOrderIntent } =
+    opts;
   const limits = opts.limits ?? DEFAULT_LIMITS;
 
   const [cash, positions, pending] = await Promise.all([
@@ -153,6 +162,17 @@ export async function evaluateAndExecute(
         quantity: 0,
         dryRun,
         skipped: "a pending order already exists for this ticker",
+      });
+      continue;
+    }
+
+    const intentKey = `${etDateString(new Date())}:${proposal.ticker}:${proposal.side}:${proposal.notional}`;
+    if (hasOrderIntent && (await hasOrderIntent(intentKey))) {
+      result.placed.push({
+        proposal,
+        quantity: 0,
+        dryRun,
+        skipped: "duplicate: order intent already recorded this cycle",
       });
       continue;
     }
@@ -202,6 +222,7 @@ export async function evaluateAndExecute(
     if ("skipped" in outcome) {
       result.placed.push({ proposal, quantity: 0, dryRun: false, skipped: outcome.skipped });
     } else {
+      if (recordOrderIntent) await recordOrderIntent(intentKey);
       result.placed.push({
         proposal,
         quantity: outcome.quantity,

@@ -179,6 +179,15 @@ export const recordCronRun = mutation({
   },
 });
 
+export const recordOrderIntent = mutation({
+  args: { token: v.string(), env: v.string(), key: v.string() },
+  handler: async (ctx, args) => {
+    assertSecret(args.token);
+    const { env, key } = args;
+    return await ctx.db.insert("orderIntents", { env, key, createdAt: Date.now() });
+  },
+});
+
 // --- queries (reads) ---
 
 export const getRiskState = query({
@@ -228,6 +237,18 @@ export const latestCronRun = query({
       .withIndex("by_schedule", (q) => q.eq("schedule", args.schedule))
       .order("desc")
       .first();
+  },
+});
+
+export const hasOrderIntent = query({
+  args: { token: v.string(), env: v.string(), key: v.string() },
+  handler: async (ctx, args) => {
+    assertSecret(args.token);
+    const existing = await ctx.db
+      .query("orderIntents")
+      .withIndex("by_env_and_key", (q) => q.eq("env", args.env).eq("key", args.key))
+      .first();
+    return existing !== null;
   },
 });
 
