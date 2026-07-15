@@ -58,6 +58,7 @@ export interface RealizedStats {
   losses: number;
   winRatePct: number;
   totalPnl: number;
+  closedUnknown: number;
 }
 
 export function realizedStats(
@@ -69,12 +70,16 @@ export function realizedStats(
   const wins = closed.filter((t) => (t.pnl as number) > 0).length;
   const losses = closed.filter((t) => (t.pnl as number) < 0).length;
   const totalPnl = closed.reduce((s, t) => s + (t.pnl as number), 0);
+  const closedUnknown = closedTrades.filter(
+    (t) => t.status === "closed-unknown",
+  ).length;
   return {
     closedCount: closed.length,
     wins,
     losses,
     winRatePct: closed.length ? (wins / closed.length) * 100 : 0,
     totalPnl,
+    closedUnknown,
   };
 }
 

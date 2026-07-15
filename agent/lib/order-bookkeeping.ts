@@ -38,6 +38,7 @@ export interface CloseTradeArgs {
   tradeId: string;
   pnl: number;
   exitPrice?: number;
+  status?: "closed" | "closed-unknown";
 }
 
 /**
@@ -59,7 +60,11 @@ export function buildCloseTradeArgs(
   return args;
 }
 
-/** Map orphaned open BUYs (position closed elsewhere, e.g. manually) into closeTrade args. */
+/**
+ * Map orphaned open BUYs (position closed elsewhere, e.g. manually) into closeTrade args.
+ * Booked as "closed-unknown" (not "closed") so realizedStats doesn't count these as
+ * break-even trades — the pnl:0 here is a placeholder, not a real result.
+ */
 export function buildOrphanCloseTradeArgs(orphans: OpenBuyTrade[]): CloseTradeArgs[] {
-  return orphans.map((o) => ({ tradeId: o._id, pnl: 0 }));
+  return orphans.map((o) => ({ tradeId: o._id, pnl: 0, status: "closed-unknown" }));
 }

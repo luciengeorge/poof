@@ -139,7 +139,7 @@ test("buildCloseTradeArgs: skips an exit with no known originating BUY (no trade
   assert.deepEqual(args, []);
 });
 
-test("buildOrphanCloseTradeArgs: closes an orphaned open BUY with zero pnl", () => {
+test("buildOrphanCloseTradeArgs: closes an orphaned open BUY with zero pnl and status closed-unknown", () => {
   const orphan: OpenBuyTrade = {
     _id: "trade_2",
     ticker: "TSLA_US_EQ",
@@ -147,5 +147,5 @@ test("buildOrphanCloseTradeArgs: closes an orphaned open BUY with zero pnl", () 
     thesis: "t",
   };
   const args = buildOrphanCloseTradeArgs([orphan]);
-  assert.deepEqual(args, [{ tradeId: "trade_2", pnl: 0 }]);
+  assert.deepEqual(args, [{ tradeId: "trade_2", pnl: 0, status: "closed-unknown" }]);
 });

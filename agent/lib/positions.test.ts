@@ -62,6 +62,21 @@ test("realizedStats: win rate + total over closed trades only", () => {
   assert.equal(s.losses, 1);
   assert.equal(s.totalPnl, 6);
   assert.equal(Math.round(s.winRatePct), 67);
+  assert.equal(s.closedUnknown, 0);
+});
+
+test("realizedStats: closed-unknown rows excluded from wins/losses/total but counted separately", () => {
+  const s = realizedStats([
+    { status: "closed", pnl: 5 },
+    { status: "closed", pnl: -2 },
+    { status: "closed-unknown", pnl: 0 },
+    { status: "closed-unknown", pnl: 0 },
+  ]);
+  assert.equal(s.closedCount, 2);
+  assert.equal(s.wins, 1);
+  assert.equal(s.losses, 1);
+  assert.equal(s.totalPnl, 3);
+  assert.equal(s.closedUnknown, 2);
 });
 
 test("orphanedOpenBuys: open buys not held anymore", () => {
