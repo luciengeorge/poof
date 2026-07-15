@@ -6,15 +6,44 @@ import {
   parseQuantityPrecision,
   DEFAULT_QUANTITY_PRECISION,
 } from "./execution.ts";
-import type { CashBalance, T212Position, T212Order } from "./t212.ts";
+import { T212Error, type CashBalance, type T212Position, type T212Order } from "./t212.ts";
 import type { RiskState } from "./state.ts";
 import { etDateString } from "./clock.ts";
+
+/**
+ * If `err` is a T212 rejection of THIS specific order (min-position, insufficient funds,
+ * not tradable, etc.) rather than an infra failure, return a concise skip reason. 429s are
+ * excluded — those are rate-limit exhaustion, not a business rejection, and 5xx/network
+ * errors aren't T212Error at all (or aren't 4xx), so they fall through to null.
+ */
+function t212RejectionSkip(err: unknown): string | null {
+  if (!(err instanceof T212Error)) return null;
+  if (err.rateLimited || err.status < 400 || err.status >= 500) return null;
+  let detail: string | undefined;
+  try {
+    const parsed = JSON.parse(err.body);
+    detail =
+      typeof parsed?.detail === "string"
+        ? parsed.detail
+        : typeof parsed?.title === "string"
+          ? parsed.title
+          : undefined;
+  } catch {
+    // body wasn't JSON — fall back to the error message below
+  }
+  return `T212 rejected: ${detail ?? err.message}`;
+}
 
 /**
  * Place a market order, adapting to T212's per-instrument quantity precision. First tries
  * a clean DEFAULT_QUANTITY_PRECISION quantity; on an "invalid quantity precision N" error,
  * re-rounds DOWN to N decimals and retries once. If it rounds to 0 (share too dear for this
  * notional at the allowed precision), returns a skip instead of firing blind orders.
+ *
+ * A T212 rejection of this specific order (min-position, insufficient funds, not tradable,
+ * etc.) is also returned as a skip rather than thrown — one bad order shouldn't abort the
+ * rest of the batch. Genuine infra failures (network, 5xx, exhausted rate-limit backoff)
+ * still throw so they surface instead of being silently swallowed.
  */
 async function placeWithPrecision(
   client: OrderExecClient,
@@ -33,14 +62,18 @@ async function placeWithPrecision(
     const allowed = parseQuantityPrecision(
       err instanceof Error ? err.message : String(err),
     );
-    if (allowed === null) throw err; // not a precision problem — surface it
-    const adjusted = roundQuantity(magnitude, allowed);
-    if (adjusted <= 0) {
-      return {
-        skipped: `quantity rounds to 0 at ${allowed}dp (share price too high for this trade size)`,
-      };
+    if (allowed !== null) {
+      const adjusted = roundQuantity(magnitude, allowed);
+      if (adjusted <= 0) {
+        return {
+          skipped: `quantity rounds to 0 at ${allowed}dp (share price too high for this trade size)`,
+        };
+      }
+      return { quantity: sign * adjusted, order: await attempt(adjusted) };
     }
-    return { quantity: sign * adjusted, order: await attempt(adjusted) };
+    const rejection = t212RejectionSkip(err);
+    if (rejection !== null) return { skipped: rejection };
+    throw err; // not a precision or per-order rejection — surface it
   }
 }
 
