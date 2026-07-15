@@ -111,6 +111,7 @@ export class Memory {
     tradeId: string;
     pnl: number;
     exitPrice?: number;
+    status?: "closed" | "closed-unknown";
   }): Promise<unknown> {
     return this.mutation("closeTrade", { ...args });
   }

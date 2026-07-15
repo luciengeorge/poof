@@ -37,12 +37,13 @@ export const closeTrade = mutation({
     tradeId: v.id("trades"),
     pnl: v.number(),
     exitPrice: v.optional(v.number()),
+    status: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     assertSecret(args.token);
-    const { tradeId, pnl, exitPrice } = args;
+    const { tradeId, pnl, exitPrice, status } = args;
     await ctx.db.patch("trades", tradeId, {
-      status: "closed",
+      status: status ?? "closed",
       pnl,
       exitPrice,
       closedAt: Date.now(),
