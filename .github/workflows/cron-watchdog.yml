@@ -1,0 +1,29 @@
+name: Cron Watchdog
+
+on:
+  schedule:
+    - cron: "10 16 * * 1-5" # 16:10 UTC weekdays, after the 15:00-15:59 fire window
+  workflow_dispatch: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Installs the pnpm version pinned in package.json "packageManager".
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Check cron heartbeat
+        run: node scripts/cron-watchdog.mjs
+        env:
+          CONVEX_URL: ${{ secrets.CONVEX_URL }}
+          CONVEX_APP_SECRET: ${{ secrets.CONVEX_APP_SECRET }}
+          SLACK_ALERT_WEBHOOK_URL: ${{ secrets.SLACK_ALERT_WEBHOOK_URL }}

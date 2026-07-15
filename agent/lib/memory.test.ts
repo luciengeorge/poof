@@ -111,6 +111,28 @@ test("every Memory method includes the token in its args", async () => {
   }
 });
 
+test("recordCronRun issues a mutation with the cron run args and the token", async () => {
+  const { client, calls } = fakeClient();
+  const cronRun = {
+    schedule: "cycle",
+    firedAt: 123,
+    marketOpen: true,
+    dispatched: true,
+  };
+  await new Memory(client, TOKEN).recordCronRun(cronRun);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].kind, "mutation");
+  assert.deepEqual(calls[0].args, { token: TOKEN, ...cronRun });
+});
+
+test("latestCronRun issues a query with the token and schedule", async () => {
+  const { client, calls } = fakeClient();
+  await new Memory(client, TOKEN).latestCronRun("scorecard");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].kind, "query");
+  assert.deepEqual(calls[0].args, { token: TOKEN, schedule: "scorecard" });
+});
+
 test("memoryFromEnv throws when CONVEX_URL is unset", () => {
   const prevUrl = process.env.CONVEX_URL;
   const prevSecret = process.env.CONVEX_APP_SECRET;

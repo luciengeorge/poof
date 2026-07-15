@@ -1,5 +1,6 @@
 import { defineSchedule } from "eve/schedules";
 import slack from "../channels/slack.ts";
+import { memoryFromEnv } from "../lib/memory.ts";
 
 // Weekly performance scorecard. Fires Fridays at 21:00 UTC (after the US close: 16:00 EST /
 // 17:00 EDT). Once/week satisfies Hobby's once-per-day cron limit. The agent assembles the
@@ -7,7 +8,18 @@ import slack from "../channels/slack.ts";
 export default defineSchedule({
   cron: "0 21 * * 5",
   async run({ receive, waitUntil, appAuth }) {
+    const firedAt = Date.now();
     const channelId = process.env.SLACK_CHANNEL_ID;
+    const dispatched = !!channelId;
+    console.log(
+      `[scorecard] cron fired at ${new Date(firedAt).toISOString()} dispatched=${dispatched}`,
+    );
+    try {
+      await memoryFromEnv().recordCronRun({ schedule: "scorecard", firedAt, dispatched });
+    } catch (err) {
+      console.warn("[scorecard] cron heartbeat failed (non-fatal):", err);
+    }
+
     if (!channelId) {
       console.warn("[scorecard] SLACK_CHANNEL_ID not set — skipping (no report target).");
       return;

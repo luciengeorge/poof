@@ -79,4 +79,11 @@ export default defineSchema({
     text: v.string(),
     createdAt: v.number(),
   }).index("by_env", ["env"]),
+
+  cronRuns: defineTable({
+    schedule: v.string(), // "cycle" | "scorecard"
+    firedAt: v.number(),
+    marketOpen: v.optional(v.boolean()),
+    dispatched: v.boolean(), // did we actually kick off the work?
+  }).index("by_schedule", ["schedule"]),
 });

@@ -164,6 +164,21 @@ export const recordMessage = mutation({
   },
 });
 
+export const recordCronRun = mutation({
+  args: {
+    token: v.string(),
+    schedule: v.string(),
+    firedAt: v.number(),
+    marketOpen: v.optional(v.boolean()),
+    dispatched: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    assertSecret(args.token);
+    const { token, ...rest } = args;
+    return await ctx.db.insert("cronRuns", { ...rest });
+  },
+});
+
 // --- queries (reads) ---
 
 export const getRiskState = query({
@@ -201,6 +216,18 @@ export const openBuys = query({
         q.eq("env", args.env).eq("side", "BUY").eq("status", "placed"),
       )
       .collect();
+  },
+});
+
+export const latestCronRun = query({
+  args: { token: v.string(), schedule: v.string() },
+  handler: async (ctx, args) => {
+    assertSecret(args.token);
+    return await ctx.db
+      .query("cronRuns")
+      .withIndex("by_schedule", (q) => q.eq("schedule", args.schedule))
+      .order("desc")
+      .first();
   },
 });
 
