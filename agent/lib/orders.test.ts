@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { evaluateAndExecute, type OrderExecClient, type Proposal } from "./orders.ts";
-import type { CashBalance, T212Position, T212Order } from "./t212.ts";
+import { T212Error, type CashBalance, type T212Position, type T212Order } from "./t212.ts";
 import { etDateString } from "./clock.ts";
 
 function cash(free: number): CashBalance {
@@ -284,6 +284,81 @@ test("BUY rejected fail-closed when resolvePrice throws", async () => {
   assert.equal(res.rejected.length, 1);
   assert.match(res.rejected[0].reason, /could not fetch live price/i);
   assert.equal(placed.length, 0);
+});
+
+test("T212 per-order rejection: skipped with the rejection reason, not thrown", async () => {
+  const { client } = fakeClient();
+  const rejecting: OrderExecClient = {
+    ...client,
+    async placeMarketOrder() {
+      throw new T212Error(
+        400,
+        '{"type":"/api-errors/min-opened-position-exceeded","title":"Error while placing the order","status":400,"detail":"must have opened position at least 1.00"}',
+      );
+    },
+  };
+  const res = await evaluateAndExecute([buy(500)], {
+    client: rejecting,
+    fxRate: 1,
+    dryRun: false,
+    resolveRiskState: async () => noState,
+    resolvePrice: async () => 100,
+  });
+  assert.equal(res.placed.length, 1);
+  assert.match(res.placed[0].skipped ?? "", /T212 rejected/i);
+  assert.match(res.placed[0].skipped ?? "", /must have opened position/i);
+});
+
+test("T212 per-order rejection: one bad order doesn't abort the rest of the batch", async () => {
+  const { client, placed } = fakeClient();
+  const mixed: OrderExecClient = {
+    ...client,
+    async placeMarketOrder(input) {
+      if (input.ticker === "MSFT_US_EQ") {
+        throw new T212Error(
+          400,
+          '{"type":"/api-errors/min-opened-position-exceeded","title":"Error while placing the order","status":400,"detail":"must have opened position at least 1.00"}',
+        );
+      }
+      placed.push(input);
+      return { id: 1, ticker: input.ticker, quantity: input.quantity } as T212Order;
+    },
+  };
+  const res = await evaluateAndExecute(
+    [buy(500), { ticker: "MSFT_US_EQ", side: "BUY", notional: 500, price: 100, thesis: "t" }],
+    {
+      client: mixed,
+      fxRate: 1,
+      dryRun: false,
+      resolveRiskState: async () => noState,
+      resolvePrice: async () => 100,
+    },
+  );
+  assert.equal(res.placed.length, 2);
+  assert.equal(placed.length, 1); // only the good order actually landed
+  const good = res.placed.find((p) => p.proposal.ticker === "AAPL_US_EQ");
+  const bad = res.placed.find((p) => p.proposal.ticker === "MSFT_US_EQ");
+  assert.ok(good && !good.skipped && good.order);
+  assert.match(bad?.skipped ?? "", /T212 rejected/i);
+});
+
+test("non-T212 / 5xx errors still throw — infra failures aren't swallowed as skips", async () => {
+  const { client } = fakeClient();
+  const failing: OrderExecClient = {
+    ...client,
+    async placeMarketOrder() {
+      throw new T212Error(500, "internal server error");
+    },
+  };
+  await assert.rejects(
+    evaluateAndExecute([buy(500)], {
+      client: failing,
+      fxRate: 1,
+      dryRun: false,
+      resolveRiskState: async () => noState,
+      resolvePrice: async () => 100,
+    }),
+  );
 });
 
 test("the top-of-cycle risk gate reads force-fresh cash and positions", async () => {
