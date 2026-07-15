@@ -67,6 +67,13 @@ export interface MessageRecord {
   text: string;
 }
 
+export interface CronRunRecord {
+  schedule: string;
+  firedAt: number;
+  marketOpen?: boolean;
+  dispatched: boolean;
+}
+
 // Untyped function references (no dependency on convex/_generated). The Convex
 // functions live in convex/memory.ts; these point at them by path.
 const fns = anyApi.memory;
@@ -129,6 +136,12 @@ export class Memory {
   }
   recordMessage(m: MessageRecord): Promise<unknown> {
     return this.mutation("recordMessage", { ...m });
+  }
+  recordCronRun(r: CronRunRecord): Promise<unknown> {
+    return this.mutation("recordCronRun", { ...r });
+  }
+  latestCronRun(schedule: string): Promise<unknown> {
+    return this.query("latestCronRun", { schedule });
   }
   getRiskState(env: Env): Promise<unknown> {
     return this.query("getRiskState", { env });
