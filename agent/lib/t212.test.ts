@@ -186,3 +186,78 @@ test("cancelOrder DELETEs the order by id", async () => {
   assert.equal(f.calls[0].url, "https://demo.trading212.com/api/v0/equity/orders/12345");
   assert.equal(f.calls[0].init.method, "DELETE");
 });
+
+// --- Task 4: getCash/getPortfolio TTL cache ---
+
+test("getCash caches within the TTL: two calls hit the network once", async () => {
+  const f = fakeFetch(() => ({ body: { free: 100 } }));
+  const client = new T212Client(cfg({ fetchImpl: f.fn }));
+  await client.getCash();
+  await client.getCash();
+  assert.equal(f.calls.length, 1);
+});
+
+test("getPortfolio caches within the TTL: two calls hit the network once", async () => {
+  const f = fakeFetch(() => ({ body: [] }));
+  const client = new T212Client(cfg({ fetchImpl: f.fn }));
+  await client.getPortfolio();
+  await client.getPortfolio();
+  assert.equal(f.calls.length, 1);
+});
+
+test("getCash({fresh:true}) bypasses the cache and refetches", async () => {
+  let free = 100;
+  const f = fakeFetch(() => ({ body: { free } }));
+  const client = new T212Client(cfg({ fetchImpl: f.fn }));
+  const first = await client.getCash();
+  free = 200;
+  const second = await client.getCash({ fresh: true });
+  assert.equal(f.calls.length, 2);
+  assert.equal(first.free, 100);
+  assert.equal(second.free, 200);
+});
+
+test("getPortfolio({fresh:true}) bypasses the cache and refetches", async () => {
+  let quantity = 1;
+  const f = fakeFetch(() => ({
+    body: [
+      {
+        ticker: "AAPL_US_EQ",
+        quantity,
+        averagePrice: 100,
+        currentPrice: 110,
+        ppl: 0,
+        maxBuy: 10,
+        maxSell: 10,
+        pieQuantity: 0,
+      },
+    ],
+  }));
+  const client = new T212Client(cfg({ fetchImpl: f.fn }));
+  const first = await client.getPortfolio();
+  quantity = 2;
+  const second = await client.getPortfolio({ fresh: true });
+  assert.equal(f.calls.length, 2);
+  assert.equal(first[0].quantity, 1);
+  assert.equal(second[0].quantity, 2);
+});
+
+test("a fresh:true fetch is itself cached for the next plain call", async () => {
+  let free = 100;
+  const f = fakeFetch(() => ({ body: { free } }));
+  const client = new T212Client(cfg({ fetchImpl: f.fn }));
+  await client.getCash();
+  free = 300;
+  await client.getCash({ fresh: true });
+  const third = await client.getCash();
+  assert.equal(f.calls.length, 2);
+  assert.equal(third.free, 300);
+});
+
+test("getPendingOrders is never cached: repeated calls always refetch", async () => {
+  const f = fakeFetch(() => ({ body: [] }));
+  const client = new T212Client(cfg({ fetchImpl: f.fn }));
+  await client.getPendingOrders();
+  await client.getPendingOrders();
+  assert.equal(f.calls.length, 2);
+});
