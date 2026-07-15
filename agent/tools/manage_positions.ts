@@ -11,6 +11,10 @@ import {
   orphanedOpenBuys,
   type OpenBuyTrade,
 } from "../lib/positions.ts";
+import {
+  buildCloseTradeArgs,
+  buildOrphanCloseTradeArgs,
+} from "../lib/order-bookkeeping.ts";
 
 export default defineTool({
   description:
@@ -50,24 +54,12 @@ export default defineTool({
 
     // Record realized P&L + close the originating BUY for each exit actually executed.
     try {
-      await Promise.all(
-        result.placed
-          .filter((p) => !p.skipped)
-          .map((p) => {
-            const m = byTicker.get(p.proposal.ticker);
-            if (!m?.tradeId) return Promise.resolve();
-            return memory.closeTrade({
-              tradeId: m.tradeId,
-              pnl: m.unrealizedPnl,
-              exitPrice: m.currentPrice,
-            });
-          }),
-      );
+      const closeArgs = buildCloseTradeArgs(result.placed, byTicker);
+      await Promise.all(closeArgs.map((a) => memory.closeTrade(a)));
       // Reconcile: BUYs whose position is no longer held were closed elsewhere.
       const orphans = orphanedOpenBuys(openBuys, positions);
-      await Promise.all(
-        orphans.map((o) => memory.closeTrade({ tradeId: o._id, pnl: 0 })),
-      );
+      const orphanArgs = buildOrphanCloseTradeArgs(orphans);
+      await Promise.all(orphanArgs.map((a) => memory.closeTrade(a)));
     } catch (err) {
       console.warn("[memory] closeTrade reconciliation failed (non-fatal):", err);
     }
