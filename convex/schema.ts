@@ -11,6 +11,7 @@ export default defineSchema({
     dayStartEquity: v.number(),
     dayStartDate: v.string(), // YYYY-MM-DD (ET)
     consecutiveLossDays: v.number(),
+    prevEquity: v.optional(v.number()), // daily dayPnl reference, rolls once per ET day
     haltState: v.string(), // "none" | "daily" | "circuit"
     updatedAt: v.number(),
   }).index("by_env", ["env"]),

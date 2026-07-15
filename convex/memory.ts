@@ -129,6 +129,7 @@ export const saveRiskState = mutation({
     dayStartEquity: v.number(),
     dayStartDate: v.string(),
     consecutiveLossDays: v.number(),
+    prevEquity: v.optional(v.number()),
     haltState: v.string(),
   },
   handler: async (ctx, args) => {

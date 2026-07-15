@@ -55,6 +55,7 @@ export interface RiskStateRecord {
   dayStartEquity: number;
   dayStartDate: string;
   consecutiveLossDays: number;
+  prevEquity?: number;
   haltState: string;
 }
 
