@@ -285,3 +285,28 @@ test("BUY rejected fail-closed when resolvePrice throws", async () => {
   assert.match(res.rejected[0].reason, /could not fetch live price/i);
   assert.equal(placed.length, 0);
 });
+
+test("the top-of-cycle risk gate reads force-fresh cash and positions", async () => {
+  const seen: { cash: boolean; portfolio: boolean }[] = [];
+  const { client: base } = fakeClient();
+  const client: OrderExecClient = {
+    ...base,
+    async getCash(opts) {
+      seen.push({ cash: opts?.fresh === true, portfolio: false });
+      return base.getCash();
+    },
+    async getPortfolio(opts) {
+      seen.push({ cash: false, portfolio: opts?.fresh === true });
+      return base.getPortfolio();
+    },
+  };
+  await evaluateAndExecute([buy(500)], {
+    client,
+    fxRate: 1,
+    dryRun: true,
+    resolveRiskState: async () => noState,
+    resolvePrice: async () => 100,
+  });
+  assert.ok(seen.some((s) => s.cash));
+  assert.ok(seen.some((s) => s.portfolio));
+});

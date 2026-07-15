@@ -76,11 +76,24 @@ function buildAuthHeader(apiKey: string, apiSecret: string): string {
   return "Basic " + Buffer.from(`${apiKey}:${apiSecret}`).toString("base64");
 }
 
+// T212's cash/portfolio endpoints are tightly rate-limited (~1 req/5s), and a single cycle
+// re-reads them several times (get_account, review_performance, manage_positions,
+// submit_orders). Cache the bodies briefly so redundant reads don't trip the 429 backoff;
+// callers that need a guaranteed-current snapshot (the risk gate) can force a fresh fetch.
+const SNAPSHOT_CACHE_TTL_MS = 8000;
+
+interface CacheEntry<T> {
+  value: T;
+  expires: number;
+}
+
 export class T212Client {
   private readonly base: string;
   private readonly auth: string;
   private readonly fetchImpl: typeof fetch;
   private rateLimit: RateLimitInfo | null = null;
+  private cashCache: CacheEntry<CashBalance> | null = null;
+  private portfolioCache: CacheEntry<T212Position[]> | null = null;
 
   constructor(cfg: T212Config) {
     this.base = HOSTS[cfg.env];
@@ -138,12 +151,22 @@ export class T212Client {
     }
   }
 
-  getCash(): Promise<CashBalance> {
-    return this.request("GET", "/equity/account/cash");
+  async getCash(opts?: { fresh?: boolean }): Promise<CashBalance> {
+    if (!opts?.fresh && this.cashCache && this.cashCache.expires > Date.now()) {
+      return this.cashCache.value;
+    }
+    const value = await this.request<CashBalance>("GET", "/equity/account/cash");
+    this.cashCache = { value, expires: Date.now() + SNAPSHOT_CACHE_TTL_MS };
+    return value;
   }
 
-  getPortfolio(): Promise<T212Position[]> {
-    return this.request("GET", "/equity/portfolio");
+  async getPortfolio(opts?: { fresh?: boolean }): Promise<T212Position[]> {
+    if (!opts?.fresh && this.portfolioCache && this.portfolioCache.expires > Date.now()) {
+      return this.portfolioCache.value;
+    }
+    const value = await this.request<T212Position[]>("GET", "/equity/portfolio");
+    this.portfolioCache = { value, expires: Date.now() + SNAPSHOT_CACHE_TTL_MS };
+    return value;
   }
 
   getPosition(ticker: string): Promise<T212Position> {
@@ -179,7 +202,14 @@ export class T212Client {
   }
 }
 
+// Per-process singleton so every tool invoked within one serverless invocation (one cycle)
+// shares the same client — and thus the same getCash/getPortfolio cache. Only memoized for
+// the default (no injected fetchImpl) path; callers that pass a fetchImpl (tests) always get
+// a fresh client.
+let singleton: T212Client | null = null;
+
 export function t212FromEnv(fetchImpl?: typeof fetch): T212Client {
+  if (!fetchImpl && singleton) return singleton;
   const apiKey = process.env.TRADING212_API_KEY;
   // Accept either name: TRADING212_API_SECRET (docs) or TRADING212_SECRET_KEY.
   const apiSecret =
@@ -190,5 +220,7 @@ export function t212FromEnv(fetchImpl?: typeof fetch): T212Client {
       "TRADING212_API_KEY and TRADING212_API_SECRET (or TRADING212_SECRET_KEY) must be set",
     );
   }
-  return new T212Client({ apiKey, apiSecret, env, fetchImpl });
+  const client = new T212Client({ apiKey, apiSecret, env, fetchImpl });
+  if (!fetchImpl) singleton = client;
+  return client;
 }

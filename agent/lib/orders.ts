@@ -46,8 +46,8 @@ async function placeWithPrecision(
 
 /** The subset of T212Client the executor needs (T212Client satisfies it structurally). */
 export interface OrderExecClient {
-  getCash(): Promise<CashBalance>;
-  getPortfolio(): Promise<T212Position[]>;
+  getCash(opts?: { fresh?: boolean }): Promise<CashBalance>;
+  getPortfolio(opts?: { fresh?: boolean }): Promise<T212Position[]>;
   getPendingOrders(): Promise<T212Order[]>;
   placeMarketOrder(input: {
     ticker: string;
@@ -126,9 +126,12 @@ export async function evaluateAndExecute(
     opts;
   const limits = opts.limits ?? DEFAULT_LIMITS;
 
+  // Force-fresh: this snapshot feeds the risk gate, and manage_positions may have already
+  // sold positions earlier in the same cycle. A cached pre-sell snapshot would size/validate
+  // against stale cash/positions. getPendingOrders is uncached (never stale).
   const [cash, positions, pending] = await Promise.all([
-    client.getCash(),
-    client.getPortfolio(),
+    client.getCash({ fresh: true }),
+    client.getPortfolio({ fresh: true }),
     client.getPendingOrders(),
   ]);
 
