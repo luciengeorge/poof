@@ -236,6 +236,57 @@ test("validateOrders: SELL above held value is clamped to held instead of reject
   assert.equal(res.accepted[0].side, "SELL");
 });
 
+// --- Task 5: SELL proceeds are unsettled, must not fund a same-batch BUY ---
+
+test("validateOrders: a same-batch BUY funded by unsettled SELL proceeds is rejected", () => {
+  const p = basePortfolio({
+    cash: 300,
+    positions: [{ ticker: "AAA", value: 1000 }],
+  });
+  const res = validateOrders(
+    [
+      { ticker: "AAA", side: "SELL", notional: 600, price: 100 },
+      buy({ ticker: "BBB", notional: 500 }), // > p.cash (300), < p.cash + sell (900)
+    ],
+    p,
+    LIMITS,
+  );
+  assert.equal(res.accepted.length, 1);
+  assert.equal(res.accepted[0].side, "SELL");
+  assert.equal(res.rejected.length, 1);
+  assert.equal(res.rejected[0].order.ticker, "BBB");
+  assert.match(res.rejected[0].reason, /cash/i);
+});
+
+test("validateOrders: a BUY funded entirely by pre-existing cash still passes", () => {
+  const p = basePortfolio({ cash: 5000 });
+  const res = validateOrders([buy({ notional: 500 })], p, LIMITS);
+  assert.equal(res.accepted.length, 1);
+  assert.equal(res.rejected.length, 0);
+});
+
+test("validateOrders: SELL is still accepted and updates concentration/valueByTicker without crediting cash", () => {
+  const p = basePortfolio({
+    cash: 2500,
+    positions: [{ ticker: "AAA", value: 1700 }],
+  });
+  const res = validateOrders(
+    [
+      { ticker: "AAA", side: "SELL", notional: 1600, price: 100 },
+      // funded entirely from pre-existing cash (2500), not the unsettled sell proceeds;
+      // only passes the per-name check because valueByTicker[AAA] dropped to 100 post-SELL
+      buy({ ticker: "AAA", notional: 200 }),
+    ],
+    p,
+    LIMITS,
+  );
+  assert.equal(res.accepted.length, 2);
+  assert.equal(res.accepted[0].side, "SELL");
+  assert.equal(res.accepted[0].notional, 1600);
+  assert.equal(res.accepted[1].side, "BUY");
+  assert.equal(res.rejected.length, 0);
+});
+
 test("validateOrders: a clamped full-close SELL removes the position from running state", () => {
   const p = basePortfolio({ positions: [{ ticker: "NVDA", value: 1000 }] });
   const res = validateOrders(
