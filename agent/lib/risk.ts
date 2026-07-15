@@ -183,7 +183,8 @@ export function validateOrders(
         const clamped = notional === order.notional ? order : { ...order, notional };
         accepted.push(clamped);
         const remaining = held - notional;
-        running.cash += notional;
+        // Sell proceeds are unsettled on a T212 cash ISA, so they must not fund a same-batch
+        // BUY: spendable cash only decreases (on BUYs), it never increases from a SELL.
         if (remaining <= 0) {
           running.valueByTicker.delete(order.ticker);
           running.distinctPositions -= 1;
