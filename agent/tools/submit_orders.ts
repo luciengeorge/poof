@@ -7,6 +7,7 @@ import { memoryFromEnv } from "../lib/memory.ts";
 import { resolveRiskState, tradingEnv } from "../lib/risk-runtime.ts";
 import { finnhubFromEnv } from "../lib/data.ts";
 import { t212TickerToFinnhubSymbol } from "../lib/execution.ts";
+import { buildRecordTradeArgs } from "../lib/order-bookkeeping.ts";
 
 const proposalSchema = z.object({
   ticker: z.string().min(1).describe("Trading 212 instrument ticker, e.g. AAPL_US_EQ"),
@@ -80,25 +81,8 @@ export default defineTool({
     // Record every placed/simulated trade to durable memory. Best-effort:
     // a memory failure must never break trading.
     try {
-      await Promise.all(
-        result.placed.map((p) =>
-          memory.recordTrade({
-            env: tradingEnv(),
-            ticker: p.proposal.ticker,
-            side: p.proposal.side,
-            notional: p.proposal.notional,
-            price: p.proposal.price,
-            quantity: p.quantity,
-            dryRun: p.dryRun,
-            thesis: p.proposal.thesis,
-            redTeamVerdict: p.proposal.redTeamVerdict,
-            status: p.skipped ? "skipped" : p.dryRun ? "dry-run" : "placed",
-            stopLossPct: p.proposal.stopLossPct,
-            takeProfitPct: p.proposal.takeProfitPct,
-            maxHoldDays: p.proposal.maxHoldDays,
-          }),
-        ),
-      );
+      const args = buildRecordTradeArgs(result.placed, tradingEnv());
+      await Promise.all(args.map((a) => memory.recordTrade(a)));
     } catch (err) {
       console.warn("[memory] recordTrade failed (non-fatal):", err);
     }
