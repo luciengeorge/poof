@@ -19,6 +19,10 @@ export interface StoredRiskState {
   dayStartEquity: number;
   dayStartDate: string; // YYYY-MM-DD (ET)
   consecutiveLossDays: number;
+  // Daily dayPnl reference. Rolls at most once per ET day (captured from the prior day's
+  // dayStartEquity on rollover) so the two resolveRiskState calls in a single cycle
+  // (manage_positions, submit_orders) see the same reference instead of resetting to 0.
+  prevEquity?: number;
 }
 
 export interface DerivedRiskState {
@@ -53,6 +57,7 @@ export function deriveRiskState(
         dayStartEquity: currentEquity,
         dayStartDate: todayET,
         consecutiveLossDays: 0,
+        prevEquity: currentEquity,
       },
     };
   }
@@ -61,19 +66,28 @@ export function deriveRiskState(
   let dayStartEquity = stored.dayStartEquity;
   let dayStartDate = stored.dayStartDate;
   let consecutiveLossDays = stored.consecutiveLossDays;
+  let prevEquity: number;
 
   if (stored.dayStartDate !== todayET) {
     const priorDayWasLoss = currentEquity < stored.dayStartEquity;
     consecutiveLossDays = priorDayWasLoss ? stored.consecutiveLossDays + 1 : 0;
+    // Capture yesterday's reference (its day-start) before dayStartEquity is reset below.
+    // This becomes the stable dayPnl reference until the NEXT rollover.
+    prevEquity = stored.dayStartEquity ?? currentEquity;
     dayStartEquity = currentEquity;
     dayStartDate = todayET;
+  } else {
+    // Same ET day: keep the existing reference. resolveRiskState runs twice per cycle
+    // (manage_positions, then submit_orders) — recomputing this from currentEquity here
+    // would zero out dayPnl on the second call and defeat the daily-loss breaker.
+    prevEquity = stored.prevEquity ?? stored.dayStartEquity ?? currentEquity;
   }
 
-  const dayPnl = currentEquity - dayStartEquity;
+  const dayPnl = currentEquity - prevEquity;
 
   return {
     fields: { peakEquity, dayPnl, newPositionsToday: 0, consecutiveLossDays },
-    persist: { peakEquity, dayStartEquity, dayStartDate, consecutiveLossDays },
+    persist: { peakEquity, dayStartEquity, dayStartDate, consecutiveLossDays, prevEquity },
   };
 }
 
