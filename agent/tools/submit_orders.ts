@@ -57,6 +57,7 @@ export default defineTool({
   async execute({ proposals }) {
     const client = t212FromEnv();
     const finnhub = finnhubFromEnv();
+    const memory = memoryFromEnv();
     const result = await evaluateAndExecute(proposals, {
       client,
       fxRate: fxRateFromEnv(),
@@ -70,12 +71,15 @@ export default defineTool({
         return (await finnhub.getQuote(symbol)).price;
       },
       limits: resolveLimits(),
+      hasOrderIntent: (key) => memory.hasOrderIntent(tradingEnv(), key),
+      recordOrderIntent: async (key) => {
+        await memory.recordOrderIntent(tradingEnv(), key);
+      },
     });
 
     // Record every placed/simulated trade to durable memory. Best-effort:
     // a memory failure must never break trading.
     try {
-      const memory = memoryFromEnv();
       await Promise.all(
         result.placed.map((p) =>
           memory.recordTrade({

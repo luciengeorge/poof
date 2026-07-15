@@ -143,6 +143,12 @@ export class Memory {
   latestCronRun(schedule: string): Promise<unknown> {
     return this.query("latestCronRun", { schedule });
   }
+  recordOrderIntent(env: Env, key: string): Promise<unknown> {
+    return this.mutation("recordOrderIntent", { env, key });
+  }
+  async hasOrderIntent(env: Env, key: string): Promise<boolean> {
+    return (await this.query("hasOrderIntent", { env, key })) as boolean;
+  }
   getRiskState(env: Env): Promise<unknown> {
     return this.query("getRiskState", { env });
   }
