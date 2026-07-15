@@ -1,11 +1,15 @@
 name: Evals
 
 # Behavioral evals run the REAL agent against a live model, so they cost tokens and need
-# credentials. Manual-trigger only (not on every PR). They run in DRY_RUN + demo so no real
-# orders are ever placed. Required repo secrets: AI_GATEWAY_API_KEY (model access),
-# FINNHUB_API_KEY, EXA_API_KEY, CONVEX_URL, TRADING212_API_KEY, TRADING212_SECRET_KEY (demo keys).
+# credentials. Manual-trigger, plus a nightly run so a safety-behavior regression (e.g. the
+# agent skipping the earnings guard or red-team review) surfaces within a day. They run in
+# DRY_RUN + demo so no real orders are ever placed. Required repo secrets: AI_GATEWAY_API_KEY
+# (model access), FINNHUB_API_KEY, EXA_API_KEY, CONVEX_URL, TRADING212_API_KEY,
+# TRADING212_SECRET_KEY (demo keys).
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "0 8 * * *" # 08:00 UTC nightly, off-hours from the 15:00 UTC trading cron
 
 concurrency:
   group: evals-${{ github.ref }}

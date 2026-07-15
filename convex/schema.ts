@@ -86,4 +86,13 @@ export default defineSchema({
     marketOpen: v.optional(v.boolean()),
     dispatched: v.boolean(), // did we actually kick off the work?
   }).index("by_schedule", ["schedule"]),
+
+  // Durable per-cycle intent marker for order placement. T212 market orders fill near-
+  // instantly and vanish from "pending", so a step re-run after the fill would otherwise see
+  // nothing pending and place a duplicate order. `key` encodes ET-date:ticker:side:notional.
+  orderIntents: defineTable({
+    env: v.string(),
+    key: v.string(),
+    createdAt: v.number(),
+  }).index("by_env_and_key", ["env", "key"]),
 });

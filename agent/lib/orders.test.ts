@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { evaluateAndExecute, type OrderExecClient, type Proposal } from "./orders.ts";
 import type { CashBalance, T212Position, T212Order } from "./t212.ts";
+import { etDateString } from "./clock.ts";
 
 function cash(free: number): CashBalance {
   return { total: free, free, blocked: 0, invested: 0, pieCash: 0, result: 0, ppl: 0 };
@@ -208,6 +209,64 @@ test("BUY rejected when model price deviates >5% from server price", async () =>
   assert.equal(res.rejected.length, 1);
   assert.match(res.rejected[0].reason, /price mismatch/i);
   assert.equal(placed.length, 0);
+});
+
+test("order intent: first real placement records an intent marker, keyed by ET-date:ticker:side:notional", async () => {
+  const { client, placed } = fakeClient();
+  const recorded: string[] = [];
+  const res = await evaluateAndExecute([buy(500)], {
+    client,
+    fxRate: 1,
+    dryRun: false,
+    resolveRiskState: async () => noState,
+    resolvePrice: async () => 100,
+    hasOrderIntent: async () => false,
+    recordOrderIntent: async (key) => {
+      recorded.push(key);
+    },
+  });
+  assert.equal(placed.length, 1);
+  assert.equal(res.placed[0].dryRun, false);
+  assert.deepEqual(recorded, [`${etDateString(new Date())}:AAPL_US_EQ:BUY:500`]);
+});
+
+test("order intent: a second run with the same intent key already recorded skips without placing", async () => {
+  const { client, placed } = fakeClient();
+  const recorded: string[] = [];
+  const res = await evaluateAndExecute([buy(500)], {
+    client,
+    fxRate: 1,
+    dryRun: false,
+    resolveRiskState: async () => noState,
+    resolvePrice: async () => 100,
+    hasOrderIntent: async () => true,
+    recordOrderIntent: async (key) => {
+      recorded.push(key);
+    },
+  });
+  assert.equal(placed.length, 0);
+  assert.equal(res.placed.length, 1);
+  assert.match(res.placed[0].skipped ?? "", /duplicate: order intent already recorded/i);
+  assert.deepEqual(recorded, []);
+});
+
+test("order intent: dry-run never records an intent marker", async () => {
+  const { client, placed } = fakeClient();
+  const recorded: string[] = [];
+  const res = await evaluateAndExecute([buy(500)], {
+    client,
+    fxRate: 1,
+    dryRun: true,
+    resolveRiskState: async () => noState,
+    resolvePrice: async () => 100,
+    hasOrderIntent: async () => false,
+    recordOrderIntent: async (key) => {
+      recorded.push(key);
+    },
+  });
+  assert.equal(res.placed[0].dryRun, true);
+  assert.equal(placed.length, 0);
+  assert.deepEqual(recorded, []);
 });
 
 test("BUY rejected fail-closed when resolvePrice throws", async () => {

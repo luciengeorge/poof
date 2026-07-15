@@ -133,6 +133,22 @@ test("latestCronRun issues a query with the token and schedule", async () => {
   assert.deepEqual(calls[0].args, { token: TOKEN, schedule: "scorecard" });
 });
 
+test("recordOrderIntent issues a mutation; hasOrderIntent issues a query returning a boolean", async () => {
+  const { client, calls } = fakeClient();
+  const m = new Memory(client, TOKEN);
+  await m.recordOrderIntent("live", "2026-07-15:AAPL_US_EQ:BUY:500");
+  assert.equal(calls[0].kind, "mutation");
+  assert.deepEqual(calls[0].args, {
+    token: TOKEN,
+    env: "live",
+    key: "2026-07-15:AAPL_US_EQ:BUY:500",
+  });
+
+  client.query = async () => true;
+  const result = await m.hasOrderIntent("live", "2026-07-15:AAPL_US_EQ:BUY:500");
+  assert.equal(result, true);
+});
+
 test("memoryFromEnv throws when CONVEX_URL is unset", () => {
   const prevUrl = process.env.CONVEX_URL;
   const prevSecret = process.env.CONVEX_APP_SECRET;
