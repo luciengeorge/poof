@@ -17,6 +17,7 @@ import { checkHalt } from "./risk.ts";
 import {
   deriveRiskState,
   loadRiskState,
+  lossDayMinDropPctFromEnv,
   resolveLimits,
   type RiskState,
   type StoredRiskState,
@@ -33,7 +34,12 @@ export async function resolveRiskState(
 ): Promise<RiskState> {
   try {
     const stored = (await memory.getRiskState(tradingEnv())) as StoredRiskState | null;
-    const derived = deriveRiskState(stored, currentEquity, etDateString(new Date()));
+    const derived = deriveRiskState(
+      stored,
+      currentEquity,
+      etDateString(new Date()),
+      lossDayMinDropPctFromEnv(),
+    );
     const halt = checkHalt(
       { equity: currentEquity, cash: 0, positions: [], ...derived.fields },
       resolveLimits(),

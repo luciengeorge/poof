@@ -32,17 +32,23 @@ export interface DerivedRiskState {
   persist: StoredRiskState;
 }
 
+// Only a day-over-day drop bigger than this counts toward the consecutive-loss-day breaker;
+// smaller moves are noise.
+export const DEFAULT_LOSS_DAY_MIN_DROP_PCT = 0.015;
+
 /**
  * Derive the live risk state for a cycle from the stored state + current equity.
  * Handles per-ET-day rollover: on a new day, the prior day counts as a loss if equity
- * sits below where the prior day started, incrementing the consecutive-loss-day counter
- * (else it resets). Peak equity is the running max. `newPositionsToday` is not tracked
- * across cycles in Phase 1 (the within-cycle cap in the risk engine still applies).
+ * dropped by more than `lossDayMinDropPct` from where the prior day started, incrementing
+ * the consecutive-loss-day counter (else it resets). Peak equity is the running max.
+ * `newPositionsToday` is not tracked across cycles in Phase 1 (the within-cycle cap in the
+ * risk engine still applies).
  */
 export function deriveRiskState(
   stored: StoredRiskState | null,
   currentEquity: number,
   todayET: string,
+  lossDayMinDropPct: number = DEFAULT_LOSS_DAY_MIN_DROP_PCT,
 ): DerivedRiskState {
   if (!stored) {
     return {
@@ -69,7 +75,11 @@ export function deriveRiskState(
   let prevEquity: number;
 
   if (stored.dayStartDate !== todayET) {
-    const priorDayWasLoss = currentEquity < stored.dayStartEquity;
+    const dropPct =
+      stored.dayStartEquity > 0
+        ? (stored.dayStartEquity - currentEquity) / stored.dayStartEquity
+        : 0;
+    const priorDayWasLoss = dropPct > lossDayMinDropPct;
     consecutiveLossDays = priorDayWasLoss ? stored.consecutiveLossDays + 1 : 0;
     // Capture yesterday's reference (its day-start) before dayStartEquity is reset below.
     // This becomes the stable dayPnl reference until the NEXT rollover.
@@ -120,6 +130,10 @@ export function resolveLimits(env: EnvLike = process.env): RiskLimits {
     maxDrawdownPct: numFromEnv(env, "TRADING_MAX_DRAWDOWN_PCT", DEFAULT_LIMITS.maxDrawdownPct),
     maxConsecutiveLossDays: numFromEnv(env, "TRADING_MAX_CONSECUTIVE_LOSS_DAYS", DEFAULT_LIMITS.maxConsecutiveLossDays),
   };
+}
+
+export function lossDayMinDropPctFromEnv(env: EnvLike = process.env): number {
+  return numFromEnv(env, "TRADING_LOSS_DAY_MIN_DROP_PCT", DEFAULT_LOSS_DAY_MIN_DROP_PCT);
 }
 
 /** Neutral risk state for display-only reads that don't gate trades (e.g. get_account). */
