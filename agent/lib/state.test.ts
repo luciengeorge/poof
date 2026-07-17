@@ -113,3 +113,34 @@ test("new day after an up day: consecutiveLossDays resets to 0", () => {
   assert.equal(d.persist.consecutiveLossDays, 0);
   assert.equal(d.persist.dayStartEquity, 58);
 });
+
+test("new day after a small sub-threshold drop: noise, consecutiveLossDays resets to 0", () => {
+  const d = deriveRiskState(
+    stored({ dayStartEquity: 100, dayStartDate: "2026-06-24", consecutiveLossDays: 2 }),
+    99.5, // 0.5% drop, below the 1.5% default threshold → not a loss day
+    "2026-06-25",
+  );
+  assert.equal(d.persist.consecutiveLossDays, 0);
+  assert.equal(d.persist.dayStartEquity, 99.5);
+});
+
+test("new day after a drop exceeding the threshold: counts as a loss day", () => {
+  const d = deriveRiskState(
+    stored({ dayStartEquity: 100, dayStartDate: "2026-06-24", consecutiveLossDays: 1 }),
+    97, // 3% drop, above the 1.5% default threshold → a loss day
+    "2026-06-25",
+  );
+  assert.equal(d.persist.consecutiveLossDays, 2);
+  assert.equal(d.persist.dayStartEquity, 97);
+});
+
+test("lossDayMinDropPct is tunable: a 3% drop no longer counts under a 5% threshold", () => {
+  const d = deriveRiskState(
+    stored({ dayStartEquity: 100, dayStartDate: "2026-06-24", consecutiveLossDays: 2 }),
+    97, // 3% drop
+    "2026-06-25",
+    0.05,
+  );
+  assert.equal(d.persist.consecutiveLossDays, 0);
+  assert.equal(d.persist.dayStartEquity, 97);
+});
