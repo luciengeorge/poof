@@ -25,6 +25,7 @@ jobs:
       FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
       EXA_API_KEY: ${{ secrets.EXA_API_KEY }}
       CONVEX_URL: ${{ secrets.CONVEX_URL }}
+      CONVEX_APP_SECRET: ${{ secrets.CONVEX_APP_SECRET }}
       TRADING212_API_KEY: ${{ secrets.TRADING212_API_KEY }}
       TRADING212_SECRET_KEY: ${{ secrets.TRADING212_SECRET_KEY }}
     steps:
