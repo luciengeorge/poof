@@ -9,6 +9,7 @@ import { tradingEnv } from "../lib/risk-runtime.ts";
 import {
   buildManagedPositions,
   realizedStats,
+  realizedStatsByTag,
   type OpenBuyTrade,
 } from "../lib/positions.ts";
 import { computeAlpha, type Benchmark } from "../lib/benchmark.ts";
@@ -44,6 +45,7 @@ export default defineTool({
       ((recall as { trades?: unknown[] })?.trades ?? []) as {
         pnl?: number;
         status?: string;
+        strategyTag?: string;
       }[];
 
     const now = Date.now();
@@ -68,6 +70,9 @@ export default defineTool({
     });
 
     const realized = realizedStats(closedTrades);
+    // Per-strategy-type realized stats, so decisions can bias toward tags with positive
+    // realized expectancy. Small samples (low closedCount per tag) are noise, not signal.
+    const realizedByTag = realizedStatsByTag(closedTrades);
 
     // Benchmark vs SPY. Seed the baseline once (current equity + SPY price at inception).
     let spyPrice: number | null = null;
@@ -101,6 +106,7 @@ export default defineTool({
       freeCash: cash.free,
       openPositions: managed,
       realized,
+      realizedByTag,
       benchmark,
       spyPrice,
       alpha,

@@ -38,6 +38,9 @@ export default defineSchema({
     dryRun: v.boolean(),
     thesis: v.string(),
     redTeamVerdict: v.optional(v.string()),
+    // Strategy taxonomy tag set at entry (see agent/lib/positions.ts STRATEGY_TAGS).
+    // Optional for backward compatibility; existing rows bucket as "other" on aggregation.
+    strategyTag: v.optional(v.string()),
     status: v.string(), // "placed" | "dry-run" | "skipped" | "closed"
     // Exit levels set at entry (fractions of entry price), read by the exit engine.
     stopLossPct: v.optional(v.number()),

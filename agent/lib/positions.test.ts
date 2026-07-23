@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   buildManagedPositions,
   realizedStats,
+  realizedStatsByTag,
   orphanedOpenBuys,
   type OpenBuyTrade,
 } from "./positions.ts";
@@ -77,6 +78,37 @@ test("realizedStats: closed-unknown rows excluded from wins/losses/total but cou
   assert.equal(s.losses, 1);
   assert.equal(s.totalPnl, 3);
   assert.equal(s.closedUnknown, 2);
+});
+
+test("realizedStatsByTag: buckets closed trades by strategy tag with correct per-tag stats", () => {
+  const byTag = realizedStatsByTag([
+    { status: "closed", pnl: 10, strategyTag: "momentum" },
+    { status: "closed", pnl: -4, strategyTag: "momentum" },
+    { status: "closed", pnl: 6, strategyTag: "momentum" },
+    { status: "closed", pnl: -3, strategyTag: "earnings-play" },
+    { status: "placed", pnl: 0, strategyTag: "momentum" }, // ignored (open)
+  ]);
+  assert.equal(byTag.momentum.closedCount, 3);
+  assert.equal(byTag.momentum.wins, 2);
+  assert.equal(byTag.momentum.losses, 1);
+  assert.equal(byTag.momentum.totalPnl, 12);
+  assert.equal(Math.round(byTag.momentum.winRatePct), 67);
+  assert.equal(byTag["earnings-play"].closedCount, 1);
+  assert.equal(byTag["earnings-play"].wins, 0);
+  assert.equal(byTag["earnings-play"].losses, 1);
+  assert.equal(byTag["earnings-play"].totalPnl, -3);
+});
+
+test("realizedStatsByTag: missing/unknown tags bucket under 'other'", () => {
+  const byTag = realizedStatsByTag([
+    { status: "closed", pnl: 5 }, // no tag
+    { status: "closed", pnl: -1, strategyTag: "not-a-real-tag" }, // unknown tag
+    { status: "closed", pnl: 2, strategyTag: "momentum" },
+  ]);
+  assert.equal(byTag.other.closedCount, 2);
+  assert.equal(byTag.other.totalPnl, 4);
+  assert.equal(byTag.momentum.closedCount, 1);
+  assert.equal(Object.keys(byTag).sort().join(","), "momentum,other");
 });
 
 test("orphanedOpenBuys: open buys not held anymore", () => {

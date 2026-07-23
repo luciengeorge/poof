@@ -26,6 +26,7 @@ export interface TradeRecord {
   dryRun: boolean;
   thesis: string;
   redTeamVerdict?: string;
+  strategyTag?: string;
   status: string;
   stopLossPct?: number;
   takeProfitPct?: number;

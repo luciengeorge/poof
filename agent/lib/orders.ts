@@ -96,6 +96,7 @@ export interface Proposal {
   price: number;
   thesis: string;
   redTeamVerdict?: string;
+  strategyTag?: string;
   stopLossPct?: number;
   takeProfitPct?: number;
   trailingStopPct?: number;

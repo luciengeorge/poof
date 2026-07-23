@@ -6,6 +6,30 @@
 import type { T212Position } from "./t212.ts";
 import type { OpenPosition } from "./exits.ts";
 
+/**
+ * The fixed strategy taxonomy. Every BUY is tagged with exactly one of these so
+ * per-type performance can be measured. Single source of truth for schema capture,
+ * aggregation, instructions, and the eval. "other" is the catch-all for trades with
+ * no tag or an unrecognized one.
+ */
+export const STRATEGY_TAGS = [
+  "news-catalyst",
+  "earnings-play",
+  "momentum",
+  "mean-reversion",
+  "index-event",
+  "other",
+] as const;
+
+export type StrategyTag = (typeof STRATEGY_TAGS)[number];
+
+/** Bucket any raw tag into a known StrategyTag; unknown/missing falls back to "other". */
+export function normalizeStrategyTag(tag?: string): StrategyTag {
+  return (STRATEGY_TAGS as readonly string[]).includes(tag ?? "")
+    ? (tag as StrategyTag)
+    : "other";
+}
+
 /** The fields of an open BUY trade row (from Convex) this layer needs. */
 export interface OpenBuyTrade {
   _id: string;
@@ -85,6 +109,26 @@ export function realizedStats(
     totalPnl,
     closedUnknown,
   };
+}
+
+/**
+ * Realized stats bucketed by strategy tag. Trades with no tag or an unknown one bucket
+ * under "other". Only tags that actually have closed trades appear in the result, so a
+ * consumer sees exactly which strategies have a track record. Mirrors realizedStats.
+ */
+export function realizedStatsByTag(
+  closedTrades: { pnl?: number; status?: string; strategyTag?: string }[],
+): Record<string, RealizedStats> {
+  const byTag = new Map<StrategyTag, typeof closedTrades>();
+  for (const t of closedTrades) {
+    const tag = normalizeStrategyTag(t.strategyTag);
+    const bucket = byTag.get(tag);
+    if (bucket) bucket.push(t);
+    else byTag.set(tag, [t]);
+  }
+  const out: Record<string, RealizedStats> = {};
+  for (const [tag, trades] of byTag) out[tag] = realizedStats(trades);
+  return out;
 }
 
 /** Open BUY trades whose ticker is no longer held -> the position was closed elsewhere. */
