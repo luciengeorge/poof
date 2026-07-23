@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { Candle } from "./data.ts";
 import { runBacktest, type BacktestConfig } from "./backtest.ts";
+import { DEFAULT_EXITS } from "./exits.ts";
 
 /** Terse candle builder; high/low are filled in around open/close when omitted. */
 function bar(date: string, open: number, close: number, high?: number, low?: number): Candle {
@@ -109,12 +110,15 @@ test("(d) the cost model reduces net return versus a zero-cost run", () => {
     bar("2024-01-03", 100, 130), // +30% close => take-profit round trip
   ];
   const signals = [{ ticker: "RT", date: "2024-01-01" }];
+  // Pin the take-profit so this test isolates cost, independent of the production
+  // DEFAULT_EXITS take-profit level (which can change without invalidating this test).
+  const pinnedTP = { ...DEFAULT_EXITS, defaultTakeProfitPct: 0.2 };
 
-  const withCost = runBacktest({ RT: series }, signals, baseConfig());
+  const withCost = runBacktest({ RT: series }, signals, baseConfig({ exits: pinnedTP }));
   const zeroCost = runBacktest(
     { RT: series },
     signals,
-    baseConfig({ spreadBps: 0, fxBps: 0 }),
+    baseConfig({ spreadBps: 0, fxBps: 0, exits: pinnedTP }),
   );
 
   // Both must complete the same round trip (take-profit), isolating cost as the only difference.
