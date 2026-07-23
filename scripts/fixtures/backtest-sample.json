@@ -1,0 +1,32 @@
+{
+  "startingEquity": 10000,
+  "defaultNotional": 2000,
+  "spreadBps": 20,
+  "fxBps": 40,
+  "signals": [
+    { "ticker": "AAPL", "date": "2024-01-02" },
+    { "ticker": "AAPL", "date": "2024-01-08" }
+  ],
+  "priceSeriesByTicker": {
+    "AAPL": [
+      { "date": "2024-01-02", "open": 100, "high": 102, "low": 99, "close": 101 },
+      { "date": "2024-01-03", "open": 101, "high": 104, "low": 100, "close": 103 },
+      { "date": "2024-01-04", "open": 103, "high": 109, "low": 102, "close": 108 },
+      { "date": "2024-01-05", "open": 108, "high": 116, "low": 107, "close": 115 },
+      { "date": "2024-01-08", "open": 115, "high": 124, "low": 114, "close": 123 },
+      { "date": "2024-01-09", "open": 124, "high": 127, "low": 123, "close": 126 },
+      { "date": "2024-01-10", "open": 126, "high": 129, "low": 125, "close": 128 },
+      { "date": "2024-01-11", "open": 128, "high": 131, "low": 127, "close": 130 }
+    ]
+  },
+  "spySeries": [
+    { "date": "2024-01-02", "open": 400, "high": 401, "low": 399, "close": 400 },
+    { "date": "2024-01-03", "open": 400, "high": 402, "low": 399, "close": 401 },
+    { "date": "2024-01-04", "open": 401, "high": 403, "low": 400, "close": 402 },
+    { "date": "2024-01-05", "open": 402, "high": 405, "low": 401, "close": 404 },
+    { "date": "2024-01-08", "open": 404, "high": 407, "low": 403, "close": 406 },
+    { "date": "2024-01-09", "open": 406, "high": 408, "low": 405, "close": 407 },
+    { "date": "2024-01-10", "open": 407, "high": 409, "low": 406, "close": 408 },
+    { "date": "2024-01-11", "open": 408, "high": 411, "low": 407, "close": 410 }
+  ]
+}

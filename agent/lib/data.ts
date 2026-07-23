@@ -26,6 +26,15 @@ export interface EarningsEvent {
   epsEstimate: number | null;
 }
 
+/** A daily OHLC bar for one symbol. Consumed by the backtest / replay harness. */
+export interface Candle {
+  date: string; // YYYY-MM-DD (UTC)
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+}
+
 export interface MarketDataProvider {
   getQuote(symbol: string): Promise<Quote>;
   getCompanyNews(
@@ -39,6 +48,12 @@ export interface MarketDataProvider {
     fromISO: string,
     toISO: string,
   ): Promise<EarningsEvent[]>;
+  getCandles(
+    symbol: string,
+    fromISO: string,
+    toISO: string,
+    resolution?: string,
+  ): Promise<Candle[]>;
 }
 
 export interface FinnhubConfig {
@@ -79,6 +94,16 @@ interface RawEarnings {
   date: string;
   hour?: string;
   epsEstimate?: number | null;
+}
+
+/** Finnhub /stock/candle payload: parallel arrays keyed by index, `s` is "ok" | "no_data". */
+interface RawCandles {
+  s: string;
+  t?: number[]; // unix seconds
+  o?: number[];
+  h?: number[];
+  l?: number[];
+  c?: number[];
 }
 
 function mapNews(r: RawNews): NewsItem {
@@ -162,6 +187,43 @@ export class FinnhubProvider implements MarketDataProvider {
       epsEstimate: e.epsEstimate ?? null,
     }));
   }
+
+  /**
+   * Daily OHLC candles for a symbol, mapped from Finnhub's /stock/candle parallel-array
+   * payload into a sorted Candle[]. NOTE: /stock/candle is gated on our current API tier,
+   * so live calls 403 ("no access"); this mapping exists so the harness is ready the moment
+   * a provider/tier that serves candles is wired in. `fromISO`/`toISO` are YYYY-MM-DD and are
+   * converted to the unix-second `from`/`to` window Finnhub expects. Returns [] on `no_data`.
+   */
+  async getCandles(
+    symbol: string,
+    fromISO: string,
+    toISO: string,
+    resolution: string = "D",
+  ): Promise<Candle[]> {
+    const from = Math.floor(Date.parse(fromISO) / 1000);
+    const to = Math.floor(Date.parse(toISO) / 1000);
+    const raw = await this.get<RawCandles>("/stock/candle", {
+      symbol,
+      resolution,
+      from: String(from),
+      to: String(to),
+    });
+    return mapCandles(raw);
+  }
+}
+
+/** Map Finnhub's parallel-array candle payload into a Candle[] sorted ascending by date. */
+export function mapCandles(raw: RawCandles): Candle[] {
+  if (raw.s !== "ok" || !raw.t || !raw.o || !raw.h || !raw.l || !raw.c) return [];
+  const candles: Candle[] = raw.t.map((sec, i) => ({
+    date: new Date(sec * 1000).toISOString().slice(0, 10),
+    open: raw.o![i],
+    high: raw.h![i],
+    low: raw.l![i],
+    close: raw.c![i],
+  }));
+  return candles.sort((a, b) => a.date.localeCompare(b.date));
 }
 
 export function finnhubFromEnv(fetchImpl?: typeof fetch): FinnhubProvider {

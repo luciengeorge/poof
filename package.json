@@ -12,6 +12,7 @@
     "start": "eve start",
     "typecheck": "tsc",
     "test": "node --test --experimental-strip-types \"agent/**/*.test.ts\"",
+    "backtest": "node --experimental-strip-types scripts/backtest.ts",
     "eval": "eve eval"
   },
   "dependencies": {

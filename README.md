@@ -37,6 +37,33 @@ corepack pnpm@10.26.0 run build
 pnpm eval
 ```
 
+## Backtest harness
+
+A pure, deterministic replay engine (`agent/lib/backtest.ts`) steps day-by-day over
+historical candles, enters scripted signals, and reports realized PnL, win rate, max
+drawdown, and alpha vs buy-and-hold SPY. It reuses the production pure modules with no logic
+duplication: `checkExits` (exits.ts) for stop-loss / take-profit / max-hold, `notionalToShares`
+(execution.ts) for sizing, and `computeAlpha` (benchmark.ts) for alpha.
+
+Look-ahead safety is guaranteed and unit-tested: a signal generated on day T fills at day
+T+1's OPEN, never day T's close. Exits are evaluated against each day's close.
+
+Run it against a local JSON fixture (never touches Convex or the live account):
+
+```
+corepack pnpm@10.26.0 run backtest                        # uses the bundled sample fixture
+corepack pnpm@10.26.0 run backtest path/to/fixture.json   # your own candles + signals
+```
+
+The fixture format is in `scripts/fixtures/backtest-sample.json`: `startingEquity`,
+`defaultNotional`, `spreadBps`, `fxBps`, `signals` (`{ ticker, date, notional? }`),
+`priceSeriesByTicker`, and `spySeries`.
+
+Live candle sourcing is deferred: Finnhub's `/stock/candle` endpoint is gated on the current
+API tier (it 403s), so the harness runs on fixtures until a candle-serving provider/tier is
+wired in. The `Candle` mapping (`mapCandles` in `agent/lib/data.ts`) is already in place for
+that moment.
+
 ## Safety switches
 
 Two env vars control whether this agent can touch real money (see `agent/lib/state.ts`):

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { FinnhubProvider, FinnhubError, finnhubFromEnv } from "./data.ts";
+import { FinnhubProvider, FinnhubError, finnhubFromEnv, mapCandles } from "./data.ts";
 
 function fakeFetch(
   handler: (url: string) => { status?: number; body?: unknown },
@@ -135,6 +135,47 @@ test("getEarningsCalendar tolerates a missing earningsCalendar field", async () 
   const f = fakeFetch(() => ({ body: {} }));
   const p = new FinnhubProvider({ apiKey: "KEY", fetchImpl: f.fn });
   assert.deepEqual(await p.getEarningsCalendar("X", "2026-06-01", "2026-06-30"), []);
+});
+
+// --- candles (backtest data source) ---
+
+test("getCandles passes symbol+resolution+range and maps the parallel-array payload", async () => {
+  // Two bars, deliberately out of order in the payload to prove we sort by date.
+  const f = fakeFetch(() => ({
+    body: {
+      s: "ok",
+      t: [1704326400, 1704240000], // 2024-01-04, 2024-01-03 (UTC)
+      o: [102, 100],
+      h: [104, 101],
+      l: [101, 99],
+      c: [103, 100.5],
+    },
+  }));
+  const p = new FinnhubProvider({ apiKey: "KEY", fetchImpl: f.fn });
+  const candles = await p.getCandles("AAPL", "2024-01-03", "2024-01-04", "D");
+  const u = new URL(f.calls[0]);
+  assert.equal(u.pathname, "/api/v1/stock/candle");
+  assert.equal(u.searchParams.get("symbol"), "AAPL");
+  assert.equal(u.searchParams.get("resolution"), "D");
+  assert.equal(u.searchParams.get("from"), String(Math.floor(Date.parse("2024-01-03") / 1000)));
+  assert.equal(u.searchParams.get("to"), String(Math.floor(Date.parse("2024-01-04") / 1000)));
+  assert.deepEqual(candles, [
+    { date: "2024-01-03", open: 100, high: 101, low: 99, close: 100.5 },
+    { date: "2024-01-04", open: 102, high: 104, low: 101, close: 103 },
+  ]);
+});
+
+test("getCandles defaults resolution to D", async () => {
+  const f = fakeFetch(() => ({ body: { s: "no_data" } }));
+  const p = new FinnhubProvider({ apiKey: "KEY", fetchImpl: f.fn });
+  await p.getCandles("AAPL", "2024-01-01", "2024-01-31");
+  const u = new URL(f.calls[0]);
+  assert.equal(u.searchParams.get("resolution"), "D");
+});
+
+test("mapCandles returns [] on no_data or missing arrays", () => {
+  assert.deepEqual(mapCandles({ s: "no_data" }), []);
+  assert.deepEqual(mapCandles({ s: "ok", t: [1] }), []);
 });
 
 // --- Task 3: env factory ---
