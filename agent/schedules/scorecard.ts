@@ -4,7 +4,7 @@ import { memoryFromEnv } from "../lib/memory.ts";
 
 // Weekly performance scorecard. Fires Fridays at 21:00 UTC (after the US close: 16:00 EST /
 // 17:00 EDT). Once/week satisfies Hobby's once-per-day cron limit. The agent assembles the
-// scorecard from existing tools (review_performance, recall_memory) — read-only, no trading.
+// scorecard from existing tools (review_performance, recall_memory): read-only, no trading.
 export default defineSchedule({
   cron: "0 21 * * 5",
   async run({ receive, waitUntil, appAuth }) {
@@ -21,7 +21,7 @@ export default defineSchedule({
     }
 
     if (!channelId) {
-      console.warn("[scorecard] SLACK_CHANNEL_ID not set — skipping (no report target).");
+      console.warn("[scorecard] SLACK_CHANNEL_ID not set: skipping (no report target).");
       return;
     }
 

@@ -342,7 +342,7 @@ test("T212 per-order rejection: one bad order doesn't abort the rest of the batc
   assert.match(bad?.skipped ?? "", /T212 rejected/i);
 });
 
-test("non-T212 / 5xx errors still throw — infra failures aren't swallowed as skips", async () => {
+test("non-T212 / 5xx errors still throw: infra failures aren't swallowed as skips", async () => {
   const { client } = fakeClient();
   const failing: OrderExecClient = {
     ...client,

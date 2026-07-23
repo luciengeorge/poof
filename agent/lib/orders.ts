@@ -13,7 +13,7 @@ import { etDateString } from "./clock.ts";
 /**
  * If `err` is a T212 rejection of THIS specific order (min-position, insufficient funds,
  * not tradable, etc.) rather than an infra failure, return a concise skip reason. 429s are
- * excluded — those are rate-limit exhaustion, not a business rejection, and 5xx/network
+ * excluded: those are rate-limit exhaustion, not a business rejection, and 5xx/network
  * errors aren't T212Error at all (or aren't 4xx), so they fall through to null.
  */
 function t212RejectionSkip(err: unknown): string | null {
@@ -29,7 +29,7 @@ function t212RejectionSkip(err: unknown): string | null {
           ? parsed.title
           : undefined;
   } catch {
-    // body wasn't JSON — fall back to the error message below
+    // body wasn't JSON: fall back to the error message below
   }
   return `T212 rejected: ${detail ?? err.message}`;
 }
@@ -41,7 +41,7 @@ function t212RejectionSkip(err: unknown): string | null {
  * notional at the allowed precision), returns a skip instead of firing blind orders.
  *
  * A T212 rejection of this specific order (min-position, insufficient funds, not tradable,
- * etc.) is also returned as a skip rather than thrown — one bad order shouldn't abort the
+ * etc.) is also returned as a skip rather than thrown: one bad order shouldn't abort the
  * rest of the batch. Genuine infra failures (network, 5xx, exhausted rate-limit backoff)
  * still throw so they surface instead of being silently swallowed.
  */
@@ -73,7 +73,7 @@ async function placeWithPrecision(
     }
     const rejection = t212RejectionSkip(err);
     if (rejection !== null) return { skipped: rejection };
-    throw err; // not a precision or per-order rejection — surface it
+    throw err; // not a precision or per-order rejection: surface it
   }
 }
 
@@ -127,9 +127,9 @@ export interface ExecuteOpts {
   resolveRiskState: (currentEquity: number) => Promise<RiskState>;
   /**
    * Fetch the current live price for a ticker (used to size BUYs, since the LLM-supplied
-   * `proposal.price` is untrusted). Must reject/throw if the price can't be fetched — callers
+   * `proposal.price` is untrusted). Must reject/throw if the price can't be fetched: callers
    * treat a throw as fail-closed (the BUY is rejected, nothing placed). Only BUY-submitting
-   * callers need to supply this; a SELL-only caller (e.g. exit management) can omit it — an
+   * callers need to supply this; a SELL-only caller (e.g. exit management) can omit it, an
    * omitted resolvePrice is likewise treated as fail-closed if a BUY somehow reaches this path.
    */
   resolvePrice?: (ticker: string) => Promise<number>;
@@ -149,7 +149,7 @@ const PRICE_DEVIATION_TOLERANCE = 0.05;
 /**
  * Authoritative execution path. Fetches live cash + positions + pending orders, runs the
  * deterministic risk gate (which short-circuits on a halt), then for each accepted order:
- * reconciles against pending orders (the beta API isn't idempotent — skip a ticker that
+ * reconciles against pending orders (the beta API isn't idempotent: skip a ticker that
  * already has a pending order so a step re-run can't duplicate), converts notional→signed
  * shares, and either logs (dryRun) or places a market order.
  */
@@ -240,7 +240,7 @@ export async function evaluateAndExecute(
       if (deviation > PRICE_DEVIATION_TOLERANCE) {
         result.rejected.push({
           proposal,
-          reason: `price mismatch — model $${proposal.price} vs live $${serverPrice}`,
+          reason: `price mismatch: model $${proposal.price} vs live $${serverPrice}`,
         });
         continue;
       }

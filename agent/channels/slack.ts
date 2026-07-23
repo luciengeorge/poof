@@ -35,7 +35,7 @@ export default slackChannel({
   credentials: connectSlackCredentials("slack/poof"),
   // On each @mention, also pull in any thread replies posted since the agent last
   // answered, so follow-up mentions carry the full conversation (not just the mention).
-  // (Follow-ups still need to @mention the bot — Slack only routes mentions/DMs to apps.)
+  // (Follow-ups still need to @mention the bot: Slack only routes mentions/DMs to apps.)
   async onAppMention(ctx, message) {
     const auth = defaultSlackAuth(message, ctx);
     if (!auth) return null;

@@ -3,7 +3,7 @@ import { defineHook } from "eve/hooks";
 // Observability: a failed cron cycle must not be silent. Always log (surfaces in Vercel
 // Observability -> Logs), and if SLACK_ALERT_WEBHOOK_URL is set, ping Slack too. This hook
 // subscribes to failure-cascade events, so it must NEVER throw (that would escalate the
-// failure) — everything is wrapped in try/catch.
+// failure): everything is wrapped in try/catch.
 async function alert(text: string): Promise<void> {
   console.error("[alert]", text);
   const url = process.env.SLACK_ALERT_WEBHOOK_URL;

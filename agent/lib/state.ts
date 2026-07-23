@@ -88,7 +88,7 @@ export function deriveRiskState(
     dayStartDate = todayET;
   } else {
     // Same ET day: keep the existing reference. resolveRiskState runs twice per cycle
-    // (manage_positions, then submit_orders) — recomputing this from currentEquity here
+    // (manage_positions, then submit_orders): recomputing this from currentEquity here
     // would zero out dayPnl on the second call and defeat the daily-loss breaker.
     prevEquity = stored.prevEquity ?? stored.dayStartEquity ?? currentEquity;
   }

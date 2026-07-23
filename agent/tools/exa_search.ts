@@ -4,7 +4,7 @@ import { exaFromEnv } from "../lib/exa.ts";
 
 export default defineTool({
   description:
-    "Deep web search (via Exa) for fresh, relevant context on a company, ticker, sector, or market event — beyond the headline feed. Returns title, url, date, and a short text/summary per result. Use to pressure-test a thesis with current sources. Remember: public news is priced in fast, so weight genuinely recent, material items.",
+    "Deep web search (via Exa) for fresh, relevant context on a company, ticker, sector, or market event, beyond the headline feed. Returns title, url, date, and a short text/summary per result. Use to pressure-test a thesis with current sources. Remember: public news is priced in fast, so weight genuinely recent, material items.",
   inputSchema: z.object({
     query: z.string().min(1),
     numResults: z.number().int().min(1).max(15).optional(),

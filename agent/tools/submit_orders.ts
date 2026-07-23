@@ -65,7 +65,7 @@ export default defineTool({
     proposals: z.array(proposalSchema).min(1).max(10),
   }),
   // Require human approval (Slack) before REAL orders. Only meaningful when actually
-  // executing — dry-run/simulated orders never need approval. (eve `approval`: returning
+  // executing: dry-run/simulated orders never need approval. (eve `approval`: returning
   // true = require user approval, false = not applicable.)
   approval: () =>
     process.env.REQUIRE_APPROVAL === "true" && process.env.DRY_RUN === "false",

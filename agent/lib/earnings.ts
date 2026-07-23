@@ -1,6 +1,6 @@
 /**
  * Pick the next upcoming earnings report from a calendar and decide whether it falls
- * inside a position's intended hold window — i.e. whether the position would be held
+ * inside a position's intended hold window, i.e. whether the position would be held
  * THROUGH the print (uncontrolled binary/gap risk) unless it's a deliberate earnings play.
  * Pure + unit-tested. Dates are YYYY-MM-DD (UTC-naive day comparison is fine here).
  */

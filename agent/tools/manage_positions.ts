@@ -18,7 +18,7 @@ import {
 
 export default defineTool({
   description:
-    "Enforce exit rules on open positions: sells any whose stop-loss, take-profit, or max-hold has triggered (mechanical — not a judgement call). Call this EARLY each cycle, before looking for new entries. SELLs are allowed even when trading is halted (de-risking is always permitted). Honors DRY_RUN. Returns the exits triggered and what was placed.",
+    "Enforce exit rules on open positions: sells any whose stop-loss, take-profit, or max-hold has triggered (mechanical, not a judgement call). Call this EARLY each cycle, before looking for new entries. SELLs are allowed even when trading is halted (de-risking is always permitted). Honors DRY_RUN. Returns the exits triggered and what was placed.",
   inputSchema: z.object({}),
   async execute() {
     const client = t212FromEnv();
