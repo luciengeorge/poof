@@ -74,11 +74,11 @@ export function t212TickerToFinnhubSymbol(ticker: string): string | null {
  * (instrument -> account) converts a position's market value into account currency.
  * Account cash is already in account currency.
  *
- * ASSUMPTION — verify against a live `/equity/account/cash` + `/equity/portfolio`
+ * ASSUMPTION: verify against a live `/equity/account/cash` + `/equity/portfolio`
  * response before live trading: equity = `cash.free` + Σ(position market value in
  * account ccy); available cash = `cash.free`. `peakEquity` / `dayPnl` /
  * `newPositionsToday` / `consecutiveLossDays` come from the cross-cycle state store
- * (Phase 1: best-effort — see lib/state).
+ * (Phase 1: best-effort, see lib/state).
  */
 export function buildRiskSnapshot(args: {
   cash: CashBalance;

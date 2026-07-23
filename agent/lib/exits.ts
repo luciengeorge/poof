@@ -1,7 +1,7 @@
 /**
  * Deterministic exit rules. Entries set a stop-loss / take-profit (as fractions of
  * entry price) plus an optional max-hold; this module decides, from live prices, which
- * open positions must be closed. Pure and unit-tested — the actual SELLs still go
+ * open positions must be closed. Pure and unit-tested: the actual SELLs still go
  * through the authoritative risk gate in submit_orders.
  */
 

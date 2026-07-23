@@ -63,7 +63,7 @@ test("new day after a down day: consecutiveLossDays increments, day-start resets
   assert.equal(d.persist.dayStartEquity, 52);
   assert.equal(d.persist.dayStartDate, "2026-06-25");
   // dayPnl is vs the prevEquity reference (yesterday's day-start, 55), not the just-reset
-  // dayStartEquity — a same-day 5% intraday move must still be visible to checkHalt.
+  // dayStartEquity: a same-day 5% intraday move must still be visible to checkHalt.
   assert.equal(d.fields.dayPnl, -3);
   assert.equal(d.persist.prevEquity, 55);
   assert.equal(d.fields.peakEquity, 60); // peak persists across days
@@ -86,7 +86,7 @@ test("day rollover with a >4% drop trips checkHalt's daily cap", () => {
   assert.match(halt.reason ?? "", /daily loss cap/);
 
   // SAME-DAY second derive (e.g. submit_orders running after manage_positions already
-  // persisted this cycle's state) must see the SAME reference, not reset to currentEquity —
+  // persisted this cycle's state) must see the SAME reference, not reset to currentEquity:
   // this is the regression guard for resolveRiskState running twice per cycle.
   const second = deriveRiskState(d.persist, 95, "2026-06-25");
   assert.equal(second.fields.dayPnl, -5);

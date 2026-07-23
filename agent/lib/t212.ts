@@ -203,7 +203,7 @@ export class T212Client {
 }
 
 // Per-process singleton so every tool invoked within one serverless invocation (one cycle)
-// shares the same client — and thus the same getCash/getPortfolio cache. Only memoized for
+// shares the same client, and thus the same getCash/getPortfolio cache. Only memoized for
 // the default (no injected fetchImpl) path; callers that pass a fetchImpl (tests) always get
 // a fresh client.
 let singleton: T212Client | null = null;

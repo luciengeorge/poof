@@ -4,7 +4,7 @@ import { formatInTimeZone } from "date-fns-tz";
 const ET = "America/New_York";
 
 // NYSE full-day closures, ET calendar date (YYYY-MM-DD). Observed date used when a
-// holiday falls on a weekend. Covers 2026-2027; last updated 2026 — refresh yearly.
+// holiday falls on a weekend. Covers 2026-2027; last updated 2026: refresh yearly.
 const US_MARKET_HOLIDAYS = new Set<string>([
   // 2026
   "2026-01-01", // New Year's Day

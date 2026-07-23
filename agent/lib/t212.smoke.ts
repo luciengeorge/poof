@@ -11,7 +11,7 @@ if (!process.env.TRADING212_API_KEY || !hasSecret) {
 
 const env = process.env.TRADING212_ENV ?? "demo";
 if (env === "live") {
-  console.warn("note: smoke-testing against LIVE (read-only — no orders).");
+  console.warn("note: smoke-testing against LIVE (read-only, no orders).");
 }
 
 const client = t212FromEnv();
@@ -29,7 +29,7 @@ try {
 } catch (err) {
   console.error("❌ smoke-test failed:", err);
   console.error(
-    "If this is a 401, auth may be single-key instead of Basic key:secret — " +
+    "If this is a 401, auth may be single-key instead of Basic key:secret, " +
       "change buildAuthHeader in t212.ts to return the bare key and re-run.",
   );
   process.exit(1);
