@@ -57,6 +57,7 @@ test("buildRecordTradeArgs: carries exit levels + trade fields through unchanged
     trailingStopPct: 0.08,
     maxHoldDays: 30,
     redTeamVerdict: "approved",
+    strategyTag: "momentum",
   });
   const args = buildRecordTradeArgs(
     [{ proposal, quantity: 5, dryRun: false }],
@@ -72,6 +73,7 @@ test("buildRecordTradeArgs: carries exit levels + trade fields through unchanged
     dryRun: false,
     thesis: "t",
     redTeamVerdict: "approved",
+    strategyTag: "momentum",
     status: "placed",
     stopLossPct: 0.1,
     takeProfitPct: 0.2,

@@ -17,6 +17,7 @@ export const recordTrade = mutation({
     dryRun: v.boolean(),
     thesis: v.string(),
     redTeamVerdict: v.optional(v.string()),
+    strategyTag: v.optional(v.string()),
     status: v.string(),
     stopLossPct: v.optional(v.number()),
     takeProfitPct: v.optional(v.number()),

@@ -27,6 +27,7 @@ export function buildRecordTradeArgs(placed: PlacedResult[], env: Env): TradeRec
     dryRun: p.dryRun,
     thesis: p.proposal.thesis,
     redTeamVerdict: p.proposal.redTeamVerdict,
+    strategyTag: p.proposal.strategyTag,
     status: p.skipped ? "skipped" : p.dryRun ? "dry-run" : PLACED_STATUS,
     stopLossPct: p.proposal.stopLossPct,
     takeProfitPct: p.proposal.takeProfitPct,

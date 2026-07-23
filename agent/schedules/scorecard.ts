@@ -28,7 +28,7 @@ export default defineSchedule({
     waitUntil(
       receive(slack, {
         message:
-          "Post this week's PERFORMANCE SCORECARD to Slack (do NOT trade). Call review_performance and recall_memory, then post a skimmable summary: current equity and P&L since inception, alpha vs buy-and-hold SPY, realized win-rate (wins/losses), open positions with unrealized P&L and age, how many cycles ran and trades were placed this week, and your current standing lessons. End with one line on what you're focused on improving.",
+          "Post this week's PERFORMANCE SCORECARD to Slack (do NOT trade). Call review_performance and recall_memory, then post a skimmable summary: current equity and P&L since inception, alpha vs buy-and-hold SPY, realized win-rate (wins/losses), a short per-strategy-type breakdown from realizedByTag (which strategy types are winning or losing, with a small-sample caveat for types with fewer than ~10 closed trades), open positions with unrealized P&L and age, how many cycles ran and trades were placed this week, and your current standing lessons. End with one line on what you're focused on improving.",
         target: { channelId },
         auth: appAuth,
       }),

@@ -8,6 +8,7 @@ import { resolveRiskState, tradingEnv } from "../lib/risk-runtime.ts";
 import { finnhubFromEnv } from "../lib/data.ts";
 import { t212TickerToFinnhubSymbol } from "../lib/execution.ts";
 import { buildRecordTradeArgs } from "../lib/order-bookkeeping.ts";
+import { STRATEGY_TAGS } from "../lib/positions.ts";
 
 const proposalSchema = z.object({
   ticker: z.string().min(1).describe("Trading 212 instrument ticker, e.g. AAPL_US_EQ"),
@@ -25,6 +26,12 @@ const proposalSchema = z.object({
     .string()
     .optional()
     .describe("The red_team subagent's verdict on this thesis, if reviewed"),
+  strategyTag: z
+    .enum(STRATEGY_TAGS)
+    .optional()
+    .describe(
+      "Strategy type for this trade, from the fixed taxonomy. REQUIRED on every BUY so per-type performance can be tracked. Choose the closest fit: news-catalyst, earnings-play, momentum, mean-reversion, index-event, or other.",
+    ),
   // Exit plan, set on BUYs. Stop-loss/take-profit are fractions of entry price
   // (e.g. 0.1 = 10%). The exit engine clamps to sane bounds and applies defaults if omitted.
   stopLossPct: z
