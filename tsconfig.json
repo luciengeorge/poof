@@ -10,6 +10,6 @@
     "noEmit": true,
     "allowImportingTsExtensions": true
   },
-  "include": ["agent/**/*.ts", "evals/**/*.ts", ".eve/**/*.d.ts"],
+  "include": ["agent/**/*.ts", "evals/**/*.ts", "scripts/**/*.ts", ".eve/**/*.d.ts"],
   "exclude": [".eve/dev-runtime/**"]
 }
