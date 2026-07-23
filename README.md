@@ -59,10 +59,24 @@ The fixture format is in `scripts/fixtures/backtest-sample.json`: `startingEquit
 `defaultNotional`, `spreadBps`, `fxBps`, `signals` (`{ ticker, date, notional? }`),
 `priceSeriesByTicker`, and `spySeries`.
 
-Live candle sourcing is deferred: Finnhub's `/stock/candle` endpoint is gated on the current
-API tier (it 403s), so the harness runs on fixtures until a candle-serving provider/tier is
-wired in. The `Candle` mapping (`mapCandles` in `agent/lib/data.ts`) is already in place for
-that moment.
+### Live backtest on real prices (Tiingo)
+
+Set `TIINGO_API_KEY` in `.env.local`, then pass `--tickers` to fetch real adjusted daily
+candles for a basket plus a SPY benchmark over a date range:
+
+```
+export $(grep -v '^#' .env.local | xargs)   # load TIINGO_API_KEY into the shell
+corepack pnpm@10.26.0 run backtest -- --tickers AAPL,MSFT --spy SPY --from 2024-01-01 --to 2025-01-01
+```
+
+Each ticker gets one buy-and-hold signal on the first session in range, so the run reports how
+a naive equal-weight basket would have done vs SPY on real prices. Candles come from Tiingo's
+daily-prices endpoint and use the ADJUSTED OHLC (`adjOpen`/`adjHigh`/`adjLow`/`adjClose`) so
+splits and dividends are already handled (`agent/lib/tiingo.ts`).
+
+`TIINGO_API_KEY` is only needed locally for backtests. The live trading cycle and CI evals do
+not use it. Without `--tickers` the CLI stays in offline fixture mode, so nothing here touches
+the network by default.
 
 ## Safety switches
 
