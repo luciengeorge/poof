@@ -98,6 +98,7 @@ export interface Proposal {
   redTeamVerdict?: string;
   stopLossPct?: number;
   takeProfitPct?: number;
+  trailingStopPct?: number;
   maxHoldDays?: number;
 }
 

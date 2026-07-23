@@ -37,6 +37,13 @@ const proposalSchema = z.object({
     .positive()
     .optional()
     .describe("Take-profit as a fraction of entry price (e.g. 0.2 = sell if up 20%)"),
+  trailingStopPct: z
+    .number()
+    .positive()
+    .optional()
+    .describe(
+      "Trailing stop as a fraction below the high-water mark (e.g. 0.08 = sell if it drops 8% from its peak). The primary exit for winners; take-profit is a far backstop.",
+    ),
   maxHoldDays: z
     .number()
     .positive()
@@ -46,7 +53,7 @@ const proposalSchema = z.object({
 
 export default defineTool({
   description:
-    "Validate proposed trades against the hard risk limits on the LIVE account, then place the accepted ones as market orders. The risk gate runs INSIDE this tool and is authoritative — it cannot be bypassed. Honors DRY_RUN (default on: orders are simulated, not sent). On BUYs, set stopLossPct/takeProfitPct (and optionally maxHoldDays) — the exit engine enforces them automatically on later cycles. Returns `placed` (with share quantity; `dryRun`/`skipped` flags) and `rejected` (with reasons). Always report both back to the user.",
+    "Validate proposed trades against the hard risk limits on the LIVE account, then place the accepted ones as market orders. The risk gate runs INSIDE this tool and is authoritative and cannot be bypassed. Honors DRY_RUN (default on: orders are simulated, not sent). On BUYs, set stopLossPct + trailingStopPct (the trailing stop is the primary exit for winners; leave takeProfitPct as a far backstop, plus maxHoldDays if time-bound). The exit engine enforces them automatically on later cycles. Returns `placed` (with share quantity; `dryRun`/`skipped` flags) and `rejected` (with reasons). Always report both back to the user.",
   inputSchema: z.object({
     proposals: z.array(proposalSchema).min(1).max(10),
   }),

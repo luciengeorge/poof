@@ -20,12 +20,30 @@ export const recordTrade = mutation({
     status: v.string(),
     stopLossPct: v.optional(v.number()),
     takeProfitPct: v.optional(v.number()),
+    trailingStopPct: v.optional(v.number()),
     maxHoldDays: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     assertSecret(args.token);
     const { token, ...rest } = args;
     return await ctx.db.insert("trades", { ...rest, createdAt: Date.now() });
+  },
+});
+
+// Ratchet a trade's high-water mark: peakPrice = max(existing ?? entryPrice, price).
+// Called each cycle by the exit engine so the trailing stop only ever moves up.
+export const updatePeak = mutation({
+  args: { token: v.string(), tradeId: v.id("trades"), price: v.number() },
+  handler: async (ctx, args) => {
+    assertSecret(args.token);
+    const { tradeId, price } = args;
+    const trade = await ctx.db.get("trades", tradeId);
+    if (!trade) return null;
+    const peakPrice = Math.max(trade.peakPrice ?? trade.price, price);
+    // Skip the write when the high-water mark is unchanged (no new high this cycle).
+    if (peakPrice === trade.peakPrice) return tradeId;
+    await ctx.db.patch("trades", tradeId, { peakPrice });
+    return tradeId;
   },
 });
 

@@ -14,7 +14,9 @@ export interface OpenBuyTrade {
   thesis: string;
   stopLossPct?: number;
   takeProfitPct?: number;
+  trailingStopPct?: number;
   maxHoldDays?: number;
+  peakPrice?: number;
 }
 
 export interface ManagedPosition extends OpenPosition {
@@ -42,8 +44,10 @@ export function buildManagedPositions(
       currentPrice: p.currentPrice,
       marketValue: p.quantity * p.currentPrice * fxRate,
       openedAt: b?.createdAt ?? 0,
+      peakPrice: b?.peakPrice,
       stopLossPct: b?.stopLossPct,
       takeProfitPct: b?.takeProfitPct,
+      trailingStopPct: b?.trailingStopPct,
       maxHoldDays: b?.maxHoldDays,
       tradeId: b?._id,
       thesis: b?.thesis,
