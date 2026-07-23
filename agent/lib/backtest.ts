@@ -44,7 +44,7 @@ export interface BacktestConfig {
 export interface BacktestTrade {
   ticker: string;
   entryDate: string;
-  entryPrice: number; // raw open at fill (T+1 open) — no cost baked in
+  entryPrice: number; // raw open at fill (T+1 open), no cost baked in
   shares: number;
   exitDate: string | null; // null while still open at end of run
   exitPrice: number | null;
@@ -98,7 +98,7 @@ function indexByDate(series: Candle[]): Map<string, Candle> {
 
 /**
  * Group signals by their FILL date: a signal on day T fills at the first session strictly
- * after T in that ticker's own series (its T+1 open). This is the look-ahead guard — a signal
+ * after T in that ticker's own series (its T+1 open). This is the look-ahead guard: a signal
  * can never fill on the day it was generated. Signals with no later session are dropped.
  */
 function fillsByDate(
@@ -166,19 +166,35 @@ export function runBacktest(
   // Half the spread is crossed per leg, plus the fx conversion fee on each leg.
   const costFrac = (spreadBps / 2 + fxBps) / 10_000;
 
-  const dates = unionDates(priceSeriesByTicker);
-  const seriesIndex: Record<string, Map<string, Candle>> = {};
+  // Defensive: don't trust the fixture's ordering. Sort each series ascending by date so
+  // fill-day selection and the day loop can't pick the wrong bar from an unsorted input.
+  const seriesByTicker: Record<string, Candle[]> = {};
   for (const [ticker, series] of Object.entries(priceSeriesByTicker)) {
+    seriesByTicker[ticker] = [...series].sort((a, b) => a.date.localeCompare(b.date));
+  }
+
+  const dates = unionDates(seriesByTicker);
+  const seriesIndex: Record<string, Map<string, Candle>> = {};
+  for (const [ticker, series] of Object.entries(seriesByTicker)) {
     seriesIndex[ticker] = indexByDate(series);
   }
-  const fills = fillsByDate(signals, priceSeriesByTicker);
+  const fills = fillsByDate(signals, seriesByTicker);
 
   let cash = config.startingEquity;
   const open = new Map<string, LivePosition>();
   const trades: BacktestTrade[] = [];
   const equityCurve: EquityPoint[] = [];
+  // Last-known close per ticker, carried forward so a held position on a calendar where its
+  // ticker has no bar keeps its prior mark instead of momentarily marking to zero (a phantom dip).
+  const lastClose = new Map<string, number>();
 
   for (const date of dates) {
+    // Refresh last-known closes for every ticker that actually trades today.
+    for (const [ticker, index] of Object.entries(seriesIndex)) {
+      const bar = index.get(date);
+      if (bar) lastClose.set(ticker, bar.close);
+    }
+
     // 1. Fills: scripted signals dated the prior session enter at TODAY'S open.
     for (const sig of fills.get(date) ?? []) {
       if (open.has(sig.ticker)) continue; // one position per ticker at a time (v1)
@@ -240,11 +256,13 @@ export function runBacktest(
       open.delete(ex.ticker);
     }
 
-    // 3. Mark to market: cash + close-value of everything still open.
+    // 3. Mark to market: cash + close-value of everything still open. A held ticker with no
+    // bar today is marked at its last-known close (never zero), so a mismatched trading
+    // calendar can't manufacture a drawdown.
     let held = 0;
     for (const pos of open.values()) {
-      const bar = seriesIndex[pos.ticker]?.get(date);
-      if (bar) held += pos.shares * bar.close;
+      const mark = lastClose.get(pos.ticker) ?? pos.entryPrice;
+      held += pos.shares * mark;
     }
     equityCurve.push({ date, equity: cash + held });
   }

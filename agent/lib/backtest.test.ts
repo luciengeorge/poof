@@ -150,3 +150,43 @@ test("alphaVsSpy compares the account return against buy-and-hold SPY", () => {
     Math.abs(result.alphaVsSpy.alphaPct - (result.alphaVsSpy.accountReturnPct - 10)) < 1e-9,
   );
 });
+
+test("mismatched trading calendars do not manufacture a phantom drawdown", () => {
+  // HOLD is a flat position that has NO bar on 2024-01-03; GAP trades that day, forcing it into
+  // the union of dates. A held ticker with no bar must carry its last close forward, not mark to
+  // zero. Without the fix this yields equityCurve [10000,10000,5000,10000] and maxDrawdown 0.5.
+  const hold: Candle[] = [
+    bar("2024-01-01", 100, 100),
+    bar("2024-01-02", 100, 100), // fill at open 100
+    // no bar on 2024-01-03
+    bar("2024-01-04", 100, 100),
+  ];
+  const gap: Candle[] = [bar("2024-01-03", 100, 100)];
+  const spy: Candle[] = [
+    bar("2024-01-01", 400, 400),
+    bar("2024-01-02", 400, 400),
+    bar("2024-01-03", 400, 400),
+    bar("2024-01-04", 400, 400),
+  ];
+  const result = runBacktest(
+    { HOLD: hold, GAP: gap },
+    [{ ticker: "HOLD", date: "2024-01-01" }],
+    baseConfig({ defaultNotional: 5_000, spreadBps: 0, fxBps: 0, spySeries: spy }),
+  );
+
+  const curve = result.equityCurve;
+  assert.deepEqual(
+    curve.map((p) => p.date),
+    ["2024-01-01", "2024-01-02", "2024-01-03", "2024-01-04"],
+  );
+  // Flat, zero-cost hold: equity is 10000 on every day, including the missing-bar date.
+  for (const point of curve) {
+    assert.ok(
+      Math.abs(point.equity - 10_000) < 1e-9,
+      `phantom dip on ${point.date}: equity ${point.equity}`,
+    );
+  }
+  const gapDay = curve.find((p) => p.date === "2024-01-03")!;
+  assert.ok(Math.abs(gapDay.equity - 10_000) < 1e-9, "no dip on the missing-bar date");
+  assert.ok(result.maxDrawdown < 1e-9, `expected ~0 drawdown, got ${result.maxDrawdown}`);
+});
