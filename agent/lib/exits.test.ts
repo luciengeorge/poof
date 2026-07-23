@@ -122,16 +122,32 @@ test("checkExits: trailing stop is dormant below the activation threshold", () =
   assert.equal(r.length, 0);
 });
 
-test("checkExits: at a fresh high the trail ratchets up and does not fire", () => {
+test("checkExits: at a fresh high the trail ratchets up to the current price", () => {
   // New high: current 130 above the stale stored peak 120, so the effective peak
-  // ratchets to 130 (trail stop 119.6). No pullback yet, and 30% is under the 40%
-  // take-profit backstop -> no exit.
-  const r = checkExits(
+  // ratchets to max(120, 130) = 130 (trail stop 119.6). A fresh high can never
+  // fire in the same call (price == peak), so we observe the ratchet on the next
+  // tick: a pullback to 121 is above the 130-anchored stop (119.6) and must NOT
+  // fire, which it only survives because the peak ratcheted to 130 rather than
+  // staying at the stored 120 (whose stop 110.4 would be well clear too, but a
+  // stored peak of 132 would fire). The paired firing case below pins the peak
+  // value directly via the detail string.
+  const fresh = checkExits(
     [pos({ currentPrice: 130, peakPrice: 120, trailingStopPct: 0.08 })],
     DEFAULT_EXITS,
     NOW,
   );
-  assert.equal(r.length, 0);
+  assert.equal(fresh.length, 0);
+  // Prove the trail is anchored to the ratcheted high-water mark (130), not the
+  // current price: a drop to 119 is below 130*(1-0.08)=119.6 and fires, and the
+  // detail reports the ratcheted peak.
+  const r = checkExits(
+    [pos({ currentPrice: 119, peakPrice: 130, trailingStopPct: 0.08 })],
+    DEFAULT_EXITS,
+    NOW,
+  );
+  assert.equal(r.length, 1);
+  assert.equal(r[0].reason, "trailing-stop");
+  assert.match(r[0].detail, /peak 130\.00/);
 });
 
 test("checkExits: trailing stop fires on a pullback from the peak once activated", () => {
@@ -139,6 +155,20 @@ test("checkExits: trailing stop fires on a pullback from the peak once activated
   // back to 135 (<= 138) -> trailing-stop fires (and TP backstop 40% not reached).
   const r = checkExits(
     [pos({ currentPrice: 135, peakPrice: 150, trailingStopPct: 0.08 })],
+    DEFAULT_EXITS,
+    NOW,
+  );
+  assert.equal(r.length, 1);
+  assert.equal(r[0].reason, "trailing-stop");
+  // The detail reflects the exact peak that anchors the trail (observes the peak used).
+  assert.match(r[0].detail, /peak 150\.00/);
+});
+
+test("checkExits: trailing stop wins over take-profit when both would trigger", () => {
+  // Peak 200, current 150: +50% pnl is past the 40% TP backstop, and 150 is also
+  // below the trail stop 200*(1-0.08)=184. Precedence puts trailing-stop first.
+  const r = checkExits(
+    [pos({ currentPrice: 150, peakPrice: 200, trailingStopPct: 0.08 })],
     DEFAULT_EXITS,
     NOW,
   );

@@ -40,6 +40,8 @@ export const updatePeak = mutation({
     const trade = await ctx.db.get("trades", tradeId);
     if (!trade) return null;
     const peakPrice = Math.max(trade.peakPrice ?? trade.price, price);
+    // Skip the write when the high-water mark is unchanged (no new high this cycle).
+    if (peakPrice === trade.peakPrice) return tradeId;
     await ctx.db.patch("trades", tradeId, { peakPrice });
     return tradeId;
   },
