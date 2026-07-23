@@ -54,6 +54,7 @@ test("buildRecordTradeArgs: carries exit levels + trade fields through unchanged
   const proposal = buy({
     stopLossPct: 0.1,
     takeProfitPct: 0.2,
+    trailingStopPct: 0.08,
     maxHoldDays: 30,
     redTeamVerdict: "approved",
   });
@@ -74,6 +75,7 @@ test("buildRecordTradeArgs: carries exit levels + trade fields through unchanged
     status: "placed",
     stopLossPct: 0.1,
     takeProfitPct: 0.2,
+    trailingStopPct: 0.08,
     maxHoldDays: 30,
   });
 });

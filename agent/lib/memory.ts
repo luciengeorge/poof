@@ -29,6 +29,7 @@ export interface TradeRecord {
   status: string;
   stopLossPct?: number;
   takeProfitPct?: number;
+  trailingStopPct?: number;
   maxHoldDays?: number;
 }
 
@@ -114,6 +115,9 @@ export class Memory {
     status?: "closed" | "closed-unknown";
   }): Promise<unknown> {
     return this.mutation("closeTrade", { ...args });
+  }
+  updatePeak(args: { tradeId: string; price: number }): Promise<unknown> {
+    return this.mutation("updatePeak", { ...args });
   }
   openBuys(env: Env): Promise<unknown> {
     return this.query("openBuys", { env });

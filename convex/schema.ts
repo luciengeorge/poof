@@ -42,7 +42,11 @@ export default defineSchema({
     // Exit levels set at entry (fractions of entry price), read by the exit engine.
     stopLossPct: v.optional(v.number()),
     takeProfitPct: v.optional(v.number()),
+    trailingStopPct: v.optional(v.number()),
     maxHoldDays: v.optional(v.number()),
+    // High-water mark since entry (instrument ccy), ratcheted each cycle by the exit
+    // engine and used to drive the trailing stop. Absent means "use entry price".
+    peakPrice: v.optional(v.number()),
     fillPrice: v.optional(v.number()),
     exitPrice: v.optional(v.number()),
     pnl: v.optional(v.number()),

@@ -30,6 +30,7 @@ export function buildRecordTradeArgs(placed: PlacedResult[], env: Env): TradeRec
     status: p.skipped ? "skipped" : p.dryRun ? "dry-run" : PLACED_STATUS,
     stopLossPct: p.proposal.stopLossPct,
     takeProfitPct: p.proposal.takeProfitPct,
+    trailingStopPct: p.proposal.trailingStopPct,
     maxHoldDays: p.proposal.maxHoldDays,
   }));
 }

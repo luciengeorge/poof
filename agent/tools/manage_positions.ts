@@ -29,7 +29,23 @@ export default defineTool({
     const memory = memoryFromEnv();
     const openBuys = ((await memory.openBuys(tradingEnv())) ?? []) as OpenBuyTrade[];
 
-    const managed = buildManagedPositions(positions, openBuys, fxRate);
+    // Ratchet each held position's high-water mark up to the latest price, and persist it
+    // so the trailing stop is durable across cycles. Best-effort: a memory failure must
+    // never block exits (the engine still runs on the in-memory peaks).
+    const managed = buildManagedPositions(positions, openBuys, fxRate).map((m) => ({
+      ...m,
+      peakPrice: Math.max(m.peakPrice ?? m.entryPrice, m.currentPrice),
+    }));
+    try {
+      await Promise.all(
+        managed
+          .filter((m) => m.tradeId)
+          .map((m) => memory.updatePeak({ tradeId: m.tradeId!, price: m.currentPrice })),
+      );
+    } catch (err) {
+      console.warn("[memory] updatePeak failed (non-fatal):", err);
+    }
+
     const signals = checkExits(managed, DEFAULT_EXITS, Date.now());
 
     const byTicker = new Map(managed.map((m) => [m.ticker, m]));

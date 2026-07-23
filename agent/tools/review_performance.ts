@@ -62,6 +62,7 @@ export default defineTool({
         ageDays: m.openedAt ? Math.floor((now - m.openedAt) / DAY) : null,
         stopLossPct: lv.stopLossPct,
         takeProfitPct: lv.takeProfitPct,
+        trailingStopPct: lv.trailingStopPct,
         maxHoldDays: lv.maxHoldDays,
       };
     });
