@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 import {
   FrankfurterProvider,
@@ -6,6 +6,8 @@ import {
   mapFrankfurterRate,
   fxOverrideFromEnv,
   resolveUsdGbp,
+  fxForCycle,
+  resetFxCache,
   FX_FALLBACK_USD_GBP,
 } from "./fx.ts";
 
@@ -109,6 +111,33 @@ test("resolveUsdGbp fetches live when no valid override", async () => {
     env: { USD_GBP_RATE: "" },
   });
   assert.deepEqual(r, { rate: 0.7514, source: "live" });
+});
+
+// --- fxForCycle: cached within the TTL, refreshed after it ---
+
+test("fxForCycle caches the resolution within the TTL and refreshes after it", async () => {
+  // Uses the USD_GBP_RATE override so this never touches the network; the env is changed
+  // between calls so a stale cached value is distinguishable from a fresh resolution.
+  const prev = process.env.USD_GBP_RATE;
+  mock.timers.enable({ apis: ["Date"] });
+  resetFxCache();
+  try {
+    process.env.USD_GBP_RATE = "0.70";
+    assert.equal((await fxForCycle()).rate, 0.7);
+
+    // Within the TTL: the cached rate is returned even though the env now says otherwise.
+    process.env.USD_GBP_RATE = "0.60";
+    assert.equal((await fxForCycle()).rate, 0.7);
+
+    // Past the TTL (1h): re-resolved, so the new value wins.
+    mock.timers.tick(60 * 60 * 1000 + 1);
+    assert.equal((await fxForCycle()).rate, 0.6);
+  } finally {
+    mock.timers.reset();
+    resetFxCache();
+    if (prev === undefined) delete process.env.USD_GBP_RATE;
+    else process.env.USD_GBP_RATE = prev;
+  }
 });
 
 test("resolveUsdGbp falls back LOUDLY (source=fallback) when the live fetch fails", async () => {

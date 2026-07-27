@@ -5,7 +5,7 @@ import type { CashBalance, T212Position } from "./t212.ts";
  * Convert a target notional in the ACCOUNT currency (e.g. GBP) into a signed share
  * quantity for a T212 order. `priceInstrumentCcy` is the share price in the
  * instrument currency (e.g. USD); `fxRate` converts instrument-ccy -> account-ccy
- * (e.g. USD->GBP ≈ 0.79). The sign of the result follows the sign of the notional
+ * (USD->GBP, resolved live per cycle: see lib/fx). The sign of the result follows the notional
  * (negative notional = SELL). Rounded to 6 dp (T212 supports fractional shares).
  */
 export function notionalToShares(
