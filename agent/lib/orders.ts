@@ -1,6 +1,7 @@
 import { validateOrders, DEFAULT_LIMITS, type RiskLimits } from "./risk.ts";
 import {
   buildRiskSnapshot,
+  accountValueGbp,
   notionalToShares,
   roundQuantity,
   parseQuantityPrecision,
@@ -170,12 +171,9 @@ export async function evaluateAndExecute(
     client.getPendingOrders(),
   ]);
 
-  // Equity (account ccy) = free cash + Σ position market value (instrument ccy → account ccy).
-  const deployed = positions.reduce(
-    (sum, p) => sum + p.quantity * p.currentPrice * fxRate,
-    0,
-  );
-  const currentEquity = cash.free + deployed;
+  // Equity (account ccy) via the single authoritative formula: free cash + Σ position value
+  // (instrument ccy → account ccy at the live fx).
+  const currentEquity = accountValueGbp(cash, positions, fxRate);
   const riskState = await resolveRiskState(currentEquity);
 
   const snapshot = buildRiskSnapshot({ cash, positions, fxRate, ...riskState });

@@ -2,7 +2,8 @@ import { defineTool } from "eve/tools";
 import { z } from "zod";
 import { t212FromEnv } from "../lib/t212.ts";
 import { evaluateAndExecute } from "../lib/orders.ts";
-import { resolveLimits, fxRateFromEnv, isDryRun } from "../lib/state.ts";
+import { resolveLimits, isDryRun } from "../lib/state.ts";
+import { fxForCycle } from "../lib/fx.ts";
 import { memoryFromEnv } from "../lib/memory.ts";
 import { resolveRiskState, tradingEnv } from "../lib/risk-runtime.ts";
 import { finnhubFromEnv } from "../lib/data.ts";
@@ -75,7 +76,7 @@ export default defineTool({
     const memory = memoryFromEnv();
     const result = await evaluateAndExecute(proposals, {
       client,
-      fxRate: fxRateFromEnv(),
+      fxRate: (await fxForCycle()).rate,
       dryRun: isDryRun(),
       resolveRiskState,
       resolvePrice: async (ticker) => {

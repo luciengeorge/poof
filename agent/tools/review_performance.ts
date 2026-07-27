@@ -2,7 +2,8 @@ import { defineTool } from "eve/tools";
 import { z } from "zod";
 import { t212FromEnv } from "../lib/t212.ts";
 import { finnhubFromEnv } from "../lib/data.ts";
-import { fxRateFromEnv } from "../lib/state.ts";
+import { fxForCycle } from "../lib/fx.ts";
+import { accountValueGbp } from "../lib/execution.ts";
 import { etDateString } from "../lib/clock.ts";
 import { memoryFromEnv } from "../lib/memory.ts";
 import { tradingEnv } from "../lib/risk-runtime.ts";
@@ -23,16 +24,13 @@ export default defineTool({
   inputSchema: z.object({}),
   async execute() {
     const client = t212FromEnv();
-    const fxRate = fxRateFromEnv();
+    const fx = await fxForCycle();
+    const fxRate = fx.rate;
     const [cash, positions] = await Promise.all([
       client.getCash(),
       client.getPortfolio(),
     ]);
-    const deployed = positions.reduce(
-      (s, p) => s + p.quantity * p.currentPrice * fxRate,
-      0,
-    );
-    const equity = cash.free + deployed;
+    const equity = accountValueGbp(cash, positions, fxRate);
 
     const memory = memoryFromEnv();
     const env = tradingEnv();
@@ -102,8 +100,11 @@ export default defineTool({
     }
 
     return {
-      equity,
-      freeCash: cash.free,
+      // Authoritative GBP figures. Report these verbatim; never re-sum from stock prices.
+      accountValueGbp: equity,
+      cashGbp: cash.free,
+      deployedGbp: equity - cash.free,
+      fx: { rate: fxRate, source: fx.source, fallbackUsed: fx.source === "fallback" },
       openPositions: managed,
       realized,
       realizedByTag,

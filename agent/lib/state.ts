@@ -145,10 +145,3 @@ export function loadRiskState(): RiskState {
 export function isDryRun(): boolean {
   return process.env.DRY_RUN !== "false";
 }
-
-/** Instrument→account FX (USD→GBP). Phase 1: from USD_GBP_RATE env, default ~0.79. */
-export function fxRateFromEnv(): number {
-  const raw = process.env.USD_GBP_RATE;
-  const n = raw ? Number(raw) : NaN;
-  return Number.isFinite(n) && n > 0 ? n : 0.79;
-}
