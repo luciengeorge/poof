@@ -5,7 +5,7 @@ import type { CashBalance, T212Position } from "./t212.ts";
  * Convert a target notional in the ACCOUNT currency (e.g. GBP) into a signed share
  * quantity for a T212 order. `priceInstrumentCcy` is the share price in the
  * instrument currency (e.g. USD); `fxRate` converts instrument-ccy -> account-ccy
- * (e.g. USD->GBP ≈ 0.79). The sign of the result follows the sign of the notional
+ * (USD->GBP, resolved live per cycle: see lib/fx). The sign of the result follows the notional
  * (negative notional = SELL). Rounded to 6 dp (T212 supports fractional shares).
  */
 export function notionalToShares(
@@ -68,17 +68,38 @@ export function t212TickerToFinnhubSymbol(ticker: string): string | null {
 }
 
 /**
+ * Σ position market value in the ACCOUNT currency (GBP): each position's
+ * quantity × instrument-ccy price (USD) × fxRate (USD -> GBP).
+ */
+export function deployedValueGbp(positions: T212Position[], fxRate: number): number {
+  return positions.reduce((sum, p) => sum + p.quantity * p.currentPrice * fxRate, 0);
+}
+
+/**
+ * The single authoritative GBP account value used everywhere (risk gate, sizing, reports):
+ *   accountValueGbp = cash.free (already GBP) + Σ(position value converted at the live fx).
+ *
+ * This is the ONE equity formula, chosen deliberately. Trading 212's `cash.total` is not
+ * used: it depends on T212's own internal FX conversion, which we cannot verify offline or
+ * unit-test, whereas this explicit formula is provably correct and reproduces the real
+ * account value from a `cash.free` + `/equity/portfolio` read at the known live rate.
+ */
+export function accountValueGbp(
+  cash: CashBalance,
+  positions: T212Position[],
+  fxRate: number,
+): number {
+  return cash.free + deployedValueGbp(positions, fxRate);
+}
+
+/**
  * Build the risk-engine PortfolioSnapshot from a T212 account-cash + positions read.
  *
  * Currency: T212 position `currentPrice` is in the instrument currency; `fxRate`
  * (instrument -> account) converts a position's market value into account currency.
- * Account cash is already in account currency.
- *
- * ASSUMPTION: verify against a live `/equity/account/cash` + `/equity/portfolio`
- * response before live trading: equity = `cash.free` + Σ(position market value in
- * account ccy); available cash = `cash.free`. `peakEquity` / `dayPnl` /
- * `newPositionsToday` / `consecutiveLossDays` come from the cross-cycle state store
- * (Phase 1: best-effort, see lib/state).
+ * Account cash is already in account currency. Equity is `accountValueGbp` (the single
+ * formula above). `peakEquity` / `dayPnl` / `newPositionsToday` / `consecutiveLossDays`
+ * come from the cross-cycle state store (see lib/state).
  */
 export function buildRiskSnapshot(args: {
   cash: CashBalance;
@@ -100,8 +121,7 @@ export function buildRiskSnapshot(args: {
     ticker: p.ticker,
     value: p.quantity * p.currentPrice * args.fxRate,
   }));
-  const deployed = positions.reduce((sum, p) => sum + p.value, 0);
-  const equity = args.cash.free + deployed;
+  const equity = accountValueGbp(args.cash, args.positions, args.fxRate);
   if (!Number.isFinite(equity)) {
     throw new Error("non-finite account data from broker; refusing to gate orders (fail-closed)");
   }

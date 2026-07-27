@@ -1,7 +1,8 @@
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 import { t212FromEnv } from "../lib/t212.ts";
-import { fxRateFromEnv } from "../lib/state.ts";
+import { fxForCycle } from "../lib/fx.ts";
+import { accountValueGbp } from "../lib/execution.ts";
 import { memoryFromEnv } from "../lib/memory.ts";
 import { tradingEnv } from "../lib/risk-runtime.ts";
 
@@ -29,25 +30,26 @@ export default defineTool({
   async execute({ decision, rationale, candidates, watchlist }) {
     try {
       const client = t212FromEnv();
-      const fxRate = fxRateFromEnv();
+      const fx = await fxForCycle();
       const [cash, positions] = await Promise.all([
         client.getCash(),
         client.getPortfolio(),
       ]);
-      const deployed = positions.reduce(
-        (s, p) => s + p.quantity * p.currentPrice * fxRate,
-        0,
-      );
       await memoryFromEnv().recordCycle({
         env: tradingEnv(),
-        equity: cash.free + deployed,
+        equity: accountValueGbp(cash, positions, fx.rate),
         freeCash: cash.free,
         decision,
         rationale,
         candidates,
         watchlist,
       });
-      return { recorded: true };
+      // Surface an FX fallback so a human notices: the recorded equity used a hardcoded rate
+      // because the live source was unreachable, so the value may have drifted.
+      return {
+        recorded: true,
+        fx: { rate: fx.rate, source: fx.source, fallbackUsed: fx.source === "fallback" },
+      };
     } catch (err) {
       console.warn("[memory] recordCycle failed (non-fatal):", err);
       return { recorded: false, note: "memory or broker unavailable" };

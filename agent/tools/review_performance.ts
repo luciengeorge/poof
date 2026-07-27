@@ -2,7 +2,8 @@ import { defineTool } from "eve/tools";
 import { z } from "zod";
 import { t212FromEnv } from "../lib/t212.ts";
 import { finnhubFromEnv } from "../lib/data.ts";
-import { fxRateFromEnv } from "../lib/state.ts";
+import { fxForCycle } from "../lib/fx.ts";
+import { accountValueGbp } from "../lib/execution.ts";
 import { etDateString } from "../lib/clock.ts";
 import { memoryFromEnv } from "../lib/memory.ts";
 import { tradingEnv } from "../lib/risk-runtime.ts";
@@ -19,20 +20,17 @@ const DAY = 86_400_000;
 
 export default defineTool({
   description:
-    "Review how the account is actually doing: open positions with unrealized P&L, their thesis, age, and active exit levels; realized win/loss stats from closed trades; and alpha vs buy-and-hold SPY since inception. Call this EARLY each cycle (after managing exits) so new decisions are informed by what worked and whether you're beating just holding SPY. Read-only.",
+    "Review how the account is actually doing: open positions with unrealized P&L, their thesis, age, and active exit levels; realized win/loss stats from closed trades; and alpha vs buy-and-hold SPY since inception. Call this EARLY each cycle (after managing exits) so new decisions are informed by what worked and whether you're beating just holding SPY. CURRENCY: accountValueGbp, cashGbp, deployedGbp and each position's marketValue/unrealizedPnl are GBP; each position's entryPrice/currentPrice are share prices in the instrument's own currency (USD for US stocks), NOT GBP. Read-only.",
   inputSchema: z.object({}),
   async execute() {
     const client = t212FromEnv();
-    const fxRate = fxRateFromEnv();
+    const fx = await fxForCycle();
+    const fxRate = fx.rate;
     const [cash, positions] = await Promise.all([
       client.getCash(),
       client.getPortfolio(),
     ]);
-    const deployed = positions.reduce(
-      (s, p) => s + p.quantity * p.currentPrice * fxRate,
-      0,
-    );
-    const equity = cash.free + deployed;
+    const equity = accountValueGbp(cash, positions, fxRate);
 
     const memory = memoryFromEnv();
     const env = tradingEnv();
@@ -102,8 +100,11 @@ export default defineTool({
     }
 
     return {
-      equity,
-      freeCash: cash.free,
+      // Authoritative GBP figures. Report these verbatim; never re-sum from stock prices.
+      accountValueGbp: equity,
+      cashGbp: cash.free,
+      deployedGbp: equity - cash.free,
+      fx: { rate: fxRate, source: fx.source, fallbackUsed: fx.source === "fallback" },
       openPositions: managed,
       realized,
       realizedByTag,

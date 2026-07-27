@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import {
   notionalToShares,
   buildRiskSnapshot,
+  accountValueGbp,
+  deployedValueGbp,
   roundQuantity,
   parseQuantityPrecision,
   t212TickerToFinnhubSymbol,
@@ -55,6 +57,33 @@ test("notionalToShares rounds to 6 dp", () => {
 test("notionalToShares rejects non-positive price or fx", () => {
   assert.throws(() => notionalToShares(100, 0, 0.8), /positive/);
   assert.throws(() => notionalToShares(100, 50, 0), /positive/);
+});
+
+// --- accountValueGbp: the real bug's data point ---
+
+test("accountValueGbp reproduces the true GBP account value on the live data point", () => {
+  // Real cycle: cash.free = 142.37 GBP, holdings = 140.79 USD, true USD->GBP = 0.7514.
+  // True account value = 248.16 GBP. The bug reported ~282 (LLM hand-summed raw USD onto
+  // GBP cash) and the static-fx path recorded 253.60 (0.79 rate). Prove we get 248.16.
+  const value = accountValueGbp(
+    cash({ free: 142.37 }),
+    [pos({ quantity: 1, currentPrice: 140.79 })],
+    0.7514,
+  );
+  assert.ok(
+    Math.abs(value - 248.16) < 0.01,
+    `expected ~248.16, got ${value}`,
+  );
+  assert.ok(Math.abs(value - 253.6) > 1, "must NOT be the static-0.79 value 253.60");
+  assert.ok(Math.abs(value - 282) > 1, "must NOT be the hand-summed report value ~282");
+});
+
+test("deployedValueGbp converts USD holdings to GBP at the given fx", () => {
+  assert.ok(
+    Math.abs(deployedValueGbp([pos({ quantity: 1, currentPrice: 140.79 })], 0.7514) - 105.79) <
+      0.01,
+  );
+  assert.equal(deployedValueGbp([], 0.7514), 0);
 });
 
 // --- buildRiskSnapshot ---
