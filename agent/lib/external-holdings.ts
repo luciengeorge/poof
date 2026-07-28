@@ -15,6 +15,8 @@
  * the instrument's own currency (USD for US stocks). `fxRate` converts instrument -> GBP.
  */
 
+import { t212TickerToFinnhubSymbol } from "./execution.ts";
+
 export interface ExternalHoldingInput {
   shares: number;
   costBasisGbp: number;
@@ -70,6 +72,77 @@ export function valueExternalHolding(
     unrealisedPnlPct,
     breakEvenPriceInstrumentCcy,
   };
+}
+
+/**
+ * PRE-GATE TICKER GUARD. The instructions tell the agent never to trade an externally-held
+ * name, but in this codebase the gate is authoritative precisely BECAUSE prompts cannot be
+ * trusted, so the rule is also enforced in code: `submit_orders` partitions proposals through
+ * the helpers below BEFORE calling `evaluateAndExecute`, and skips any BUY for a name held in
+ * the external account.
+ *
+ * Why a filter in the tool layer rather than a rule inside the risk gate: `buildRiskSnapshot`
+ * and `evaluateAndExecute` are pure functions of BROKER inputs with no Convex access, which is
+ * exactly what makes it impossible for an external holding's value to reach equity or sizing.
+ * Teaching them to read external holdings would destroy that property. So the guard sits
+ * outside them and moves only TICKER STRINGS across the boundary. Strings cannot be summed
+ * into equity, which is what keeps the isolation type-safe.
+ *
+ * BUYs only: SELLs stay unblocked, because de-risking is always permitted here and the
+ * Trading 212 account may legitimately hold the same name from before.
+ */
+
+/** Recorded reason when a BUY is skipped because the name is held in the external account. */
+export const EXTERNAL_HOLDING_SKIP_REASON =
+  "held in an external advisory account, not traded here";
+
+/**
+ * Normalise a ticker to its plain symbol for comparison, so `SHOP` and `SHOP_US_EQ` both
+ * match the stored `SHOP`. A bare "SHOP" would be rejected by T212 as an unknown instrument
+ * anyway, but a deliberately constructed "SHOP_US_EQ" would not, so both sides are normalised.
+ */
+function normaliseSymbol(ticker: string): string {
+  // Upper-case and trim BEFORE stripping the suffix: t212TickerToFinnhubSymbol matches
+  // `_US_EQ` case-sensitively, so a lower-case "shop_us_eq" would otherwise slip past the
+  // guard as its own distinct symbol.
+  const upper = ticker.trim().toUpperCase();
+  return t212TickerToFinnhubSymbol(upper) ?? upper;
+}
+
+/**
+ * The set of plain symbols that must not be BOUGHT in the trading account.
+ * STRINGS ONLY by construction: no shares, value, or cost basis is read here.
+ */
+export function externalHoldingSymbols(
+  holdings: readonly { ticker: string }[],
+): Set<string> {
+  return new Set(holdings.map((h) => normaliseSymbol(h.ticker)));
+}
+
+/**
+ * Split proposals into those that may proceed to the risk gate and those blocked because the
+ * name is held externally. `blockAllBuys` blocks every BUY regardless of the set: used when
+ * the holdings lookup itself failed on live, where we cannot know which names are excluded,
+ * so no new exposure is opened. Mirrors resolveRiskState's fail-closed stance on a Convex
+ * outage (halt BUYs, allow SELLs).
+ */
+export function partitionExternalHoldingBuys<
+  P extends { ticker: string; side: string },
+>(
+  proposals: readonly P[],
+  excludedSymbols: ReadonlySet<string>,
+  opts: { blockAllBuys?: boolean } = {},
+): { allowed: P[]; blocked: P[] } {
+  const allowed: P[] = [];
+  const blocked: P[] = [];
+  for (const p of proposals) {
+    const isBlockedBuy =
+      p.side === "BUY" &&
+      (opts.blockAllBuys === true || excludedSymbols.has(normaliseSymbol(p.ticker)));
+    if (isBlockedBuy) blocked.push(p);
+    else allowed.push(p);
+  }
+  return { allowed, blocked };
 }
 
 const DAY_MS = 86_400_000;

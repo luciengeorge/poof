@@ -1,13 +1,18 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   valueExternalHolding,
   daysUntilEarnings,
+  externalHoldingSymbols,
+  partitionExternalHoldingBuys,
+  EXTERNAL_HOLDING_SKIP_REASON,
   type ExternalHoldingInput,
 } from "./external-holdings.ts";
 import { buildRiskSnapshot } from "./execution.ts";
 import { validateOrders, DEFAULT_LIMITS } from "./risk.ts";
-import type { CashBalance, T212Position } from "./t212.ts";
+import { evaluateAndExecute, type OrderExecClient, type Proposal } from "./orders.ts";
+import type { CashBalance, T212Position, T212Order } from "./t212.ts";
 
 // The real external holding this feature exists for: SHOP held in a separate (non-T212)
 // brokerage account. Numbers are the live ones at the time the feature was built, so a
@@ -207,6 +212,164 @@ test("REGRESSION: external holdings do NOT affect accountValueGbp / the risk sna
   );
 });
 
+// --- PRE-GATE TICKER GUARD ---
+//
+// Prompts cannot be trusted, so "the instructions say not to trade it" is not a control.
+// This guard is the CODE-LEVEL stop: a BUY for a ticker held in the external account is
+// skipped before the order path ever sees it. Note the guard deliberately moves only TICKER
+// STRINGS across the boundary; no shares, values, or cost basis go anywhere near sizing.
+
+test("externalHoldingSymbols normalises to plain symbols and yields STRINGS ONLY", () => {
+  // Deliberately includes the value fields, to prove none of them can cross the boundary.
+  const symbols = externalHoldingSymbols([
+    { ticker: "SHOP", shares: 83.03770915, costBasisGbp: 9982.65 },
+    { ticker: "nke_us_eq" },
+  ] as { ticker: string }[]);
+
+  assert.deepEqual([...symbols].sort(), ["NKE", "SHOP"]);
+  // Type-level intent, asserted at runtime: the set carries strings and nothing else.
+  for (const s of symbols) assert.equal(typeof s, "string");
+  assert.equal(
+    [...symbols].some((s) => typeof s === "number"),
+    false,
+    "no numeric value may cross the guard boundary",
+  );
+});
+
+test("guard blocks a BUY for an external holding whether written SHOP or SHOP_US_EQ", () => {
+  const excluded = externalHoldingSymbols([{ ticker: "SHOP" }]);
+  const proposals = [
+    { ticker: "SHOP", side: "BUY" as const },
+    { ticker: "SHOP_US_EQ", side: "BUY" as const },
+    { ticker: "shop_us_eq", side: "BUY" as const },
+    { ticker: "NKE_US_EQ", side: "BUY" as const },
+  ];
+  const { allowed, blocked } = partitionExternalHoldingBuys(proposals, excluded);
+  // A naive "SHOP" would fail at T212 as an unknown instrument anyway, but a deliberately
+  // constructed "SHOP_US_EQ" would go through, so both sides are normalised.
+  assert.deepEqual(
+    blocked.map((p) => p.ticker),
+    ["SHOP", "SHOP_US_EQ", "shop_us_eq"],
+  );
+  assert.deepEqual(
+    allowed.map((p) => p.ticker),
+    ["NKE_US_EQ"],
+  );
+});
+
+test("guard does NOT block SELLs: de-risking an external name held in T212 stays allowed", () => {
+  const excluded = externalHoldingSymbols([{ ticker: "SHOP" }]);
+  const { allowed, blocked } = partitionExternalHoldingBuys(
+    [
+      { ticker: "SHOP_US_EQ", side: "SELL" as const },
+      { ticker: "SHOP", side: "SELL" as const },
+    ],
+    excluded,
+  );
+  assert.equal(blocked.length, 0);
+  assert.equal(allowed.length, 2);
+});
+
+test("guard blocks every BUY when told to fail closed, still allowing SELLs", () => {
+  // Used when the external-holding lookup itself fails on LIVE: without the list we cannot
+  // know which names are excluded, so no new exposure is opened, mirroring resolveRiskState's
+  // fail-closed behaviour (halt BUYs, allow SELLs) on a Convex outage.
+  const { allowed, blocked } = partitionExternalHoldingBuys(
+    [
+      { ticker: "NKE_US_EQ", side: "BUY" as const },
+      { ticker: "AAPL_US_EQ", side: "SELL" as const },
+    ],
+    new Set<string>(),
+    { blockAllBuys: true },
+  );
+  assert.deepEqual(
+    blocked.map((p) => p.ticker),
+    ["NKE_US_EQ"],
+  );
+  assert.deepEqual(
+    allowed.map((p) => p.ticker),
+    ["AAPL_US_EQ"],
+  );
+});
+
+test("blocked external BUY is skipped with the reason while the rest of the batch executes", async () => {
+  // Mirrors exactly what submit_orders.ts does: partition first, execute only `allowed`,
+  // then fold the blocked proposals back in as skips. One blocked proposal must never abort
+  // the batch, so the sibling BUY still places.
+  const placedAtBroker: { ticker: string; quantity: number }[] = [];
+  const client: OrderExecClient = {
+    async getCash() {
+      return {
+        total: 10000,
+        free: 10000,
+        blocked: 0,
+        invested: 0,
+        pieCash: 0,
+        result: 0,
+        ppl: 0,
+      };
+    },
+    async getPortfolio() {
+      return [];
+    },
+    async getPendingOrders() {
+      return [];
+    },
+    async placeMarketOrder(input) {
+      placedAtBroker.push(input);
+      return { id: 1, ...input } as T212Order;
+    },
+  };
+
+  const proposals: Proposal[] = [
+    { ticker: "SHOP_US_EQ", side: "BUY", notional: 500, price: 126.88, thesis: "no" },
+    { ticker: "NKE_US_EQ", side: "BUY", notional: 500, price: 100, thesis: "yes" },
+  ];
+
+  const excluded = externalHoldingSymbols([{ ticker: "SHOP" }]);
+  const { allowed, blocked } = partitionExternalHoldingBuys(proposals, excluded);
+
+  const result = await evaluateAndExecute(allowed, {
+    client,
+    fxRate: 1,
+    dryRun: false,
+    resolveRiskState: async () => ({
+      peakEquity: 0,
+      dayPnl: 0,
+      newPositionsToday: 0,
+      consecutiveLossDays: 0,
+    }),
+    resolvePrice: async () => 100,
+  });
+  for (const proposal of blocked) {
+    result.placed.push({
+      proposal,
+      quantity: 0,
+      dryRun: false,
+      skipped: EXTERNAL_HOLDING_SKIP_REASON,
+    });
+  }
+
+  // The external name never reached the broker.
+  assert.deepEqual(
+    placedAtBroker.map((o) => o.ticker),
+    ["NKE_US_EQ"],
+  );
+  // The sibling BUY executed normally.
+  const nke = result.placed.find((p) => p.proposal.ticker === "NKE_US_EQ");
+  assert.ok(nke, "the non-external BUY must still execute");
+  assert.equal(nke.skipped, undefined);
+  assert.equal(nke.quantity, 5); // GBP 500 / ($100 * fx 1)
+  // The external BUY is reported as a skip with an explicit reason, not silently dropped
+  // and not a rejection that could abort the batch.
+  const shop = result.placed.find((p) => p.proposal.ticker === "SHOP_US_EQ");
+  assert.ok(shop, "the blocked BUY must be reported, not swallowed");
+  assert.equal(shop.quantity, 0);
+  assert.equal(shop.skipped, EXTERNAL_HOLDING_SKIP_REASON);
+  assert.match(shop.skipped, /external advisory account/);
+  assert.equal(result.rejected.length, 0);
+});
+
 test("REGRESSION: the risk gate sizes off the T212 account, not the external holding", () => {
   const snap = buildRiskSnapshot({
     cash: cash({ free: 248 }),
@@ -229,4 +392,52 @@ test("REGRESSION: the risk gate sizes off the T212 account, not the external hol
   assert.equal(result.accepted.length, 0);
   assert.equal(result.rejected.length, 1);
   assert.match(result.rejected[0].reason, /trade size/);
+});
+
+// The behavioural tests above compare pure functions given identical inputs, so they cannot
+// catch contamination added at a CALL SITE: e.g. get_account.ts adding external value to
+// equity AFTER buildRiskSnapshot returns, or record_cycle.ts logging a combined total. This
+// guard closes that gap structurally by asserting the trading path never even mentions the
+// concept.
+//
+// INTENT: a future refactor that wires external holdings into any of these files should fail
+// HERE, deliberately and immediately, with this comment as the explanation. If you are reading
+// this because the test just failed: that is the point. External holdings are ~32x the
+// trading account; they must not reach equity, sizing, or the breakers. Put the advisory
+// read in the advisory tool (agent/tools/review_external_holdings.ts) instead.
+//
+// submit_orders.ts is deliberately NOT in this list: it hosts the pre-gate ticker guard,
+// which moves ticker STRINGS only and never a value.
+const TRADING_PATH_FILES = [
+  "./execution.ts",
+  "./orders.ts",
+  "./risk.ts",
+  "./risk-runtime.ts",
+  "../tools/get_account.ts",
+  "../tools/review_performance.ts",
+  "../tools/record_cycle.ts",
+];
+
+test("REGRESSION: no trading-path source file references external holdings at all", () => {
+  const pattern = /external[-_ ]?holding/i;
+  for (const rel of TRADING_PATH_FILES) {
+    const path = new URL(rel, import.meta.url);
+    const source = readFileSync(path, "utf8");
+    assert.equal(
+      pattern.test(source),
+      false,
+      `${rel} must not reference external holdings: equity, sizing and the risk gate are ` +
+        "broker-only by design. See the comment above TRADING_PATH_FILES.",
+    );
+  }
+});
+
+test("the trading-path guard list actually resolves (the guard cannot go vacuous)", () => {
+  // Without this, a renamed or moved file would make the guard above silently pass on
+  // nothing at all.
+  assert.equal(TRADING_PATH_FILES.length, 7);
+  for (const rel of TRADING_PATH_FILES) {
+    const source = readFileSync(new URL(rel, import.meta.url), "utf8");
+    assert.ok(source.length > 0, `${rel} must exist and be non-empty`);
+  }
 });

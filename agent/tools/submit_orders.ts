@@ -10,6 +10,11 @@ import { finnhubFromEnv } from "../lib/data.ts";
 import { t212TickerToFinnhubSymbol } from "../lib/execution.ts";
 import { buildRecordTradeArgs } from "../lib/order-bookkeeping.ts";
 import { STRATEGY_TAGS } from "../lib/positions.ts";
+import {
+  externalHoldingSymbols,
+  partitionExternalHoldingBuys,
+  EXTERNAL_HOLDING_SKIP_REASON,
+} from "../lib/external-holdings.ts";
 
 const proposalSchema = z.object({
   ticker: z.string().min(1).describe("Trading 212 instrument ticker, e.g. AAPL_US_EQ"),
@@ -61,7 +66,7 @@ const proposalSchema = z.object({
 
 export default defineTool({
   description:
-    "Validate proposed trades against the hard risk limits on the LIVE account, then place the accepted ones as market orders. The risk gate runs INSIDE this tool and is authoritative and cannot be bypassed. Honors DRY_RUN (default on: orders are simulated, not sent). On BUYs, set stopLossPct + trailingStopPct (the trailing stop is the primary exit for winners; leave takeProfitPct as a far backstop, plus maxHoldDays if time-bound). The exit engine enforces them automatically on later cycles. Returns `placed` (with share quantity; `dryRun`/`skipped` flags) and `rejected` (with reasons). Always report both back to the user.",
+    "Validate proposed trades against the hard risk limits on the LIVE account, then place the accepted ones as market orders. The risk gate runs INSIDE this tool and is authoritative and cannot be bypassed. BUYs for any ticker held in the user's external advisory account are blocked in code before the gate and reported as skipped: that account is not tradable here, so do not propose those names. Honors DRY_RUN (default on: orders are simulated, not sent). On BUYs, set stopLossPct + trailingStopPct (the trailing stop is the primary exit for winners; leave takeProfitPct as a far backstop, plus maxHoldDays if time-bound). The exit engine enforces them automatically on later cycles. Returns `placed` (with share quantity; `dryRun`/`skipped` flags) and `rejected` (with reasons). Always report both back to the user.",
   inputSchema: z.object({
     proposals: z.array(proposalSchema).min(1).max(10),
   }),
@@ -74,7 +79,39 @@ export default defineTool({
     const client = t212FromEnv();
     const finnhub = finnhubFromEnv();
     const memory = memoryFromEnv();
-    const result = await evaluateAndExecute(proposals, {
+    const env = tradingEnv();
+
+    // PRE-GATE GUARD: never BUY a name the user holds in the external advisory account.
+    // The instructions say so too, but prompts are not a control, so it is enforced here in
+    // code. Deliberately OUTSIDE evaluateAndExecute: that function and buildRiskSnapshot are
+    // pure functions of broker inputs with no Convex access, which is precisely why an
+    // external holding's VALUE can never reach equity or sizing. Only ticker STRINGS cross
+    // this boundary; a string cannot be summed into equity.
+    let excludedSymbols: ReadonlySet<string> = new Set<string>();
+    let blockAllBuys = false;
+    try {
+      excludedSymbols = externalHoldingSymbols(
+        await memory.listExternalHoldings(env),
+      );
+    } catch (err) {
+      // Without the list we cannot tell which names are excluded. On live, open no new
+      // exposure (same fail-closed stance resolveRiskState takes on a Convex outage:
+      // halt BUYs, allow SELLs). On demo, warn and continue.
+      blockAllBuys = env === "live";
+      console.warn(
+        `[external] holding lookup FAILED${
+          blockAllBuys ? " on LIVE; failing closed (skip BUYs, allow SELLs)" : ""
+        }:`,
+        err,
+      );
+    }
+    const { allowed, blocked } = partitionExternalHoldingBuys(
+      proposals,
+      excludedSymbols,
+      { blockAllBuys },
+    );
+
+    const result = await evaluateAndExecute(allowed, {
       client,
       fxRate: (await fxForCycle()).rate,
       dryRun: isDryRun(),
@@ -92,6 +129,20 @@ export default defineTool({
         await memory.recordOrderIntent(tradingEnv(), key);
       },
     });
+
+    // Report each blocked BUY as a skip with an explicit reason, mirroring the existing
+    // skip-with-reason pattern (precision / pending / duplicate). A skip rather than a throw,
+    // so one blocked proposal never aborts the rest of the batch. These are recorded to memory
+    // below with status "skipped" (never "placed"), so the guard's activation is auditable and
+    // the blocked name never becomes an open position.
+    for (const proposal of blocked) {
+      result.placed.push({
+        proposal,
+        quantity: 0,
+        dryRun: isDryRun(),
+        skipped: EXTERNAL_HOLDING_SKIP_REASON,
+      });
+    }
 
     // Record every placed/simulated trade to durable memory. Best-effort:
     // a memory failure must never break trading.
