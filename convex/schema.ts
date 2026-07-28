@@ -103,4 +103,27 @@ export default defineSchema({
     key: v.string(),
     createdAt: v.number(),
   }).index("by_env_and_key", ["env", "key"]),
+
+  // ADVISORY-ONLY holdings in a SEPARATE account the agent has no API access to and can
+  // NEVER trade. Deliberately its own table: these rows must never reach the trading
+  // account's equity, risk snapshot, position sizing, breakers, exits, or `trades`. One such
+  // holding can be many multiples of the Trading 212 account, so leaking it into
+  // accountValueGbp would authorise wildly oversized orders and compute the drawdown /
+  // daily-loss breakers against the wrong base. Read only by review_external_holdings.
+  externalHoldings: defineTable({
+    env: v.string(),
+    ticker: v.string(),
+    shares: v.number(),
+    costBasisGbp: v.number(), // total cost in GBP, not per share
+    currency: v.string(), // instrument currency, e.g. "USD"
+    accountLabel: v.optional(v.string()),
+    taxable: v.boolean(), // true for a UK GIA: realising a loss has CGT value
+    intent: v.string(), // "exit" | "hold" | "add" | "monitor"
+    targetPriceUsd: v.optional(v.number()),
+    notes: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_env", ["env"])
+    .index("by_env_and_ticker", ["env", "ticker"]),
 });

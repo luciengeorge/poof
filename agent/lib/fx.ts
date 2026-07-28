@@ -13,7 +13,10 @@
  */
 import { sleep, retryDelayMs } from "./http-backoff.ts";
 
-const FRANKFURTER_LATEST = "https://api.frankfurter.app/latest";
+// Canonical host. api.frankfurter.app 301-redirects here; fetch follows it, but pointing at
+// the real endpoint saves the extra hop. Response shape is unchanged:
+// { amount, base, date, rates: { GBP } }.
+const FRANKFURTER_LATEST = "https://api.frankfurter.dev/v1/latest";
 
 /** Last-resort USD->GBP if the live source is unreachable. Only used with a loud warning. */
 export const FX_FALLBACK_USD_GBP = 0.75;

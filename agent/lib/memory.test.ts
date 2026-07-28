@@ -149,6 +149,36 @@ test("recordOrderIntent issues a mutation; hasOrderIntent issues a query returni
   assert.equal(result, true);
 });
 
+test("external-holding methods carry the token; list returns [] when memory is empty", async () => {
+  const { client, calls } = fakeClient();
+  const m = new Memory(client, TOKEN);
+  const holding = {
+    env: "live" as const,
+    ticker: "SHOP",
+    shares: 83.03770915,
+    costBasisGbp: 9982.65,
+    currency: "USD",
+    accountLabel: "external brokerage",
+    taxable: true,
+    intent: "exit" as const,
+  };
+  await m.upsertExternalHolding(holding);
+  assert.equal(calls[0].kind, "mutation");
+  assert.deepEqual(calls[0].args, { token: TOKEN, ...holding });
+
+  await m.removeExternalHolding("live", "SHOP");
+  assert.equal(calls[1].kind, "mutation");
+  assert.deepEqual(calls[1].args, {
+    token: TOKEN,
+    env: "live",
+    ticker: "SHOP",
+  });
+
+  // A null/absent result must degrade to an empty list, not blow up the advisory step.
+  client.query = async () => null;
+  assert.deepEqual(await m.listExternalHoldings("live"), []);
+});
+
 test("memoryFromEnv throws when CONVEX_URL is unset", () => {
   const prevUrl = process.env.CONVEX_URL;
   const prevSecret = process.env.CONVEX_APP_SECRET;
