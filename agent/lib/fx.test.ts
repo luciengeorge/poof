@@ -33,6 +33,16 @@ function fakeFetch(
 
 test("mapFrankfurterRate extracts rates.GBP", () => {
   assert.equal(mapFrankfurterRate({ rates: { GBP: 0.7514 } }), 0.7514);
+  // The canonical /v1 host returns the same shape, with amount/base/date alongside.
+  assert.equal(
+    mapFrankfurterRate({
+      amount: 1.0,
+      base: "USD",
+      date: "2026-07-27",
+      rates: { GBP: 0.75094 },
+    }),
+    0.75094,
+  );
 });
 
 test("mapFrankfurterRate throws on missing/invalid rate", () => {
@@ -45,13 +55,14 @@ test("mapFrankfurterRate throws on missing/invalid rate", () => {
 
 // --- FrankfurterProvider.getUsdGbp: URL / params / parse (offline) ---
 
-test("getUsdGbp calls /latest with from=USD&to=GBP and parses the rate", async () => {
+test("getUsdGbp calls the canonical /v1/latest with from=USD&to=GBP and parses the rate", async () => {
   const f = fakeFetch(() => ({ body: { rates: { GBP: 0.7514 } } }));
   const p = new FrankfurterProvider({ fetchImpl: f.fn });
   const rate = await p.getUsdGbp();
   assert.equal(rate, 0.7514);
   const u = new URL(f.calls[0]);
-  assert.equal(u.origin + u.pathname, "https://api.frankfurter.app/latest");
+  // api.frankfurter.app/latest 301-redirects here; hit the canonical host directly.
+  assert.equal(u.origin + u.pathname, "https://api.frankfurter.dev/v1/latest");
   assert.equal(u.searchParams.get("from"), "USD");
   assert.equal(u.searchParams.get("to"), "GBP");
 });

@@ -209,7 +209,100 @@ export const recordOrderIntent = mutation({
   },
 });
 
+// --- external holdings (ADVISORY ONLY) ---
+//
+// Holdings in a SEPARATE account the agent cannot trade. These live in their own table and
+// are read by their own tool; they must never be folded into the trading account's equity,
+// risk snapshot, sizing, breakers, exits, or `trades`. See the schema comment.
+
+const EXTERNAL_INTENTS = ["exit", "hold", "add", "monitor"];
+
+/** Upsert on (env, ticker): one row per external holding per env. */
+export const upsertExternalHolding = mutation({
+  args: {
+    token: v.string(),
+    env: v.string(),
+    ticker: v.string(),
+    shares: v.number(),
+    costBasisGbp: v.number(),
+    currency: v.string(),
+    accountLabel: v.optional(v.string()),
+    taxable: v.boolean(),
+    intent: v.string(),
+    targetPriceUsd: v.optional(v.number()),
+    notes: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    assertSecret(args.token);
+    const { token, ...rest } = args;
+    // Bound the free numbers: a NaN/Infinity/negative here would silently poison every
+    // valuation and every piece of advice derived from it.
+    if (!Number.isFinite(rest.shares) || rest.shares <= 0) {
+      throw new Error("shares must be a finite positive number");
+    }
+    if (!Number.isFinite(rest.costBasisGbp) || rest.costBasisGbp < 0) {
+      throw new Error("costBasisGbp must be a finite non-negative number");
+    }
+    if (
+      rest.targetPriceUsd !== undefined &&
+      (!Number.isFinite(rest.targetPriceUsd) || rest.targetPriceUsd <= 0)
+    ) {
+      throw new Error("targetPriceUsd must be a finite positive number");
+    }
+    if (!EXTERNAL_INTENTS.includes(rest.intent)) {
+      throw new Error(`intent must be one of ${EXTERNAL_INTENTS.join(" | ")}`);
+    }
+    const existing = await ctx.db
+      .query("externalHoldings")
+      .withIndex("by_env_and_ticker", (q) =>
+        q.eq("env", rest.env).eq("ticker", rest.ticker),
+      )
+      .unique();
+    const now = Date.now();
+    if (existing) {
+      await ctx.db.patch("externalHoldings", existing._id, {
+        ...rest,
+        updatedAt: now,
+      });
+      return existing._id;
+    }
+    return await ctx.db.insert("externalHoldings", {
+      ...rest,
+      createdAt: now,
+      updatedAt: now,
+    });
+  },
+});
+
+export const removeExternalHolding = mutation({
+  args: { token: v.string(), env: v.string(), ticker: v.string() },
+  handler: async (ctx, args) => {
+    assertSecret(args.token);
+    const existing = await ctx.db
+      .query("externalHoldings")
+      .withIndex("by_env_and_ticker", (q) =>
+        q.eq("env", args.env).eq("ticker", args.ticker),
+      )
+      .unique();
+    if (!existing) return null;
+    await ctx.db.delete("externalHoldings", existing._id);
+    return existing._id;
+  },
+});
+
 // --- queries (reads) ---
+
+/** All external holdings for an env. Bounded: this is a hand-maintained handful of rows. */
+export const listExternalHoldings = query({
+  args: { token: v.string(), env: v.string() },
+  handler: async (ctx, args) => {
+    assertSecret(args.token);
+    return await ctx.db
+      .query("externalHoldings")
+      .withIndex("by_env", (q) => q.eq("env", args.env))
+      .take(50);
+  },
+});
 
 export const getRiskState = query({
   args: { token: v.string(), env: v.string() },

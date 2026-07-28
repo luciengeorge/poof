@@ -70,6 +70,32 @@ export interface MessageRecord {
   text: string;
 }
 
+/**
+ * An ADVISORY-ONLY holding in a separate account the agent cannot trade. Stored in its own
+ * table and read by its own tool; never an input to account equity, sizing, or the risk gate.
+ */
+export interface ExternalHoldingRecord {
+  env: Env;
+  ticker: string;
+  shares: number;
+  costBasisGbp: number;
+  currency: string;
+  accountLabel?: string;
+  taxable: boolean;
+  intent: ExternalHoldingIntent;
+  targetPriceUsd?: number;
+  notes?: string;
+}
+
+export type ExternalHoldingIntent = "exit" | "hold" | "add" | "monitor";
+
+/** A stored external holding as read back from Convex. */
+export interface StoredExternalHolding extends ExternalHoldingRecord {
+  _id: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface CronRunRecord {
   schedule: string;
   firedAt: number;
@@ -158,6 +184,16 @@ export class Memory {
   }
   getRiskState(env: Env): Promise<unknown> {
     return this.query("getRiskState", { env });
+  }
+  upsertExternalHolding(h: ExternalHoldingRecord): Promise<unknown> {
+    return this.mutation("upsertExternalHolding", { ...h });
+  }
+  removeExternalHolding(env: Env, ticker: string): Promise<unknown> {
+    return this.mutation("removeExternalHolding", { env, ticker });
+  }
+  async listExternalHoldings(env: Env): Promise<StoredExternalHolding[]> {
+    return ((await this.query("listExternalHoldings", { env })) ??
+      []) as StoredExternalHolding[];
   }
   recallRecent(
     env: Env,
