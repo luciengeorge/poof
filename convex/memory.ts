@@ -546,6 +546,98 @@ export const finishCycleTrace = mutation({
   },
 });
 
+/** Bounds on a stored judge verdict, mirroring agent/lib/report-judge.ts. */
+const MIN_SCORE = 1;
+const MAX_SCORE = 5;
+const MAX_JUDGE_FINDINGS = 10;
+const MAX_JUDGE_FINDING_CHARS = 400;
+const MAX_JUDGE_WARNING_CHARS = 300;
+
+/**
+ * Record the LLM-as-judge verdict on one cycle's report quality.
+ *
+ * IDEMPOTENT on `judgedAt`. A cycle is judged AT MOST ONCE: the scheduled pass skips rows that
+ * already carry `judgedAt`, and this mutation refuses to overwrite one even if the caller asks
+ * twice. That keeps the weekly pass from spending a second model call on the same cycle and
+ * keeps the recorded verdict stable once a human has read it.
+ *
+ * THE FAIL-SAFE, enforced here at the storage boundary and not only in the caller: a verdict
+ * claiming `status: "judged"` must carry all five dimensions as finite numbers in range, or it
+ * is rejected. An unparseable judge response belongs in the row as `status: "unjudged"` with a
+ * warning, never as a passing score. Storing a bogus 5 would be worse than storing nothing,
+ * because the weekly read path would then report the cycle as verified.
+ */
+export const saveReportScore = mutation({
+  args: {
+    token: v.string(),
+    env: v.string(),
+    sessionId: v.string(),
+    turnId: v.string(),
+    status: v.string(), // "judged" | "unjudged"
+    grounding: v.optional(v.number()),
+    consistency: v.optional(v.number()),
+    calibration: v.optional(v.number()),
+    completeness: v.optional(v.number()),
+    overall: v.optional(v.number()),
+    findings: v.optional(v.array(v.string())),
+    warning: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    assertSecret(args.token);
+    const { env, sessionId, turnId, status } = args;
+    if (status !== "judged" && status !== "unjudged") {
+      throw new Error('status must be "judged" or "unjudged"');
+    }
+    const existing = await findTrace(ctx, env, sessionId, turnId);
+    if (!existing) return null;
+    if (existing.judgedAt !== undefined) return existing._id; // already judged: never re-judge
+
+    const dimensions = {
+      grounding: args.grounding,
+      consistency: args.consistency,
+      calibration: args.calibration,
+      completeness: args.completeness,
+      overall: args.overall,
+    };
+    if (status === "judged") {
+      for (const [name, value] of Object.entries(dimensions)) {
+        if (
+          value === undefined ||
+          !Number.isFinite(value) ||
+          value < MIN_SCORE ||
+          value > MAX_SCORE
+        ) {
+          throw new Error(
+            `a judged verdict needs ${name} as a finite number in ${MIN_SCORE}..${MAX_SCORE}; ` +
+              "record an unusable judge response as status \"unjudged\" instead",
+          );
+        }
+      }
+    }
+
+    const findings = (args.findings ?? [])
+      .filter((entry) => entry.trim() !== "")
+      .slice(0, MAX_JUDGE_FINDINGS)
+      .map((entry) => entry.trim().slice(0, MAX_JUDGE_FINDING_CHARS));
+
+    await ctx.db.patch("cycleTraces", existing._id, {
+      reportScore: {
+        status,
+        // Scores are dropped entirely on an unjudged verdict, so no partial number can later be
+        // mistaken for a grade.
+        ...(status === "judged" ? dimensions : {}),
+        findings,
+        warning:
+          args.warning === undefined
+            ? undefined
+            : args.warning.slice(0, MAX_JUDGE_WARNING_CHARS),
+      },
+      judgedAt: Date.now(),
+    });
+    return existing._id;
+  },
+});
+
 export const getCycleTrace = query({
   args: {
     token: v.string(),

@@ -123,8 +123,28 @@ export interface StoredCycleTrace extends CycleTraceKey {
   reportText?: string;
   reportPass?: boolean;
   reportFindings?: { rule: string; detail: string }[];
+  /** LLM-as-judge verdict on report quality, written by the scheduled judge pass. */
+  reportScore?: StoredReportScore;
+  /** Set once, for a judged AND an unjudged verdict, so the judge pass is idempotent. */
+  judgedAt?: number;
   startedAt: number;
   completedAt?: number;
+}
+
+/**
+ * A stored judge verdict. Every dimension is optional because "unjudged" is a first-class
+ * status: an unparseable judge response is recorded as an absence of a verdict, never as a
+ * passing score. See agent/lib/report-judge.ts.
+ */
+export interface StoredReportScore {
+  status: string; // "judged" | "unjudged"
+  grounding?: number;
+  consistency?: number;
+  calibration?: number;
+  completeness?: number;
+  overall?: number;
+  findings?: string[];
+  warning?: string;
 }
 
 export interface CronRunRecord {
@@ -261,6 +281,16 @@ export class Memory {
     },
   ): Promise<unknown> {
     return this.mutation("finishCycleTrace", { ...key, ...verdict });
+  }
+  /**
+   * Record the report-quality verdict for one cycle. Server-side idempotent: a row that already
+   * carries `judgedAt` is left untouched, so a cycle is judged at most once.
+   */
+  saveReportScore(
+    key: CycleTraceKey,
+    verdict: StoredReportScore,
+  ): Promise<unknown> {
+    return this.mutation("saveReportScore", { ...key, ...verdict });
   }
   async getCycleTrace(key: CycleTraceKey): Promise<StoredCycleTrace | null> {
     return ((await this.query("getCycleTrace", { ...key })) ??
