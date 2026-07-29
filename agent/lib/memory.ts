@@ -123,8 +123,40 @@ export interface StoredCycleTrace extends CycleTraceKey {
   reportText?: string;
   reportPass?: boolean;
   reportFindings?: { rule: string; detail: string }[];
+  /** LLM-as-judge verdict on report quality, written by the scheduled judge pass. */
+  reportScore?: StoredReportScore;
+  /** Set once, for a judged AND an unjudged verdict, so the judge pass is idempotent. */
+  judgedAt?: number;
   startedAt: number;
   completedAt?: number;
+}
+
+/**
+ * A stored judge verdict. Every dimension is optional because "unjudged" is a first-class
+ * status: an unparseable judge response is recorded as an absence of a verdict, never as a
+ * passing score. See agent/lib/report-judge.ts.
+ */
+/**
+ * What `saveReportScore` did.
+ *
+ * `already-judged` and `no-such-trace` both mean THIS verdict was not persisted, which is why
+ * they are distinguished from `stored`: the caller must not alert on a score that is not in the
+ * database, and must not re-alert on one an earlier pass already handled.
+ */
+export interface SaveReportScoreResult {
+  outcome: "stored" | "already-judged" | "no-such-trace";
+  id?: string;
+}
+
+export interface StoredReportScore {
+  status: string; // "judged" | "unjudged"
+  grounding?: number;
+  consistency?: number;
+  calibration?: number;
+  completeness?: number;
+  overall?: number;
+  findings?: string[];
+  warning?: string;
 }
 
 export interface CronRunRecord {
@@ -261,6 +293,22 @@ export class Memory {
     },
   ): Promise<unknown> {
     return this.mutation("finishCycleTrace", { ...key, ...verdict });
+  }
+  /**
+   * Record the report-quality verdict for one cycle. Server-side idempotent: a row that already
+   * carries `judgedAt` is left untouched, so a cycle is judged at most once.
+   *
+   * The OUTCOME is returned, not just an id, so the caller can tell a stored verdict from a
+   * skipped or missing one. It only alerts on a verdict that was actually persisted.
+   */
+  async saveReportScore(
+    key: CycleTraceKey,
+    verdict: StoredReportScore,
+  ): Promise<SaveReportScoreResult> {
+    return (await this.mutation("saveReportScore", {
+      ...key,
+      ...verdict,
+    })) as SaveReportScoreResult;
   }
   async getCycleTrace(key: CycleTraceKey): Promise<StoredCycleTrace | null> {
     return ((await this.query("getCycleTrace", { ...key })) ??

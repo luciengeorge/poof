@@ -152,6 +152,31 @@ export default defineSchema({
     reportFindings: v.optional(
       v.array(v.object({ rule: v.string(), detail: v.string() })),
     ),
+    // LLM-as-judge verdict on report QUALITY, written by a SCHEDULED pass long after the turn
+    // ended (see agent/lib/report-judge.ts for why it is never inline in the hook). Lives on
+    // this row rather than in its own table: there is exactly one verdict per cycle, it is
+    // written once, and the weekly read path in agent/lib/eval-health.ts always needs it in the
+    // same pass as the invariants, so a separate table would only add a second query and a join.
+    //
+    // "unjudged" is a FIRST-CLASS status. A judge response that could not be parsed must be
+    // recorded as an absence of a verdict, never as a passing score, or the whole judging layer
+    // silently becomes decoration. Every dimension is therefore optional and only populated
+    // when status is "judged".
+    reportScore: v.optional(
+      v.object({
+        status: v.string(), // "judged" | "unjudged"
+        grounding: v.optional(v.number()),
+        consistency: v.optional(v.number()),
+        calibration: v.optional(v.number()),
+        completeness: v.optional(v.number()),
+        overall: v.optional(v.number()),
+        findings: v.optional(v.array(v.string())),
+        warning: v.optional(v.string()), // set when status is "unjudged"
+      }),
+    ),
+    // Set once, for both statuses, so the scheduled pass is idempotent: a cycle is judged at
+    // most once and a re-run skips it instead of spending another model call on it.
+    judgedAt: v.optional(v.number()),
     startedAt: v.number(),
     completedAt: v.optional(v.number()), // set at the turn boundary; absent means unfinished
   })
