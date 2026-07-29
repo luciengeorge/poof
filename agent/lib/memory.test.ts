@@ -179,6 +179,58 @@ test("external-holding methods carry the token; list returns [] when memory is e
   assert.deepEqual(await m.listExternalHoldings("live"), []);
 });
 
+test("cycle-trace methods carry the token and the (env, session, turn) key", async () => {
+  const { client, calls } = fakeClient();
+  const m = new Memory(client, TOKEN);
+  const key = { env: "live" as const, sessionId: "s1", turnId: "t1" };
+
+  await m.startCycleTrace(key);
+  assert.deepEqual(calls[0], { kind: "mutation", args: { token: TOKEN, ...key } });
+
+  await m.appendCycleTraceTool(key, "submit_orders", "call_7");
+  assert.deepEqual(calls[1].args, {
+    token: TOKEN,
+    ...key,
+    toolName: "submit_orders",
+    callId: "call_7", // the idempotency key must reach Convex, or dedupe cannot happen
+  });
+
+  await m.saveCycleTraceContext(key, { accountValueGbp: 248.16, reportText: "£248.16" });
+  assert.deepEqual(calls[2].args, {
+    token: TOKEN,
+    ...key,
+    accountValueGbp: 248.16,
+    reportText: "£248.16",
+  });
+
+  await m.finishCycleTrace(key, {
+    invariants: [{ name: "cycle-recorded", status: "fail", detail: "never ran" }],
+  });
+  assert.equal(calls[3].kind, "mutation");
+  // The violations count is derived server-side from the invariants, never sent by the client.
+  assert.equal(calls[3].args.violations, undefined);
+  assert.deepEqual(calls[3].args, {
+    token: TOKEN,
+    ...key,
+    invariants: [{ name: "cycle-recorded", status: "fail", detail: "never ran" }],
+  });
+
+  assert.deepEqual(
+    calls.map((c) => c.kind),
+    ["mutation", "mutation", "mutation", "mutation"],
+  );
+});
+
+test("cycle-trace reads are queries and degrade to null / [] when memory is empty", async () => {
+  const { client, calls } = fakeClient();
+  const m = new Memory(client, TOKEN);
+  client.query = async () => null;
+
+  assert.equal(await m.getCycleTrace({ env: "demo", sessionId: "s1", turnId: "t1" }), null);
+  assert.deepEqual(await m.recentCycleTraces("demo", 5), []);
+  assert.deepEqual(calls, []); // the stubbed query replaced the recorder, so nothing was pushed
+});
+
 test("memoryFromEnv throws when CONVEX_URL is unset", () => {
   const prevUrl = process.env.CONVEX_URL;
   const prevSecret = process.env.CONVEX_APP_SECRET;

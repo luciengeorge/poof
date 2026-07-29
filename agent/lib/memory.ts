@@ -1,5 +1,6 @@
 import { ConvexHttpClient } from "convex/browser";
 import { anyApi, type FunctionReference } from "convex/server";
+import { timeoutFetch } from "./fetch-timeout.ts";
 
 /** Minimal Convex client surface the memory layer needs (injectable for tests). */
 export interface ConvexLike {
@@ -94,6 +95,36 @@ export interface StoredExternalHolding extends ExternalHoldingRecord {
   _id: string;
   createdAt: number;
   updatedAt: number;
+}
+
+/**
+ * ONLINE EVALS. Identity of one production cycle trace: one row per cycle TURN, not per
+ * session, because a Slack follow-up is a new turn in the same session and must not append
+ * its tool calls to the cycle's behaviour log.
+ */
+export interface CycleTraceKey {
+  env: Env;
+  sessionId: string;
+  turnId: string;
+}
+
+/** A cycle trace as read back from Convex. See convex/schema.ts for the field semantics. */
+export interface StoredCycleTrace extends CycleTraceKey {
+  _id: string;
+  toolSequence: string[];
+  callIds: string[];
+  truncated?: boolean;
+  invariants: { name: string; status: string; detail?: string }[];
+  violations: number;
+  accountValueGbp?: number;
+  cashGbp?: number;
+  deployedGbp?: number;
+  externalGbpValues?: number[];
+  reportText?: string;
+  reportPass?: boolean;
+  reportFindings?: { rule: string; detail: string }[];
+  startedAt: number;
+  completedAt?: number;
 }
 
 export interface CronRunRecord {
@@ -195,6 +226,51 @@ export class Memory {
     return ((await this.query("listExternalHoldings", { env })) ??
       []) as StoredExternalHolding[];
   }
+  // --- online evals: cycle traces (OBSERVER ONLY, never read by the trading path) ---
+
+  startCycleTrace(key: CycleTraceKey): Promise<unknown> {
+    return this.mutation("startCycleTrace", { ...key });
+  }
+  /** `callId` is the idempotency key: a re-delivered action result must not double-append. */
+  appendCycleTraceTool(
+    key: CycleTraceKey,
+    toolName: string,
+    callId: string,
+  ): Promise<unknown> {
+    return this.mutation("appendCycleTraceTool", { ...key, toolName, callId });
+  }
+  saveCycleTraceContext(
+    key: CycleTraceKey,
+    context: {
+      accountValueGbp?: number;
+      cashGbp?: number;
+      deployedGbp?: number;
+      externalGbpValues?: number[];
+      reportText?: string;
+    },
+  ): Promise<unknown> {
+    return this.mutation("saveCycleTraceContext", { ...key, ...context });
+  }
+  /** The `violations` count is derived server-side from `invariants`, so it is not sent. */
+  finishCycleTrace(
+    key: CycleTraceKey,
+    verdict: {
+      invariants: { name: string; status: string; detail?: string }[];
+      reportPass?: boolean;
+      reportFindings?: { rule: string; detail: string }[];
+    },
+  ): Promise<unknown> {
+    return this.mutation("finishCycleTrace", { ...key, ...verdict });
+  }
+  async getCycleTrace(key: CycleTraceKey): Promise<StoredCycleTrace | null> {
+    return ((await this.query("getCycleTrace", { ...key })) ??
+      null) as StoredCycleTrace | null;
+  }
+  async recentCycleTraces(env: Env, limit?: number): Promise<StoredCycleTrace[]> {
+    return ((await this.query("recentCycleTraces", { env, limit })) ??
+      []) as StoredCycleTrace[];
+  }
+
   recallRecent(
     env: Env,
     limits: {
@@ -207,11 +283,30 @@ export class Memory {
   }
 }
 
-export function memoryFromEnv(client?: ConvexLike): Memory {
+/**
+ * `timeoutMs` bounds every HTTP call this client makes, and is OPT-IN.
+ *
+ * Observers (the online-eval hook) must set it: hooks run inline in eve's event pipeline, so a
+ * Convex endpoint that HANGS rather than errors would stall a trading cycle until the OS TCP
+ * timeout, and the hook makes one small call per tool result.
+ *
+ * The trading path deliberately does NOT set it. A deadline on `getRiskState` would turn a
+ * slow-but-healthy Convex into the fail-closed halt path and could block a legitimate trade,
+ * which is exactly the class of change observability work must not make. Changing that is a
+ * trading decision, not an observability one.
+ */
+export function memoryFromEnv(
+  client?: ConvexLike,
+  opts: { timeoutMs?: number } = {},
+): Memory {
   const token = process.env.CONVEX_APP_SECRET;
   if (!token) throw new Error("CONVEX_APP_SECRET is not set");
   if (client) return new Memory(client, token);
   const url = process.env.CONVEX_URL;
   if (!url) throw new Error("CONVEX_URL is not set");
-  return new Memory(new ConvexHttpClient(url) as unknown as ConvexLike, token);
+  const httpClient =
+    opts.timeoutMs === undefined
+      ? new ConvexHttpClient(url)
+      : new ConvexHttpClient(url, { fetch: timeoutFetch(opts.timeoutMs) });
+  return new Memory(httpClient as unknown as ConvexLike, token);
 }
