@@ -104,6 +104,53 @@ export default defineSchema({
     createdAt: v.number(),
   }).index("by_env_and_key", ["env", "key"]),
 
+  // ONLINE EVALS: one row per production trading-cycle TURN, written by the trace-cycle hook.
+  //
+  // The `cycles` table above is a DECISION log (what the agent concluded). This is a
+  // BEHAVIOUR log (what the agent actually did, in order) plus the verdict of the shared
+  // invariants in agent/lib/invariants.ts and of the report self-consistency check in
+  // agent/lib/report-check.ts. Without it, a production incident cannot be checked against
+  // the cycle discipline even retroactively.
+  //
+  // Keyed by (env, sessionId, turnId): a Slack follow-up is a new turn in the SAME session,
+  // and must not append its tools to the cycle's trace. `toolSequence` is bounded by the hook
+  // (a cycle makes a few dozen tool calls), so it stays far from the 1MB document limit.
+  //
+  // OBSERVER ONLY. Nothing in this table is ever read by the risk gate, sizing, or order
+  // placement; it exists to be alerted on and read by a human.
+  cycleTraces: defineTable({
+    env: v.string(),
+    sessionId: v.string(),
+    turnId: v.string(),
+    toolSequence: v.array(v.string()),
+    invariants: v.array(
+      v.object({
+        name: v.string(),
+        status: v.string(), // "pass" | "fail" | "not-applicable"
+        detail: v.optional(v.string()),
+      }),
+    ),
+    // Denormalised count of invariants with status "fail", so "did any cycle misbehave?" is a
+    // cheap read instead of a scan-and-filter over the invariants array.
+    violations: v.number(),
+    // Ground truth observed from the cycle's own tool results, kept so the report check can
+    // run at the turn boundary even when the report arrived in an earlier durable step.
+    accountValueGbp: v.optional(v.number()),
+    cashGbp: v.optional(v.number()),
+    deployedGbp: v.optional(v.number()),
+    externalGbpValues: v.optional(v.array(v.number())),
+    reportText: v.optional(v.string()), // truncated by the hook
+    reportPass: v.optional(v.boolean()),
+    reportFindings: v.optional(
+      v.array(v.object({ rule: v.string(), detail: v.string() })),
+    ),
+    startedAt: v.number(),
+    completedAt: v.optional(v.number()), // set at the turn boundary; absent means unfinished
+  })
+    .index("by_env", ["env"])
+    .index("by_env_and_session_and_turn", ["env", "sessionId", "turnId"])
+    .index("by_env_and_completedAt", ["env", "completedAt"]),
+
   // ADVISORY-ONLY holdings in a SEPARATE account the agent has no API access to and can
   // NEVER trade. Deliberately its own table: these rows must never reach the trading
   // account's equity, risk snapshot, position sizing, breakers, exits, or `trades`. One such

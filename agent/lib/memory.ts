@@ -96,6 +96,34 @@ export interface StoredExternalHolding extends ExternalHoldingRecord {
   updatedAt: number;
 }
 
+/**
+ * ONLINE EVALS. Identity of one production cycle trace: one row per cycle TURN, not per
+ * session, because a Slack follow-up is a new turn in the same session and must not append
+ * its tool calls to the cycle's behaviour log.
+ */
+export interface CycleTraceKey {
+  env: Env;
+  sessionId: string;
+  turnId: string;
+}
+
+/** A cycle trace as read back from Convex. See convex/schema.ts for the field semantics. */
+export interface StoredCycleTrace extends CycleTraceKey {
+  _id: string;
+  toolSequence: string[];
+  invariants: { name: string; status: string; detail?: string }[];
+  violations: number;
+  accountValueGbp?: number;
+  cashGbp?: number;
+  deployedGbp?: number;
+  externalGbpValues?: number[];
+  reportText?: string;
+  reportPass?: boolean;
+  reportFindings?: { rule: string; detail: string }[];
+  startedAt: number;
+  completedAt?: number;
+}
+
 export interface CronRunRecord {
   schedule: string;
   firedAt: number;
@@ -195,6 +223,46 @@ export class Memory {
     return ((await this.query("listExternalHoldings", { env })) ??
       []) as StoredExternalHolding[];
   }
+  // --- online evals: cycle traces (OBSERVER ONLY, never read by the trading path) ---
+
+  startCycleTrace(key: CycleTraceKey): Promise<unknown> {
+    return this.mutation("startCycleTrace", { ...key });
+  }
+  appendCycleTraceTool(key: CycleTraceKey, toolName: string): Promise<unknown> {
+    return this.mutation("appendCycleTraceTool", { ...key, toolName });
+  }
+  saveCycleTraceContext(
+    key: CycleTraceKey,
+    context: {
+      accountValueGbp?: number;
+      cashGbp?: number;
+      deployedGbp?: number;
+      externalGbpValues?: number[];
+      reportText?: string;
+    },
+  ): Promise<unknown> {
+    return this.mutation("saveCycleTraceContext", { ...key, ...context });
+  }
+  /** The `violations` count is derived server-side from `invariants`, so it is not sent. */
+  finishCycleTrace(
+    key: CycleTraceKey,
+    verdict: {
+      invariants: { name: string; status: string; detail?: string }[];
+      reportPass?: boolean;
+      reportFindings?: { rule: string; detail: string }[];
+    },
+  ): Promise<unknown> {
+    return this.mutation("finishCycleTrace", { ...key, ...verdict });
+  }
+  async getCycleTrace(key: CycleTraceKey): Promise<StoredCycleTrace | null> {
+    return ((await this.query("getCycleTrace", { ...key })) ??
+      null) as StoredCycleTrace | null;
+  }
+  async recentCycleTraces(env: Env, limit?: number): Promise<StoredCycleTrace[]> {
+    return ((await this.query("recentCycleTraces", { env, limit })) ??
+      []) as StoredCycleTrace[];
+  }
+
   recallRecent(
     env: Env,
     limits: {

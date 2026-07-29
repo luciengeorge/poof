@@ -1,4 +1,5 @@
-import { mutation, query } from "./_generated/server";
+import { mutation, query, type QueryCtx } from "./_generated/server";
+import type { Doc } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { assertSecret } from "./auth";
 
@@ -363,6 +364,188 @@ export const hasOrderIntent = query({
       .withIndex("by_env_and_key", (q) => q.eq("env", args.env).eq("key", args.key))
       .first();
     return existing !== null;
+  },
+});
+
+// --- online evals: cycle traces (OBSERVER ONLY) ---
+//
+// Written by agent/hooks/trace-cycle.ts to record what a production cycle actually DID (its
+// ordered tool sequence) and how that behaviour graded against the shared invariants and the
+// report self-consistency check. Read only by a human or by the list query below: never by the
+// risk gate, position sizing, or order placement.
+//
+// Every row is keyed by (env, sessionId, turnId). `startCycleTrace` is the only function that
+// creates a row, so the appends below are no-ops on a turn that was never marked as a cycle
+// (an ad-hoc Slack question), which is what keeps chat turns out of this table.
+
+/** Hard cap on the recorded sequence: a runaway turn must not grow the document without end. */
+const MAX_TOOL_SEQUENCE = 200;
+/** Hard cap on the stored report text, well under Convex's 1MB document limit. */
+const MAX_REPORT_TEXT = 8_000;
+
+async function findTrace(
+  ctx: QueryCtx,
+  env: string,
+  sessionId: string,
+  turnId: string,
+): Promise<Doc<"cycleTraces"> | null> {
+  return await ctx.db
+    .query("cycleTraces")
+    .withIndex("by_env_and_session_and_turn", (q) =>
+      q.eq("env", env).eq("sessionId", sessionId).eq("turnId", turnId),
+    )
+    .unique();
+}
+
+/** Open a trace for one cycle turn. Idempotent: a step re-run must not create a second row. */
+export const startCycleTrace = mutation({
+  args: {
+    token: v.string(),
+    env: v.string(),
+    sessionId: v.string(),
+    turnId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    assertSecret(args.token);
+    const { env, sessionId, turnId } = args;
+    const existing = await findTrace(ctx, env, sessionId, turnId);
+    if (existing) return existing._id;
+    return await ctx.db.insert("cycleTraces", {
+      env,
+      sessionId,
+      turnId,
+      toolSequence: [],
+      invariants: [],
+      violations: 0,
+      startedAt: Date.now(),
+    });
+  },
+});
+
+/**
+ * Append one tool/subagent name to the trace, atomically (the read-modify-write happens inside
+ * one Convex transaction, so tool results that complete concurrently cannot lose each other).
+ * Returns null when this turn has no trace, i.e. it is not a cycle.
+ */
+export const appendCycleTraceTool = mutation({
+  args: {
+    token: v.string(),
+    env: v.string(),
+    sessionId: v.string(),
+    turnId: v.string(),
+    toolName: v.string(),
+  },
+  handler: async (ctx, args) => {
+    assertSecret(args.token);
+    const existing = await findTrace(ctx, args.env, args.sessionId, args.turnId);
+    if (!existing) return null;
+    if (existing.toolSequence.length >= MAX_TOOL_SEQUENCE) return existing._id;
+    await ctx.db.patch("cycleTraces", existing._id, {
+      toolSequence: [...existing.toolSequence, args.toolName],
+    });
+    return existing._id;
+  },
+});
+
+/**
+ * Record the cycle's observed ground truth and/or its latest report candidate. Every field is
+ * optional so one caller can save whichever it just saw. Returns null when there is no trace.
+ */
+export const saveCycleTraceContext = mutation({
+  args: {
+    token: v.string(),
+    env: v.string(),
+    sessionId: v.string(),
+    turnId: v.string(),
+    accountValueGbp: v.optional(v.number()),
+    cashGbp: v.optional(v.number()),
+    deployedGbp: v.optional(v.number()),
+    externalGbpValues: v.optional(v.array(v.number())),
+    reportText: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    assertSecret(args.token);
+    const { token, env, sessionId, turnId, ...rest } = args;
+    const existing = await findTrace(ctx, env, sessionId, turnId);
+    if (!existing) return null;
+    // Reject non-finite money before it is stored: a NaN account value would silently
+    // disable the report check rather than failing visibly.
+    const patch: Record<string, unknown> = {};
+    for (const key of ["accountValueGbp", "cashGbp", "deployedGbp"] as const) {
+      const value = rest[key];
+      if (value !== undefined && Number.isFinite(value)) patch[key] = value;
+    }
+    if (rest.externalGbpValues !== undefined) {
+      patch.externalGbpValues = rest.externalGbpValues.filter((n) => Number.isFinite(n));
+    }
+    if (rest.reportText !== undefined) {
+      patch.reportText = rest.reportText.slice(0, MAX_REPORT_TEXT);
+    }
+    if (Object.keys(patch).length === 0) return existing._id;
+    await ctx.db.patch("cycleTraces", existing._id, patch);
+    return existing._id;
+  },
+});
+
+/** Close the trace with the invariant verdict and the report-check verdict. */
+export const finishCycleTrace = mutation({
+  args: {
+    token: v.string(),
+    env: v.string(),
+    sessionId: v.string(),
+    turnId: v.string(),
+    invariants: v.array(
+      v.object({
+        name: v.string(),
+        status: v.string(),
+        detail: v.optional(v.string()),
+      }),
+    ),
+    reportPass: v.optional(v.boolean()),
+    reportFindings: v.optional(
+      v.array(v.object({ rule: v.string(), detail: v.string() })),
+    ),
+  },
+  handler: async (ctx, args) => {
+    assertSecret(args.token);
+    const { token, env, sessionId, turnId, ...rest } = args;
+    const existing = await findTrace(ctx, env, sessionId, turnId);
+    if (!existing) return null;
+    await ctx.db.patch("cycleTraces", existing._id, {
+      ...rest,
+      // Derived here, never accepted from the caller, so the denormalised counter cannot
+      // disagree with the array it summarises.
+      violations: rest.invariants.filter((i) => i.status === "fail").length,
+      completedAt: Date.now(),
+    });
+    return existing._id;
+  },
+});
+
+export const getCycleTrace = query({
+  args: {
+    token: v.string(),
+    env: v.string(),
+    sessionId: v.string(),
+    turnId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    assertSecret(args.token);
+    return await findTrace(ctx, args.env, args.sessionId, args.turnId);
+  },
+});
+
+/** Most recently finished traces first. Bounded; 50 max, so the read stays cheap as we grow. */
+export const recentCycleTraces = query({
+  args: { token: v.string(), env: v.string(), limit: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    assertSecret(args.token);
+    const limit = Math.min(Math.max(args.limit ?? 10, 1), 50);
+    return await ctx.db
+      .query("cycleTraces")
+      .withIndex("by_env_and_completedAt", (q) => q.eq("env", args.env))
+      .order("desc")
+      .take(limit);
   },
 });
 
