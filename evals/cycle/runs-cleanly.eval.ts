@@ -3,7 +3,7 @@ import { defineEval } from "eve/evals";
 // Behavioral guardrail for the scheduled trading cycle. Runs in DRY_RUN + demo
 // (see the eval workflow / local defaults), so no real orders are placed.
 // Guards: (1) the agent runs autonomously and never parks on a HITL question
-// (t.succeeded() fails if the run parked) — the regression that stalled Slack threads;
+// (t.succeeded() fails if the run parked): the regression that stalled Slack threads;
 // (2) it follows the cycle discipline: recall -> manage exits -> review performance,
 // before any trading.
 export default defineEval({
