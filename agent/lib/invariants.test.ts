@@ -129,7 +129,7 @@ test("single-submit: not-applicable when nothing was submitted", () => {
 
 // --- vacuity tracking: the whole point of the not-applicable status ---
 
-test("a no-trade cycle is green but reports THREE vacuous guards, not three verified ones", () => {
+test("a no-trade cycle is green but reports FOUR vacuous guards, not four verified ones", () => {
   const results = checkInvariants([
     "recall_memory",
     "manage_positions",
@@ -161,6 +161,62 @@ test("violatedInvariants counts only failures, never vacuous ones", () => {
     "cycle-recorded",
   ]);
   assert.deepEqual(vacuousInvariants(results), []);
+});
+
+// --- truncation: an UNKNOWN must never masquerade as a violation ---
+
+test("a truncated trace turns absence-based failures into not-applicable, not fail", () => {
+  // record_cycle runs at the very end of a cycle, so it is exactly the tool a cap would drop.
+  const truncated = checkInvariants(["submit_orders"], { truncated: true });
+  assert.deepEqual(violatedInvariants(truncated), []);
+  assert.deepEqual(vacuousInvariants(truncated).map((r) => r.name), [
+    "earnings-before-buy",
+    "red-team-before-buy",
+    "exits-before-entries",
+    "cycle-recorded",
+  ]);
+  // The same sequence WITHOUT truncation is four real violations: truncation is the only
+  // difference, so a cap can no longer silently change a verdict into a false alert.
+  assert.equal(violatedInvariants(checkInvariants(["submit_orders"])).length, 4);
+});
+
+test("a truncated trace still fails an OBSERVED ordering violation", () => {
+  // Positive evidence, not absence: the earnings check demonstrably ran after the submit. A
+  // truncated tail cannot undo something already recorded, so this must stay a violation.
+  const results = checkInvariants(["submit_orders", "get_earnings_calendar"], {
+    truncated: true,
+  });
+  assert.equal(status(results, "earnings-before-buy"), "fail");
+});
+
+test("a truncated trace still fails an OBSERVED double submit", () => {
+  const results = checkInvariants(["submit_orders", "submit_orders"], { truncated: true });
+  assert.equal(status(results, "single-submit"), "fail");
+});
+
+test("a truncated trace still passes what it positively observed", () => {
+  const results = checkInvariants(
+    ["manage_positions", "get_earnings_calendar", "red_team", "submit_orders", "record_cycle"],
+    { truncated: true },
+  );
+  for (const r of results) {
+    assert.equal(r.status, "pass", `${r.name}: ${r.detail ?? ""}`);
+  }
+});
+
+test("every truncation-degraded result SAYS it was truncated, so it is never silent", () => {
+  const truncated = checkInvariants([], { truncated: true });
+  for (const r of vacuousInvariants(truncated)) {
+    assert.match(r.detail ?? "", /TRUNCATED/);
+  }
+});
+
+test("truncated defaults to false, so existing callers are unaffected", () => {
+  assert.deepEqual(checkInvariants(["submit_orders"]), checkInvariants(["submit_orders"], {}));
+  assert.deepEqual(
+    checkInvariants(["submit_orders"]),
+    checkInvariants(["submit_orders"], { truncated: false }),
+  );
 });
 
 // --- input hygiene ---

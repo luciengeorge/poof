@@ -187,8 +187,13 @@ test("cycle-trace methods carry the token and the (env, session, turn) key", asy
   await m.startCycleTrace(key);
   assert.deepEqual(calls[0], { kind: "mutation", args: { token: TOKEN, ...key } });
 
-  await m.appendCycleTraceTool(key, "submit_orders");
-  assert.deepEqual(calls[1].args, { token: TOKEN, ...key, toolName: "submit_orders" });
+  await m.appendCycleTraceTool(key, "submit_orders", "call_7");
+  assert.deepEqual(calls[1].args, {
+    token: TOKEN,
+    ...key,
+    toolName: "submit_orders",
+    callId: "call_7", // the idempotency key must reach Convex, or dedupe cannot happen
+  });
 
   await m.saveCycleTraceContext(key, { accountValueGbp: 248.16, reportText: "£248.16" });
   assert.deepEqual(calls[2].args, {

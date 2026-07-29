@@ -1,5 +1,6 @@
 import { ConvexHttpClient } from "convex/browser";
 import { anyApi, type FunctionReference } from "convex/server";
+import { timeoutFetch } from "./fetch-timeout.ts";
 
 /** Minimal Convex client surface the memory layer needs (injectable for tests). */
 export interface ConvexLike {
@@ -111,6 +112,8 @@ export interface CycleTraceKey {
 export interface StoredCycleTrace extends CycleTraceKey {
   _id: string;
   toolSequence: string[];
+  callIds: string[];
+  truncated?: boolean;
   invariants: { name: string; status: string; detail?: string }[];
   violations: number;
   accountValueGbp?: number;
@@ -228,8 +231,13 @@ export class Memory {
   startCycleTrace(key: CycleTraceKey): Promise<unknown> {
     return this.mutation("startCycleTrace", { ...key });
   }
-  appendCycleTraceTool(key: CycleTraceKey, toolName: string): Promise<unknown> {
-    return this.mutation("appendCycleTraceTool", { ...key, toolName });
+  /** `callId` is the idempotency key: a re-delivered action result must not double-append. */
+  appendCycleTraceTool(
+    key: CycleTraceKey,
+    toolName: string,
+    callId: string,
+  ): Promise<unknown> {
+    return this.mutation("appendCycleTraceTool", { ...key, toolName, callId });
   }
   saveCycleTraceContext(
     key: CycleTraceKey,
@@ -275,11 +283,30 @@ export class Memory {
   }
 }
 
-export function memoryFromEnv(client?: ConvexLike): Memory {
+/**
+ * `timeoutMs` bounds every HTTP call this client makes, and is OPT-IN.
+ *
+ * Observers (the online-eval hook) must set it: hooks run inline in eve's event pipeline, so a
+ * Convex endpoint that HANGS rather than errors would stall a trading cycle until the OS TCP
+ * timeout, and the hook makes one small call per tool result.
+ *
+ * The trading path deliberately does NOT set it. A deadline on `getRiskState` would turn a
+ * slow-but-healthy Convex into the fail-closed halt path and could block a legitimate trade,
+ * which is exactly the class of change observability work must not make. Changing that is a
+ * trading decision, not an observability one.
+ */
+export function memoryFromEnv(
+  client?: ConvexLike,
+  opts: { timeoutMs?: number } = {},
+): Memory {
   const token = process.env.CONVEX_APP_SECRET;
   if (!token) throw new Error("CONVEX_APP_SECRET is not set");
   if (client) return new Memory(client, token);
   const url = process.env.CONVEX_URL;
   if (!url) throw new Error("CONVEX_URL is not set");
-  return new Memory(new ConvexHttpClient(url) as unknown as ConvexLike, token);
+  const httpClient =
+    opts.timeoutMs === undefined
+      ? new ConvexHttpClient(url)
+      : new ConvexHttpClient(url, { fetch: timeoutFetch(opts.timeoutMs) });
+  return new Memory(httpClient as unknown as ConvexLike, token);
 }

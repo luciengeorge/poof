@@ -43,6 +43,20 @@ export const INVARIANT_NAMES = [
 
 export type InvariantName = (typeof INVARIANT_NAMES)[number];
 
+/** Options describing how complete the recorded sequence is. */
+export interface CheckOptions {
+  /**
+   * The trace hit its recording cap, so tools beyond it are missing. An ABSENCE can then no
+   * longer be distinguished from "not recorded", and an unknown must never masquerade as a
+   * violation, so absence-based conclusions degrade to "not-applicable".
+   */
+  truncated?: boolean;
+}
+
+const TRUNCATED_NOTE =
+  "the recorded tool sequence was TRUNCATED at its cap, so absence cannot be distinguished " +
+  "from not-recorded; treated as not-applicable rather than a violation";
+
 /**
  * "If the cycle submitted an order, `prerequisite` must have run strictly earlier."
  *
@@ -53,22 +67,33 @@ function prerequisiteBeforeSubmit(
   name: InvariantName,
   prerequisite: string,
   sequence: readonly string[],
+  truncated: boolean,
 ): InvariantResult {
   const submitAt = sequence.indexOf(SUBMIT_ORDERS);
   if (submitAt === -1) {
     return {
       name,
       status: "not-applicable",
-      detail: `no ${SUBMIT_ORDERS} in this cycle, so the guard was never exercised`,
+      detail: truncated
+        ? `no ${SUBMIT_ORDERS} recorded, but ${TRUNCATED_NOTE}`
+        : `no ${SUBMIT_ORDERS} in this cycle, so the guard was never exercised`,
     };
   }
   const prerequisiteAt = sequence.indexOf(prerequisite);
   if (prerequisiteAt === -1) {
-    return {
-      name,
-      status: "fail",
-      detail: `${SUBMIT_ORDERS} ran at step ${submitAt} but ${prerequisite} never ran`,
-    };
+    // Ordering violations below are POSITIVE evidence and still fail even when truncated; this
+    // one rests purely on absence, so truncation makes it unknowable.
+    return truncated
+      ? {
+          name,
+          status: "not-applicable",
+          detail: `${prerequisite} was not recorded before ${SUBMIT_ORDERS}, but ${TRUNCATED_NOTE}`,
+        }
+      : {
+          name,
+          status: "fail",
+          detail: `${SUBMIT_ORDERS} ran at step ${submitAt} but ${prerequisite} never ran`,
+        };
   }
   if (prerequisiteAt > submitAt) {
     return {
@@ -86,30 +111,43 @@ function prerequisiteBeforeSubmit(
  * `toolSequence` is invocation order, earliest first, and may contain any tool or subagent
  * name; unrecognised names are simply not referenced by any invariant.
  */
-export function checkInvariants(sequence: readonly string[]): InvariantResult[] {
+export function checkInvariants(
+  sequence: readonly string[],
+  opts: CheckOptions = {},
+): InvariantResult[] {
+  const truncated = opts.truncated === true;
   const submitCount = sequence.filter((name) => name === SUBMIT_ORDERS).length;
 
   return [
-    prerequisiteBeforeSubmit("earnings-before-buy", "get_earnings_calendar", sequence),
-    prerequisiteBeforeSubmit("red-team-before-buy", "red_team", sequence),
-    prerequisiteBeforeSubmit("exits-before-entries", "manage_positions", sequence),
-    // Unconditional: every cycle must leave a decision-log row, trade or no trade. This one
-    // is never vacuous, which is exactly why it is the invariant that catches a cycle that
-    // died silently part-way through.
+    prerequisiteBeforeSubmit("earnings-before-buy", "get_earnings_calendar", sequence, truncated),
+    prerequisiteBeforeSubmit("red-team-before-buy", "red_team", sequence, truncated),
+    prerequisiteBeforeSubmit("exits-before-entries", "manage_positions", sequence, truncated),
+    // Unconditional: every cycle must leave a decision-log row, trade or no trade. Normally
+    // never vacuous, which is exactly why it is the invariant that catches a cycle that died
+    // silently part-way through. A truncated trace is the ONE case where its absence proves
+    // nothing, because record_cycle runs at the very end and may sit beyond the cap.
     sequence.includes("record_cycle")
       ? { name: "cycle-recorded" as const, status: "pass" as const }
-      : {
-          name: "cycle-recorded" as const,
-          status: "fail" as const,
-          detail: "record_cycle never ran, so this cycle left no decision-log row",
-        },
+      : truncated
+        ? {
+            name: "cycle-recorded" as const,
+            status: "not-applicable" as const,
+            detail: `record_cycle was not recorded, but ${TRUNCATED_NOTE}`,
+          }
+        : {
+            name: "cycle-recorded" as const,
+            status: "fail" as const,
+            detail: "record_cycle never ran, so this cycle left no decision-log row",
+          },
     // One cycle places one batch of orders. A second submit means the agent (or a step
     // re-run) is placing orders twice off one decision.
     submitCount === 0
       ? {
           name: "single-submit" as const,
           status: "not-applicable" as const,
-          detail: `no ${SUBMIT_ORDERS} in this cycle, so the guard was never exercised`,
+          detail: truncated
+            ? `no ${SUBMIT_ORDERS} recorded, but ${TRUNCATED_NOTE}`
+            : `no ${SUBMIT_ORDERS} in this cycle, so the guard was never exercised`,
         }
       : submitCount === 1
         ? { name: "single-submit" as const, status: "pass" as const }

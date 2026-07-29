@@ -30,6 +30,21 @@ export function actionResultName(result: unknown): string | null {
   return null;
 }
 
+/**
+ * The `callId` behind one `action.result` event, or "" when it is missing.
+ *
+ * IDEMPOTENCY KEY. A turn is a durable workflow: if a crash lands between an event being
+ * durably recorded and its delivery, the same `action.result` can fire again on resume. Without
+ * a key, that double-appends and can false-trip `single-submit`, and a violation alert nobody
+ * believes is worse than no alert at all. Empty means "cannot be deduplicated", and the caller
+ * appends anyway rather than dropping a real tool call.
+ */
+export function actionResultCallId(result: unknown): string {
+  if (typeof result !== "object" || result === null) return "";
+  const { callId } = result as { callId?: unknown };
+  return typeof callId === "string" ? callId : "";
+}
+
 /** Minimal shape of one runtime stream event, so this module does not depend on eve's union. */
 export type EventLike = { type: string; data?: unknown };
 

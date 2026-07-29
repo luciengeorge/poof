@@ -2,6 +2,7 @@ import { mutation, query, type QueryCtx } from "./_generated/server";
 import type { Doc } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { assertSecret } from "./auth";
+import { decideAppend, MAX_TOOL_SEQUENCE } from "./traceAppend";
 
 // --- mutations (writes) ---
 
@@ -378,8 +379,6 @@ export const hasOrderIntent = query({
 // creates a row, so the appends below are no-ops on a turn that was never marked as a cycle
 // (an ad-hoc Slack question), which is what keeps chat turns out of this table.
 
-/** Hard cap on the recorded sequence: a runaway turn must not grow the document without end. */
-const MAX_TOOL_SEQUENCE = 200;
 /** Hard cap on the stored report text, well under Convex's 1MB document limit. */
 const MAX_REPORT_TEXT = 8_000;
 
@@ -415,6 +414,7 @@ export const startCycleTrace = mutation({
       sessionId,
       turnId,
       toolSequence: [],
+      callIds: [],
       invariants: [],
       violations: 0,
       startedAt: Date.now(),
@@ -426,6 +426,13 @@ export const startCycleTrace = mutation({
  * Append one tool/subagent name to the trace, atomically (the read-modify-write happens inside
  * one Convex transaction, so tool results that complete concurrently cannot lose each other).
  * Returns null when this turn has no trace, i.e. it is not a cycle.
+ *
+ * IDEMPOTENT on `callId`. A turn is a durable workflow that resumes from its last completed
+ * step, so an `action.result` already recorded before a crash can be re-delivered on resume.
+ * Appending it twice would put a second `submit_orders` in the sequence and false-trip the
+ * `single-submit` invariant, and a violation alert nobody believes is worse than no alert. An
+ * empty `callId` cannot be deduplicated, so it is appended rather than dropped: losing a real
+ * tool call would itself be a false verdict.
  */
 export const appendCycleTraceTool = mutation({
   args: {
@@ -434,14 +441,31 @@ export const appendCycleTraceTool = mutation({
     sessionId: v.string(),
     turnId: v.string(),
     toolName: v.string(),
+    callId: v.string(),
   },
   handler: async (ctx, args) => {
     assertSecret(args.token);
     const existing = await findTrace(ctx, args.env, args.sessionId, args.turnId);
     if (!existing) return null;
-    if (existing.toolSequence.length >= MAX_TOOL_SEQUENCE) return existing._id;
+    const decision = decideAppend(existing, args.toolName, args.callId);
+    if (decision.kind === "duplicate") return existing._id;
+    if (decision.kind === "truncated") {
+      // Mark the trace LOUDLY rather than silently dropping tools: checkInvariants downgrades
+      // absence-based conclusions on a truncated trace, so a cap can never turn an unknown
+      // into a reported violation.
+      if (existing.truncated !== true) {
+        console.warn(
+          `[online-eval] cycle trace ${args.sessionId}/${args.turnId} hit the ` +
+            `${MAX_TOOL_SEQUENCE}-tool cap; later tools are NOT recorded and absence-based ` +
+            "invariants will be reported as not-applicable",
+        );
+        await ctx.db.patch("cycleTraces", existing._id, { truncated: true });
+      }
+      return existing._id;
+    }
     await ctx.db.patch("cycleTraces", existing._id, {
-      toolSequence: [...existing.toolSequence, args.toolName],
+      toolSequence: decision.toolSequence,
+      callIds: decision.callIds,
     });
     return existing._id;
   },

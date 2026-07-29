@@ -1,6 +1,7 @@
 import { defineHook } from "eve/hooks";
 import { alert } from "../lib/alert.ts";
 import {
+  actionResultCallId,
   actionResultName,
   externalGbpValuesFrom,
   isCycleTurnMessage,
@@ -14,7 +15,8 @@ import {
   violatedInvariants,
 } from "../lib/invariants.ts";
 import { checkReportNumbers, summarizeFindings } from "../lib/report-check.ts";
-import { memoryFromEnv, type CycleTraceKey } from "../lib/memory.ts";
+import { memoryFromEnv, type Memory, type CycleTraceKey } from "../lib/memory.ts";
+import { OBSERVER_FETCH_TIMEOUT_MS } from "../lib/fetch-timeout.ts";
 import { tradingEnv } from "../lib/risk-runtime.ts";
 
 /**
@@ -58,7 +60,20 @@ import { tradingEnv } from "../lib/risk-runtime.ts";
 
 function key(sessionId: string, turnId: unknown): CycleTraceKey | null {
   if (typeof turnId !== "string" || turnId.length === 0) return null;
+  // Tracing needs durable storage; without the Convex credentials there is nowhere to record
+  // (CI and eval runs), and retrying per event would just warn on every tool call.
+  if (!process.env.CONVEX_APP_SECRET || !process.env.CONVEX_URL) return null;
   return { env: tradingEnv(), sessionId, turnId };
+}
+
+/**
+ * Convex client for this hook, with every HTTP call TIME-BOUNDED. Hooks run inline in eve's
+ * event pipeline, so a Convex endpoint that hangs rather than errors would stall the cycle
+ * until the OS TCP timeout, and this hook makes one small call per tool result. The trading
+ * path deliberately keeps its untimed client (see memoryFromEnv).
+ */
+function observerMemory(): Memory {
+  return memoryFromEnv(undefined, { timeoutMs: OBSERVER_FETCH_TIMEOUT_MS });
 }
 
 export default defineHook({
@@ -69,7 +84,7 @@ export default defineHook({
         if (!isCycleTurnMessage(event.data?.message)) return;
         const traceKey = key(ctx.session.id, event.data?.turnId);
         if (!traceKey) return;
-        await memoryFromEnv().startCycleTrace(traceKey);
+        await observerMemory().startCycleTrace(traceKey);
         // Positive signal on the happy path: if this line never appears in the logs and
         // cycleTraces stays empty, the online evals are not running at all.
         console.log(
@@ -90,8 +105,10 @@ export default defineHook({
         const name = actionResultName(result);
         if (!name) return;
 
-        const memory = memoryFromEnv();
-        await memory.appendCycleTraceTool(traceKey, name);
+        const memory = observerMemory();
+        // The callId makes the append idempotent: a durable turn can re-deliver this very event
+        // after a crash-and-resume, and a double-append would false-trip `single-submit`.
+        await memory.appendCycleTraceTool(traceKey, name, actionResultCallId(result));
 
         // Ground truth for the report check, taken from results the cycle already computed:
         // no extra broker or FX calls, so observing cannot perturb what is observed.
@@ -119,7 +136,7 @@ export default defineHook({
         if (!traceKey) return;
         const text = event.data?.message;
         if (!looksLikeReport(text)) return;
-        await memoryFromEnv().saveCycleTraceContext(traceKey, { reportText: String(text) });
+        await observerMemory().saveCycleTraceContext(traceKey, { reportText: String(text) });
       } catch (err) {
         console.warn("[online-eval] recording the report text failed (non-fatal):", err);
       }
@@ -130,13 +147,23 @@ export default defineHook({
       try {
         const traceKey = key(ctx.session.id, event.data?.turnId);
         if (!traceKey) return;
-        const memory = memoryFromEnv();
+        const memory = observerMemory();
         const trace = await memory.getCycleTrace(traceKey);
         if (!trace) return; // not a cycle turn
 
-        const invariants = checkInvariants(trace.toolSequence);
+        // A truncated trace is missing tools, so checkInvariants downgrades absence-based
+        // conclusions to not-applicable: a recording cap must never produce a false violation.
+        const truncated = trace.truncated === true;
+        const invariants = checkInvariants(trace.toolSequence, { truncated });
         const violations = violatedInvariants(invariants);
         const vacuous = vacuousInvariants(invariants);
+        if (truncated) {
+          console.warn(
+            `[online-eval] cycle ${traceKey.sessionId}/${traceKey.turnId} trace was TRUNCATED ` +
+              `at ${trace.toolSequence.length} tools; absence-based invariants are reported as ` +
+              "not-applicable rather than violated",
+          );
+        }
 
         // Only gradeable with both halves: the numbers the code computed and the text the agent
         // wrote. A missing half is reported, not silently treated as a pass.

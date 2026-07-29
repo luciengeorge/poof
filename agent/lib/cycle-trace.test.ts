@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  actionResultCallId,
   actionResultName,
   externalGbpValuesFrom,
   isCycleTurnMessage,
@@ -32,6 +33,27 @@ test("ignores a load-skill result, which is not part of the cycle discipline", (
 test("returns null for junk rather than throwing", () => {
   for (const junk of [null, undefined, 42, "submit_orders", {}, { toolName: 7 }]) {
     assert.equal(actionResultName(junk), null);
+  }
+});
+
+// --- the idempotency key ---
+
+test("reads the callId from a tool result and from a subagent result", () => {
+  assert.equal(
+    actionResultCallId({ kind: "tool-result", toolName: "submit_orders", callId: "call_7" }),
+    "call_7",
+  );
+  assert.equal(
+    actionResultCallId({ kind: "subagent-result", subagentName: "red_team", callId: "call_8" }),
+    "call_8",
+  );
+});
+
+test("a missing or non-string callId degrades to empty, never to a wrong key", () => {
+  // Empty means "cannot deduplicate": the caller appends anyway rather than dropping a real
+  // tool call, which would be a false invariant violation of a different kind.
+  for (const junk of [null, undefined, 42, {}, { callId: 7 }, { callId: null }]) {
+    assert.equal(actionResultCallId(junk), "");
   }
 });
 

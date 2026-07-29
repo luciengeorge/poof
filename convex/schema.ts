@@ -123,6 +123,14 @@ export default defineSchema({
     sessionId: v.string(),
     turnId: v.string(),
     toolSequence: v.array(v.string()),
+    // Idempotency keys for the appends above, one per deduplicable tool result. A durable turn
+    // can re-deliver an `action.result` after a crash-and-resume, and a double-append could
+    // false-trip `single-submit`; a false violation alert erodes trust in the whole system.
+    callIds: v.array(v.string()),
+    // The recording cap was hit, so tools beyond it are missing. Set loudly rather than
+    // silently, because `checkInvariants` then downgrades absence-based conclusions to
+    // "not-applicable": a cap must never turn an unknown into a reported violation.
+    truncated: v.optional(v.boolean()),
     invariants: v.array(
       v.object({
         name: v.string(),
