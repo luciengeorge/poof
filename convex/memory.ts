@@ -589,8 +589,15 @@ export const saveReportScore = mutation({
       throw new Error('status must be "judged" or "unjudged"');
     }
     const existing = await findTrace(ctx, env, sessionId, turnId);
-    if (!existing) return null;
-    if (existing.judgedAt !== undefined) return existing._id; // already judged: never re-judge
+    // The outcome is returned rather than just an id, because the caller must be able to tell
+    // "persisted" from "skipped" and "no such cycle": it only alerts on a verdict that was
+    // actually stored, and alerting on one that was not would be a claim about nothing.
+    if (!existing) return { outcome: "no-such-trace" as const };
+    if (existing.judgedAt !== undefined) {
+      // Already judged: never re-judge, and never re-alert. The pass that stored the original
+      // verdict already raised whatever alert it deserved.
+      return { outcome: "already-judged" as const, id: existing._id };
+    }
 
     const dimensions = {
       grounding: args.grounding,
@@ -634,7 +641,7 @@ export const saveReportScore = mutation({
       },
       judgedAt: Date.now(),
     });
-    return existing._id;
+    return { outcome: "stored" as const, id: existing._id };
   },
 });
 

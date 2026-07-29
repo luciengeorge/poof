@@ -3,7 +3,7 @@ import { z } from "zod";
 import { alert } from "../lib/alert.ts";
 import { memoryFromEnv } from "../lib/memory.ts";
 import {
-  judgeAlertReasons,
+  alertReasonsForStoredVerdict,
   judgeThresholdsFromEnv,
   parseJudgeVerdict,
   summarizeJudgeVerdict,
@@ -58,12 +58,21 @@ export default defineTool({
     const summary = summarizeJudgeVerdict(parsed);
 
     const key = { env: tradingEnv(), sessionId, turnId };
-    const stored = await memoryFromEnv().saveReportScore(
+    const result = await memoryFromEnv().saveReportScore(
       key,
       parsed.status === "judged"
         ? { status: "judged", ...parsed.score }
         : { status: "unjudged", findings: [], warning: parsed.warning },
     );
+    const { outcome } = result;
+    if (outcome !== "stored") {
+      console.warn(
+        `[online-eval] verdict for cycle ${sessionId}/${turnId} was NOT stored (${outcome}); ` +
+          (outcome === "already-judged"
+            ? "an earlier pass already judged this cycle and already alerted if it needed to"
+            : "no trace row exists for this cycle, so there was nowhere to record it"),
+      );
+    }
 
     if (parsed.status !== "judged") {
       // A WARNING, not an alert: a judge that failed to answer is an observability problem, not
@@ -74,10 +83,12 @@ export default defineTool({
         `[online-eval] report for cycle ${sessionId}/${turnId} recorded as UNJUDGED: ` +
           parsed.warning,
       );
-      return { status: "unjudged", summary, alerted: false, recorded: stored !== null };
+      return { status: "unjudged", summary, alerted: false, outcome };
     }
 
-    const reasons = judgeAlertReasons(parsed, judgeThresholdsFromEnv());
+    // The gate on `outcome` lives inside this pure function, so "never alert on a verdict that
+    // was not persisted" is one tested rule rather than a conjunction repeated at each use.
+    const reasons = alertReasonsForStoredVerdict(parsed, outcome, judgeThresholdsFromEnv());
     console.log(`[online-eval] report judged for cycle ${sessionId}/${turnId}: ${summary}`);
     if (reasons.length > 0) {
       await alert(
@@ -94,7 +105,7 @@ export default defineTool({
       scores: parsed.score,
       alerted: reasons.length > 0,
       alertReasons: reasons,
-      recorded: stored !== null,
+      outcome,
     };
   },
 });

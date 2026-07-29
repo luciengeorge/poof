@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   DEFAULT_JUDGE_THRESHOLDS,
   JUDGE_DIMENSIONS,
+  alertReasonsForStoredVerdict,
   MAX_FINDINGS,
   MAX_FINDING_CHARS,
   judgeAlertReasons,
@@ -189,6 +190,19 @@ test("an unjudged verdict is a WARNING, not an alert", () => {
   // A judge that failed to answer is an observability problem, not a report defect. It is
   // surfaced in the weekly eval-health section instead of paging on a formatting failure.
   assert.deepEqual(judgeAlertReasons(parseJudgeVerdict("garbage")), []);
+});
+
+test("a verdict that was NOT persisted never alerts", () => {
+  // Alerting on a score that is not in the database points a human at a record they cannot look
+  // at, and on already-judged would double-page on a cycle an earlier pass already handled.
+  const bad = parseJudgeVerdict({ ...GOOD, grounding: 1, overall: 1 });
+  assert.equal(alertReasonsForStoredVerdict(bad, "stored").length, 2);
+  assert.deepEqual(alertReasonsForStoredVerdict(bad, "already-judged"), []);
+  assert.deepEqual(alertReasonsForStoredVerdict(bad, "no-such-trace"), []);
+});
+
+test("a stored but healthy verdict still does not alert", () => {
+  assert.deepEqual(alertReasonsForStoredVerdict(parseJudgeVerdict(GOOD), "stored"), []);
 });
 
 test("thresholds are configurable in both directions", () => {

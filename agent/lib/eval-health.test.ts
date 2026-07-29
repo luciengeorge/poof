@@ -7,6 +7,7 @@ import {
   aggregateEvalHealth,
   formatEvalHealth,
   invariantHealthByName,
+  windowCoverage,
   withinWindow,
   type EvalHealthTrace,
 } from "./eval-health.ts";
@@ -348,6 +349,57 @@ test("an unfinished trace is placed in the window by startedAt, never dropped fo
     withinWindow([{ ...unfinished, startedAt: now - 30 * DAY }], now).length,
     0,
   );
+});
+
+// --- the scan cap must never silently shrink the reported window ---
+
+test("a window fully covered by the scan reports no coverage caveat", () => {
+  const now = T0 + 10 * DAY;
+  // Fewer rows came back than the cap, so the cap did not decide anything.
+  const coverage = windowCoverage(12, 50, now - 6 * DAY, now, 7);
+  assert.equal(coverage.truncatedByScanLimit, false);
+  const text = formatEvalHealth(aggregateEvalHealth(cycles(5), { coverage })).join("\n");
+  assert.doesNotMatch(text, /scan cap/i);
+});
+
+test("THE SILENT TRUNCATION: a window wider than the scan can cover says so, and by how much", () => {
+  // 90 requested days against a 50-trace cap whose oldest row is only 9 days back: the data
+  // stops well short of the question asked. Reporting the aggregate as if it covered 90 days
+  // would change the conclusion (a violation 40 days ago would simply be invisible).
+  const now = T0 + 100 * DAY;
+  const coverage = windowCoverage(50, 50, now - 9 * DAY, now, 90);
+  assert.equal(coverage.truncatedByScanLimit, true);
+  assert.equal(coverage.requestedDays, 90);
+  assert.equal(coverage.coveredDays, 9);
+  const text = formatEvalHealth(aggregateEvalHealth(cycles(5), { coverage })).join("\n");
+  assert.match(text, /scan cap/i);
+  assert.match(text, /90/);
+  assert.match(text, /9/);
+  // And it must not be phrased as though the full window were covered.
+  assert.match(text, /does NOT cover the full|only the last/i);
+});
+
+test("hitting the cap with the oldest row still older than the window is NOT truncation", () => {
+  // The cap was reached, but the data already reaches past the window start, so the window is
+  // fully covered and there is nothing to caveat.
+  const now = T0 + 100 * DAY;
+  const coverage = windowCoverage(50, 50, now - 20 * DAY, now, 7);
+  assert.equal(coverage.truncatedByScanLimit, false);
+});
+
+test("an empty scan reports no coverage caveat, because the empty window already says it", () => {
+  const now = T0 + 10 * DAY;
+  const coverage = windowCoverage(0, 50, undefined, now, 90);
+  assert.equal(coverage.truncatedByScanLimit, false);
+  assert.match(formatEvalHealth(aggregateEvalHealth([], { coverage })).join("\n"), /no completed cycles/i);
+});
+
+test("coverage is carried on the aggregate so a caller can assert on it, not just read prose", () => {
+  const now = T0 + 100 * DAY;
+  const coverage = windowCoverage(50, 50, now - 9 * DAY, now, 90);
+  assert.deepEqual(aggregateEvalHealth(cycles(5), { coverage }).coverage, coverage);
+  // Absent by default, so existing callers are unaffected.
+  assert.equal(aggregateEvalHealth(cycles(5)).coverage, undefined);
 });
 
 // --- robustness and purity ---

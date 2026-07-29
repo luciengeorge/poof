@@ -131,6 +131,23 @@ export interface ReportQualityHealth {
   lowGrounding: LowGroundingEntry[];
 }
 
+/**
+ * How much of the REQUESTED window the data actually reaches.
+ *
+ * The caller reads a BOUNDED number of traces (Convex caps `recentCycleTraces`), so a wide
+ * window can ask for more history than the scan can return. Silently reporting the aggregate as
+ * if it covered the whole window would change a conclusion: a violation 40 days ago would simply
+ * be invisible, and "no violations in 90 days" would be a false statement rather than a missing
+ * one. So the shortfall is measured and stated.
+ */
+export interface WindowCoverage {
+  requestedDays: number;
+  /** The scan cap, not the window, decided how far back the data reaches. */
+  truncatedByScanLimit: boolean;
+  /** How many days the returned data actually spans, when the cap bit. */
+  coveredDays?: number;
+}
+
 export interface EvalHealth {
   /** Completed cycles in the window. Unfinished traces are not counted here. */
   cycles: number;
@@ -140,6 +157,8 @@ export interface EvalHealth {
   truncated: TruncatedEntry[];
   unfinished: CycleRef[];
   reportQuality: ReportQualityHealth;
+  /** Absent when the caller did not measure coverage. */
+  coverage?: WindowCoverage;
 }
 
 function ref(trace: EvalHealthTrace): CycleRef {
@@ -320,8 +339,41 @@ export function withinWindow<T extends { completedAt?: number; startedAt?: numbe
   return traces.filter((trace) => (trace.completedAt ?? trace.startedAt ?? 0) >= cutoff);
 }
 
+/**
+ * Did the SCAN CAP, rather than the requested window, decide how far back the data reaches?
+ *
+ * True only when the scan came back full AND its oldest row is still newer than the window
+ * start: that is the case where more history exists but was not read. A full scan whose oldest
+ * row already predates the window start covers the window completely, so there is nothing to
+ * caveat. A scan that came back short read everything there is.
+ *
+ * A scan that is exactly full cannot distinguish "exactly this many rows exist" from "more
+ * exist", so the wording it drives is deliberately about what IS covered rather than claiming a
+ * precise count of what is missing.
+ */
+export function windowCoverage(
+  fetchedCount: number,
+  scanLimit: number,
+  oldestFetchedMs: number | undefined,
+  nowMs: number,
+  requestedDays: number,
+): WindowCoverage {
+  const windowStart = nowMs - requestedDays * 86_400_000;
+  const capped =
+    fetchedCount >= scanLimit && oldestFetchedMs !== undefined && oldestFetchedMs > windowStart;
+  if (!capped) return { requestedDays, truncatedByScanLimit: false };
+  return {
+    requestedDays,
+    truncatedByScanLimit: true,
+    coveredDays: Math.floor((nowMs - (oldestFetchedMs as number)) / 86_400_000),
+  };
+}
+
 /** Aggregate one window of cycle traces. The caller decides what the window is. */
-export function aggregateEvalHealth(traces: readonly EvalHealthTrace[]): EvalHealth {
+export function aggregateEvalHealth(
+  traces: readonly EvalHealthTrace[],
+  opts: { coverage?: WindowCoverage } = {},
+): EvalHealth {
   const completed = traces.filter((trace) => trace.completedAt !== undefined);
   const unfinished = traces
     .filter((trace) => trace.completedAt === undefined)
@@ -346,6 +398,7 @@ export function aggregateEvalHealth(traces: readonly EvalHealthTrace[]): EvalHea
       .map((trace) => ({ ...ref(trace), toolCount: trace.toolSequence.length })),
     unfinished,
     reportQuality: aggregateReportQuality(completed),
+    coverage: opts.coverage,
   };
 }
 
@@ -377,7 +430,13 @@ export function formatEvalHealth(health: EvalHealth): string[] {
         "may itself be the problem: either no cycle ran, or the trace hook is not recording.",
     );
   } else {
-    lines.push(`- Window: ${health.cycles} completed cycle(s) graded.`);
+    // Says what the number MEANS: these are cycles that finished and were checked against the
+    // invariants. How many of them the judge reached is a separate figure, reported under report
+    // quality below, and conflating the two would overstate what has been graded.
+    lines.push(
+      `- Window: ${health.cycles} completed cycle(s), each checked against the invariants. ` +
+        "How many were judged for report quality is reported separately below.",
+    );
     if (health.smallSample) {
       lines.push(
         `- The sample is too small to read as a trend: only ${health.cycles} completed ` +
@@ -385,6 +444,18 @@ export function formatEvalHealth(health: EvalHealth): string[] {
           "cycles, not a rate.",
       );
     }
+  }
+
+  // Stated even on an otherwise clean window: "no violations" over a window the data does not
+  // reach is a false reassurance, not a quiet omission.
+  const coverage = health.coverage;
+  if (coverage?.truncatedByScanLimit === true) {
+    lines.push(
+      `- COVERAGE WARNING: this does NOT cover the full ${coverage.requestedDays} days asked ` +
+        `for. The trace scan cap was reached first, so only the last ${coverage.coveredDays} ` +
+        "day(s) are covered. Anything older is invisible here, so read every count below as " +
+        "covering that shorter period and nothing more.",
+    );
   }
 
   lines.push("Guards (per invariant, over this window):");

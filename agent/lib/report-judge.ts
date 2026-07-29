@@ -250,6 +250,29 @@ export function judgeAlertReasons(
   return reasons;
 }
 
+/** What persisting a verdict did. Mirrors `SaveReportScoreResult` in agent/lib/memory.ts. */
+export type SaveOutcome = "stored" | "already-judged" | "no-such-trace";
+
+/**
+ * Reasons to alert, given the verdict AND whether it actually reached the database.
+ *
+ * A verdict that was NOT persisted must never alert. `already-judged` means an earlier pass
+ * stored the original and already raised whatever alert it deserved, so alerting again would
+ * double-page on one cycle. `no-such-trace` means there is no row at all, so the alert would
+ * point a human at a record they cannot go and look at.
+ *
+ * Extracted as a pure decision, like `decideAppend` in convex/traceAppend.ts, so the rule is
+ * unit-testable instead of living only inside a tool that does I/O.
+ */
+export function alertReasonsForStoredVerdict(
+  verdict: JudgeVerdict,
+  outcome: SaveOutcome,
+  thresholds: JudgeThresholds = DEFAULT_JUDGE_THRESHOLDS,
+): string[] {
+  if (outcome !== "stored") return [];
+  return judgeAlertReasons(verdict, thresholds);
+}
+
 /** One-line summary for a log line or a Slack alert. */
 export function summarizeJudgeVerdict(verdict: JudgeVerdict): string {
   if (verdict.status !== "judged") return `unjudged (${verdict.warning})`;
