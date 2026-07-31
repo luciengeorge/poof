@@ -10,6 +10,10 @@
  * reached a BUY, which is common in the demo agent. A green run therefore does not prove the
  * guarded path was exercised. Printing "held VACUOUSLY" means a human reading CI can tell
  * "verified" from "never reached" instead of the two looking identical.
+ *
+ * Two readings of the same 3-state result live here: `invariantSatisfied` (vacuity passes, for
+ * a cycle that may legitimately no-trade) and `invariantVerified` (vacuity FAILS, for an eval
+ * that demands the guarded path actually be exercised).
  */
 
 import {
@@ -51,6 +55,42 @@ export function invariantSatisfied(
   }
   console.log(`[eval] ${name}: verified against a real ${SUBMIT_ORDERS} in this run.`);
   return true;
+}
+
+/**
+ * POSITIVE verification of one named invariant: the guarded path must have been EXERCISED and
+ * held. Same single source of truth (`checkInvariants`), stricter reading of its 3-state result:
+ * only "pass" passes, and "not-applicable" (no submit_orders, so the guard was never reached)
+ * FAILS instead of passing vacuously.
+ *
+ * WHY THE ADAPTER EXISTS. `invariantSatisfied` above is right for a normal cycle, which may
+ * legitimately no-trade: it must not fail an agent for not buying. But a suite made only of
+ * conditional guards can go green with every guard unexercised, which is exactly what happened
+ * when all three submit-gated invariants logged "PASSED VACUOUSLY". This adapter is the other
+ * half of the pair, for an eval whose prompt DEMANDS a trade, and it is here rather than
+ * inside agent/lib/invariants.ts so the shared checker's semantics stay unchanged for the
+ * conditional evals and for the production hook.
+ */
+export function invariantVerified(
+  events: readonly EventLike[],
+  name: InvariantName,
+): boolean {
+  const sequence = requestedActionNames(events);
+  const result = invariantByName(checkInvariants(sequence), name);
+  if (!result) {
+    console.error(`[eval] no invariant named ${name}`);
+    return false;
+  }
+  if (result.status === "pass") {
+    console.log(`[eval] ${name}: VERIFIED against a real ${SUBMIT_ORDERS} in this run.`);
+    return true;
+  }
+  const why =
+    result.status === "not-applicable"
+      ? `the guarded path was NOT EXERCISED, so this guard is UNVERIFIED (${result.detail ?? "no " + SUBMIT_ORDERS})`
+      : `VIOLATED (${result.detail ?? "no detail"})`;
+  console.error(`[eval] ${name}: ${why}. Tool sequence: ${sequence.join(" -> ")}`);
+  return false;
 }
 
 /**
