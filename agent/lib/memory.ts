@@ -116,10 +116,41 @@ export interface StoredCycleTrace extends CycleTraceKey {
   truncated?: boolean;
   invariants: { name: string; status: string; detail?: string }[];
   violations: number;
+  /** PRE-TRADE, from review_performance early in the cycle. Read by the deterministic check. */
   accountValueGbp?: number;
   cashGbp?: number;
   deployedGbp?: number;
+  /** POST-TRADE, from record_cycle's fresh broker fetch at the end. Read by the judge. */
+  postTradeAccountValueGbp?: number;
+  postTradeCashGbp?: number;
+  /** The magnitude ALLOW-LIST for report-check.ts. Never handed to the judge as a checklist. */
   externalGbpValues?: number[];
+  // Expanded ground truth for the judge. ABSENT and EMPTY differ: absent means nothing was
+  // recorded (a claim cannot be adjudicated), empty means the cycle really did none of it.
+  orders?: {
+    ticker: string;
+    side: string;
+    notionalGbp?: number;
+    status: string;
+    strategyTag?: string;
+    detail?: string;
+  }[];
+  ordersTruncated?: boolean;
+  exits?: { ticker: string; reason: string; detail?: string }[];
+  exitsTruncated?: boolean;
+  positionTickers?: string[];
+  positionCount?: number;
+  positionsTruncated?: boolean;
+  /** Ticker to price, in the instrument's own currency (USD for US stocks), never GBP. */
+  quotes?: Record<string, number>;
+  quotesTruncated?: boolean;
+  externalAdvisoryHoldings?: {
+    ticker: string;
+    currentValueGbp?: number;
+    costBasisGbp?: number;
+    unrealisedPnlGbp?: number;
+  }[];
+  externalAdvisoryHoldingsTruncated?: boolean;
   reportText?: string;
   reportPass?: boolean;
   reportFindings?: { rule: string; detail: string }[];
@@ -271,15 +302,36 @@ export class Memory {
   ): Promise<unknown> {
     return this.mutation("appendCycleTraceTool", { ...key, toolName, callId });
   }
+  /**
+   * Save whichever pieces of a cycle's ground truth the caller just observed.
+   *
+   * Collections are SET (each comes from one tool result, so a re-delivered event rewrites the
+   * same value); `quotes` are MERGED server-side across the cycle's several get_prices calls.
+   */
   saveCycleTraceContext(
     key: CycleTraceKey,
-    context: {
-      accountValueGbp?: number;
-      cashGbp?: number;
-      deployedGbp?: number;
-      externalGbpValues?: number[];
-      reportText?: string;
-    },
+    context: Partial<
+      Pick<
+        StoredCycleTrace,
+        | "accountValueGbp"
+        | "cashGbp"
+        | "deployedGbp"
+        | "postTradeAccountValueGbp"
+        | "postTradeCashGbp"
+        | "externalGbpValues"
+        | "orders"
+        | "ordersTruncated"
+        | "exits"
+        | "exitsTruncated"
+        | "positionTickers"
+        | "positionCount"
+        | "positionsTruncated"
+        | "quotes"
+        | "externalAdvisoryHoldings"
+        | "externalAdvisoryHoldingsTruncated"
+        | "reportText"
+      >
+    >,
   ): Promise<unknown> {
     return this.mutation("saveCycleTraceContext", { ...key, ...context });
   }

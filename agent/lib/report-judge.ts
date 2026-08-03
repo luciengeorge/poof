@@ -5,8 +5,9 @@
  * (agent/lib/report-check.ts) grades ARITHMETIC. Neither can tell whether the prose the agent
  * wrote is actually supported by what its tools returned. A report can quote the right account
  * value and still invent a reason, imply it can predict a price, or omit the exit it took. This
- * module is the parsing, thresholding and alerting half of the LLM-as-judge pass that grades
- * that; the rubric itself lives in agent/subagents/report_judge/instructions.md.
+ * module is the ground-truth assembly, parsing, thresholding and alerting half of the
+ * LLM-as-judge pass that grades that; the rubric itself lives in
+ * agent/subagents/report_judge/instructions.md.
  *
  * WHY THE JUDGE IS SCHEDULED, NOT INLINE IN THE HOOK. DO NOT "optimise" this back into
  * agent/hooks/trace-cycle.ts. eve hooks run INLINE in the event pipeline (that is exactly why a
@@ -27,6 +28,12 @@
  * an alert; it can never alter, delay, or block a report, and it is never an input to the risk
  * gate, position sizing, or order placement. See the isolation tests in observers.test.ts.
  */
+
+import type {
+  TracedExit,
+  TracedExternalHolding,
+  TracedOrder,
+} from "./cycle-trace.ts";
 
 /** The rubric, in the order the judge is asked to return it. `overall` is its own judgement. */
 export const JUDGE_DIMENSIONS = [
@@ -112,6 +119,233 @@ export function judgeThresholdsFromEnv(env: EnvLike = process.env): JudgeThresho
       "REPORT_JUDGE_ALERT_GROUNDING_BELOW",
       DEFAULT_JUDGE_THRESHOLDS.groundingBelow,
     ),
+  };
+}
+
+// --- THE GROUND TRUTH HANDED TO THE JUDGE ---
+//
+// The judge may use NOTHING but what this function returns, so what it leaves out decides what
+// the judge can honestly grade. It used to return six GBP numbers, and three consecutive live
+// cycles were scored grounding=1 on ACCURATE reports because of three defects in it:
+//
+//  (A) STALENESS. `cashGbp` came from review_performance, which runs EARLY, while the report
+//      correctly states the cash left AFTER the day's orders. 129.99 - 15 = 114.99 is the report
+//      being right, so every cycle that traded produced a guaranteed false "cash is misstated"
+//      finding. Fixed at source: record_cycle runs LAST and does its own fresh broker fetch, and
+//      it now returns the equity and cash it recorded, which the trace hook stores as the
+//      post-trade snapshot. This function prefers it and falls back to the pre-trade figures.
+//      (The DETERMINISTIC check in report-check.ts still reads the PRE-TRADE `accountValueGbp`,
+//      deliberately: its account-value-present rule grades the value the report was told to quote
+//      verbatim, which review_performance produced before record_cycle existed for that cycle.)
+//  (B) INCOMPLETENESS. With no orders, positions, exits or prices in it, every correctly sourced
+//      figure in a report was unverifiable from the judge's seat and read as invented.
+//  (C) MISREAD ALLOW-LIST. The bare `externalGbpValues` array is the magnitude allow-list for
+//      report-check.ts. Handed to the judge, it was read as a checklist of figures the report
+//      owed the reader, so the report was penalised for "omitting" a cost basis. The judge gets
+//      the LABELLED holdings instead, and the bare array is not passed at all.
+//
+// CAPTURED-EMPTY vs NOT-CAPTURED is the distinction that keeps this honest, and it is the same
+// three-state discipline as `not-applicable` in agent/lib/invariants.ts. An empty list means the
+// cycle really did none of that, and a report describing one contradicts the record. An ABSENT
+// list means nothing was recorded, and absence of data is not evidence of invention. Collapsing
+// the two would either blind the judge to a fabricated order or convict a real one.
+
+/** The subset of a stored cycle trace the judge's ground truth is assembled from. */
+export interface JudgeTrace {
+  /** From review_performance, early in the cycle: PRE-TRADE. */
+  accountValueGbp?: number;
+  cashGbp?: number;
+  deployedGbp?: number;
+  /** From record_cycle's fresh broker fetch at the end of the cycle: POST-TRADE. */
+  postTradeAccountValueGbp?: number;
+  postTradeCashGbp?: number;
+  orders?: readonly TracedOrder[];
+  ordersTruncated?: boolean;
+  exits?: readonly TracedExit[];
+  exitsTruncated?: boolean;
+  positionTickers?: readonly string[];
+  positionCount?: number;
+  positionsTruncated?: boolean;
+  quotes?: Readonly<Record<string, number>>;
+  quotesTruncated?: boolean;
+  externalAdvisoryHoldings?: readonly TracedExternalHolding[];
+  externalAdvisoryHoldingsTruncated?: boolean;
+  toolSequence: readonly string[];
+  /** The TOOL SEQUENCE hit its recording cap. */
+  truncated?: boolean;
+  invariants: readonly { name: string; status: string; detail?: string }[];
+  reportPass?: boolean;
+  reportFindings?: readonly { rule: string; detail: string }[];
+}
+
+export interface JudgeGroundTruth {
+  /** POST-TRADE where record_cycle recorded it, else the pre-trade figure. See `snapshotStage`. */
+  accountValueGbp?: number;
+  cashGbp?: number;
+  snapshotStage: "post-trade" | "pre-trade" | "none";
+  /** Kept and LABELLED when the figures above are post-trade, so a difference reads correctly. */
+  preTradeAccountValueGbp?: number;
+  preTradeCashGbp?: number;
+  /** Pre-trade only: nothing recomputes it after the orders. */
+  deployedGbp?: number;
+  orders?: readonly TracedOrder[];
+  exits?: readonly TracedExit[];
+  positionTickers?: readonly string[];
+  positionCount?: number;
+  /** Ticker to price, in the instrument's own currency (USD for US stocks), never GBP. */
+  quotes?: Readonly<Record<string, number>>;
+  /** ADVISORY-ONLY, untradable by the agent. Reference context, never a required-content list. */
+  externalAdvisoryHoldings?: readonly TracedExternalHolding[];
+  toolSequence: readonly string[];
+  truncatedToolSequence: boolean;
+  invariants: readonly { name: string; status: string; detail?: string }[];
+  numericSelfConsistencyPass?: boolean;
+  numericSelfConsistencyFindings?: readonly { rule: string; detail: string }[];
+  /** What this ground truth can and cannot adjudicate, in plain sentences for the judge. */
+  coverage: string[];
+}
+
+function categoryLines(
+  noun: string,
+  captured: boolean,
+  empty: boolean,
+  truncated: boolean,
+): string[] {
+  if (!captured) {
+    return [
+      `${noun}: NOT CAPTURED for this cycle. Nothing here can confirm or refute a claim about ` +
+        `${noun}, and absence of data is not evidence of an invented claim: do not mark the ` +
+        `report down for grounding on ${noun}.`,
+    ];
+  }
+  const lines: string[] = [];
+  if (empty) {
+    lines.push(
+      `${noun}: none. This cycle recorded no ${noun} at all, so a report that describes one ` +
+        "CONTRADICTS the ground truth.",
+    );
+  }
+  if (truncated) {
+    lines.push(
+      `${noun}: TRUNCATED at the recording cap, so this list is INCOMPLETE. Something missing ` +
+        "from it may still have happened; treat a claim it does not cover as unverifiable, not " +
+        "as invented.",
+    );
+  }
+  return lines;
+}
+
+/**
+ * Assemble one cycle's ground truth for the judge from its stored trace row.
+ *
+ * Pure, so the wording of the coverage notes is pinned by tests rather than left to a prompt: the
+ * sentence saying post-trade cash is not a contradiction is the entire fix for defect (A), and a
+ * model paraphrasing it away would bring the false alerts straight back.
+ */
+export function judgeGroundTruth(trace: JudgeTrace): JudgeGroundTruth {
+  const accountValueGbp = trace.postTradeAccountValueGbp ?? trace.accountValueGbp;
+  const cashGbp = trace.postTradeCashGbp ?? trace.cashGbp;
+  const isPostTrade =
+    trace.postTradeAccountValueGbp !== undefined || trace.postTradeCashGbp !== undefined;
+  const snapshotStage: JudgeGroundTruth["snapshotStage"] = isPostTrade
+    ? "post-trade"
+    : accountValueGbp !== undefined || cashGbp !== undefined
+      ? "pre-trade"
+      : "none";
+
+  const coverage: string[] = [];
+  if (snapshotStage === "post-trade") {
+    coverage.push(
+      "account value and cash are the POST-TRADE snapshot: a fresh broker fetch taken at the " +
+        "END of the cycle, after the day's orders. The report describes the cash left after " +
+        "trading, so a figure in the report that differs from the pre-trade figure below is the " +
+        "day's spending and is NOT a contradiction.",
+    );
+  } else if (snapshotStage === "pre-trade") {
+    coverage.push(
+      "account value and cash are the PRE-TRADE snapshot, taken early in the cycle before any " +
+        "order: no post-trade snapshot was recorded. Cash stated in the report as what is left " +
+        "after today will legitimately be LOWER than this figure, by roughly what the cycle " +
+        "spent, and that is NOT a contradiction.",
+    );
+  } else {
+    coverage.push(
+      "no account value or cash was recorded for this cycle, so money figures cannot be " +
+        "adjudicated here at all.",
+    );
+  }
+  if (trace.deployedGbp !== undefined) {
+    coverage.push(
+      "deployedGbp is the value held in positions as of the EARLY review_performance call, so it " +
+        "is pre-trade and does not include anything bought this cycle.",
+    );
+  }
+
+  coverage.push(
+    ...categoryLines(
+      "orders",
+      trace.orders !== undefined,
+      (trace.orders?.length ?? 0) === 0,
+      trace.ordersTruncated === true,
+    ),
+    ...categoryLines(
+      "exits",
+      trace.exits !== undefined,
+      (trace.exits?.length ?? 0) === 0,
+      trace.exitsTruncated === true,
+    ),
+    ...categoryLines(
+      "positions",
+      trace.positionTickers !== undefined,
+      (trace.positionCount ?? 0) === 0,
+      trace.positionsTruncated === true,
+    ),
+    ...categoryLines(
+      "quoted prices",
+      trace.quotes !== undefined,
+      Object.keys(trace.quotes ?? {}).length === 0,
+      trace.quotesTruncated === true,
+    ),
+    ...categoryLines(
+      "external advisory holdings",
+      trace.externalAdvisoryHoldings !== undefined,
+      (trace.externalAdvisoryHoldings?.length ?? 0) === 0,
+      trace.externalAdvisoryHoldingsTruncated === true,
+    ),
+  );
+  if (trace.truncated === true) {
+    coverage.push(
+      "tool sequence: TRUNCATED at the recording cap, so tools past it are missing and a tool " +
+        "the report mentions may simply not appear here.",
+    );
+  }
+
+  return {
+    ...(accountValueGbp !== undefined ? { accountValueGbp } : {}),
+    ...(cashGbp !== undefined ? { cashGbp } : {}),
+    snapshotStage,
+    ...(isPostTrade && trace.accountValueGbp !== undefined
+      ? { preTradeAccountValueGbp: trace.accountValueGbp }
+      : {}),
+    ...(isPostTrade && trace.cashGbp !== undefined ? { preTradeCashGbp: trace.cashGbp } : {}),
+    ...(trace.deployedGbp !== undefined ? { deployedGbp: trace.deployedGbp } : {}),
+    ...(trace.orders !== undefined ? { orders: trace.orders } : {}),
+    ...(trace.exits !== undefined ? { exits: trace.exits } : {}),
+    ...(trace.positionTickers !== undefined
+      ? { positionTickers: trace.positionTickers, positionCount: trace.positionCount }
+      : {}),
+    ...(trace.quotes !== undefined ? { quotes: trace.quotes } : {}),
+    ...(trace.externalAdvisoryHoldings !== undefined
+      ? { externalAdvisoryHoldings: trace.externalAdvisoryHoldings }
+      : {}),
+    toolSequence: trace.toolSequence,
+    truncatedToolSequence: trace.truncated === true,
+    invariants: trace.invariants,
+    ...(trace.reportPass !== undefined ? { numericSelfConsistencyPass: trace.reportPass } : {}),
+    ...(trace.reportFindings !== undefined
+      ? { numericSelfConsistencyFindings: trace.reportFindings }
+      : {}),
+    coverage,
   };
 }
 

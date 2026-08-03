@@ -35,10 +35,12 @@ export default defineTool({
         client.getCash(),
         client.getPortfolio(),
       ]);
+      const equity = accountValueGbp(cash, positions, fx.rate);
+      const freeCash = cash.free;
       await memoryFromEnv().recordCycle({
         env: tradingEnv(),
-        equity: accountValueGbp(cash, positions, fx.rate),
-        freeCash: cash.free,
+        equity,
+        freeCash,
         decision,
         rationale,
         candidates,
@@ -46,9 +48,17 @@ export default defineTool({
       });
       // Surface an FX fallback so a human notices: the recorded equity used a hardcoded rate
       // because the live source was unreachable, so the value may have drifted.
+      //
+      // The equity and cash figures are RETURNED as well as written. This tool runs LAST and does
+      // its own fresh broker fetch, so these are the only figures that describe the account AFTER
+      // the day's orders; everything else in the cycle saw a pre-trade snapshot. Returning them
+      // costs nothing and makes the post-trade state observable outside this tool. They are
+      // exactly the numbers written above, not a re-read.
       return {
         recorded: true,
         fx: { rate: fx.rate, source: fx.source, fallbackUsed: fx.source === "fallback" },
+        accountValueGbp: equity,
+        cashGbp: freeCash,
       };
     } catch (err) {
       console.warn("[memory] recordCycle failed (non-fatal):", err);

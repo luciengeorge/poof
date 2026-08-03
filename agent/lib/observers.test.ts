@@ -265,12 +265,15 @@ test("the trading-path guard list actually resolves (the guard cannot go vacuous
   }
 });
 
-/** Every pure online-eval module. All four must stay functions of their arguments only. */
+/** Every pure online-eval module. All five must stay functions of their arguments only. */
 const OBSERVER_FILES = [
   "./invariants.ts",
   "./report-check.ts",
   "./report-judge.ts",
   "./eval-health.ts",
+  // The extraction layer: it reads TOOL RESULTS from the trading tools, which is exactly why it
+  // must not import those tools' modules. It parses their output shapes structurally instead.
+  "./cycle-trace.ts",
 ];
 
 test("REGRESSION: the online-eval modules never import the trading path", () => {
@@ -283,10 +286,43 @@ test("REGRESSION: the online-eval modules never import the trading path", () => 
 });
 
 test("the observer guard list actually resolves (the guard cannot go vacuous)", () => {
-  assert.equal(OBSERVER_FILES.length, 4);
+  assert.equal(OBSERVER_FILES.length, 5);
   for (const rel of OBSERVER_FILES) {
     assert.ok(readFileSync(new URL(rel, import.meta.url), "utf8").length > 0);
   }
+});
+
+test("REGRESSION: the expanded ground truth is captured by the HOOK, not by a trading tool", () => {
+  // The judge needed far more ground truth than six GBP numbers, and the cheap way to get it
+  // would have been to make submit_orders / manage_positions report themselves to the trace. That
+  // would put an observer's storage call inside the order path, where a Convex hiccup could
+  // become a trading failure. Instead the hook reads the SAME tool results after the fact.
+  const hook = readFileSync(new URL("../hooks/trace-cycle.ts", import.meta.url), "utf8");
+  for (const extractor of [
+    "ordersFrom",
+    "exitsFrom",
+    "positionsFrom",
+    "quotesFrom",
+    "postTradeTruthFrom",
+    "externalHoldingsFrom",
+  ]) {
+    assert.match(hook, new RegExp(extractor), `the hook must be the one calling ${extractor}`);
+  }
+});
+
+test("REGRESSION: record_cycle reports the SAME figures it wrote, and still swallows failures", () => {
+  // It runs last and refetches, so its equity and free cash are the only post-trade snapshot in
+  // the cycle. Two properties must hold: the returned figures are the very ones written to the
+  // cycles table (not a second read that could disagree with the durable record), and a broker or
+  // memory failure still returns {recorded:false} rather than failing the cycle. Structural,
+  // because the tool itself needs live credentials to run.
+  const source = readFileSync(new URL("../tools/record_cycle.ts", import.meta.url), "utf8");
+  assert.match(source, /const equity = accountValueGbp\(/);
+  assert.match(source, /const freeCash = cash\.free/);
+  assert.match(source, /recordCycle\(\{[\s\S]*?\bequity,[\s\S]*?\bfreeCash,/);
+  assert.match(source, /accountValueGbp: equity/);
+  assert.match(source, /cashGbp: freeCash/);
+  assert.match(source, /catch[\s\S]*?recorded: false/);
 });
 
 test("REGRESSION: the judge runs from a SCHEDULE, never inline in the trace hook", () => {

@@ -3,9 +3,15 @@ import { alert } from "../lib/alert.ts";
 import {
   actionResultCallId,
   actionResultName,
+  exitsFrom,
   externalGbpValuesFrom,
+  externalHoldingsFrom,
   isCycleTurnMessage,
   looksLikeReport,
+  ordersFrom,
+  positionsFrom,
+  postTradeTruthFrom,
+  quotesFrom,
   truthFrom,
 } from "../lib/cycle-trace.ts";
 import {
@@ -45,8 +51,11 @@ import { tradingEnv } from "../lib/risk-runtime.ts";
  * EVE EVENTS, and why:
  *  - `message.received`: marks which turns are cycles at all. Ad-hoc Slack questions call no
  *    record_cycle, so grading them would alert falsely on every conversation.
- *  - `action.result`: the ordered tool/subagent sequence, plus the cycle's own GBP ground truth
- *    from the review_performance / review_external_holdings results it already produced.
+ *  - `action.result`: the ordered tool/subagent sequence, plus the cycle's own ground truth from
+ *    results it already produced: the pre-trade GBP figures and held positions from
+ *    review_performance, the POST-TRADE equity and cash from record_cycle (which runs last and
+ *    refetches), the orders from submit_orders, the exits from manage_positions, the quoted prices
+ *    from get_prices, and the advisory external holdings from review_external_holdings.
  *  - `message.completed`: the outbound report text, which is where the stated numbers live.
  *  - `turn.completed`: the terminal boundary where everything is graded and alerted once.
  *
@@ -74,6 +83,21 @@ function key(sessionId: string, turnId: unknown): CycleTraceKey | null {
  */
 function observerMemory(): Memory {
   return memoryFromEnv(undefined, { timeoutMs: OBSERVER_FETCH_TIMEOUT_MS });
+}
+
+/**
+ * Say out loud when a recorded collection hit its cap, exactly as the 200-tool cap does.
+ *
+ * A silently short list is the dangerous case: the judge would read a missing order or price as
+ * proof the report invented it. The flag travels to the judge in the ground truth as well; this
+ * line is so the same fact is visible to a human reading the logs.
+ */
+function warnIfTruncated(key: CycleTraceKey, what: string, truncated: boolean): void {
+  if (!truncated) return;
+  console.warn(
+    `[online-eval] cycle ${key.sessionId}/${key.turnId}: ${what} hit the recording cap and is ` +
+      "INCOMPLETE; it is marked truncated so absence from it proves nothing",
+  );
 }
 
 export default defineHook({
@@ -110,16 +134,95 @@ export default defineHook({
         // after a crash-and-resume, and a double-append would false-trip `single-submit`.
         await memory.appendCycleTraceTool(traceKey, name, actionResultCallId(result));
 
-        // Ground truth for the report check, taken from results the cycle already computed:
-        // no extra broker or FX calls, so observing cannot perturb what is observed.
+        // Ground truth for the report check AND for the later report-quality judge, taken from
+        // results the cycle already computed: no extra broker or FX calls, so observing cannot
+        // perturb what is observed.
+        //
+        // WHY SO MUCH OF IT. The judge is asked whether every numeric claim is supported, and it
+        // may use nothing but what is recorded here. With only six GBP numbers stored, a
+        // correctly sourced order, exit, position count or price was unverifiable from its seat
+        // and scored as invented: three consecutive live cycles were graded grounding=1 on
+        // ACCURATE reports. Each collection is bounded and flags its own truncation, so an
+        // incomplete list is never read as proof that a real event did not happen.
         const output = (result as { output?: unknown } | undefined)?.output;
         if (name === "review_performance") {
+          // PRE-TRADE: this tool runs early. `accountValueGbp` here is what the deterministic
+          // report check grades against, since the report is told to quote it verbatim.
           const truth = truthFrom(output);
-          if (truth) await memory.saveCycleTraceContext(traceKey, truth);
+          const positions = positionsFrom(output);
+          if (positions) warnIfTruncated(traceKey, "the held position list", positions.truncated);
+          // One round trip for both: this runs INLINE in a live cycle, so the hook keeps its
+          // per-tool-result HTTP traffic to the minimum.
+          if (truth || positions) {
+            await memory.saveCycleTraceContext(traceKey, {
+              ...truth,
+              ...(positions
+                ? {
+                    positionTickers: positions.tickers,
+                    positionCount: positions.count,
+                    positionsTruncated: positions.truncated,
+                  }
+                : {}),
+            });
+          }
+        } else if (name === "record_cycle") {
+          // POST-TRADE: this tool runs LAST and does its own fresh broker fetch, so it is the
+          // only figure describing the account after the day's orders. Stored separately from the
+          // pre-trade pair rather than overwriting it: the judge needs the post-trade cash (the
+          // report describes what is left AFTER trading), and the deterministic check keeps
+          // grading the pre-trade account value it always graded.
+          const postTrade = postTradeTruthFrom(output);
+          if (postTrade) {
+            await memory.saveCycleTraceContext(traceKey, {
+              postTradeAccountValueGbp: postTrade.accountValueGbp,
+              postTradeCashGbp: postTrade.cashGbp,
+            });
+          }
+        } else if (name === "submit_orders") {
+          const captured = ordersFrom(output);
+          if (captured) {
+            warnIfTruncated(traceKey, "the order list", captured.truncated);
+            await memory.saveCycleTraceContext(traceKey, {
+              orders: captured.orders,
+              ordersTruncated: captured.truncated,
+            });
+          }
+        } else if (name === "manage_positions") {
+          const captured = exitsFrom(output);
+          if (captured) {
+            warnIfTruncated(traceKey, "the exit list", captured.truncated);
+            await memory.saveCycleTraceContext(traceKey, {
+              exits: captured.exits,
+              exitsTruncated: captured.truncated,
+            });
+          }
+        } else if (name === "get_prices") {
+          // Merged server-side across the cycle's several calls, so an early quote the report
+          // cites is not erased by a later batch.
+          const quotes = quotesFrom(output);
+          if (Object.keys(quotes).length > 0) {
+            await memory.saveCycleTraceContext(traceKey, { quotes });
+          }
         } else if (name === "review_external_holdings") {
+          // Two forms of the same tool result, and neither replaces the other: the BARE array is
+          // the magnitude allow-list the deterministic check consumes, the LABELLED holdings are
+          // reference context for the judge. Handing it the bare array is what made it read the
+          // allowance as a checklist of figures the report owed the reader.
           const externalGbpValues = externalGbpValuesFrom(output);
-          if (externalGbpValues.length > 0) {
-            await memory.saveCycleTraceContext(traceKey, { externalGbpValues });
+          const labelled = externalHoldingsFrom(output);
+          if (labelled.holdings.length > 0) {
+            warnIfTruncated(traceKey, "the external advisory holding list", labelled.truncated);
+          }
+          if (externalGbpValues.length > 0 || labelled.holdings.length > 0) {
+            await memory.saveCycleTraceContext(traceKey, {
+              ...(externalGbpValues.length > 0 ? { externalGbpValues } : {}),
+              ...(labelled.holdings.length > 0
+                ? {
+                    externalAdvisoryHoldings: labelled.holdings,
+                    externalAdvisoryHoldingsTruncated: labelled.truncated,
+                  }
+                : {}),
+            });
           }
         }
       } catch (err) {

@@ -3,9 +3,19 @@ import assert from "node:assert/strict";
 import {
   actionResultCallId,
   actionResultName,
+  exitsFrom,
   externalGbpValuesFrom,
+  externalHoldingsFrom,
   isCycleTurnMessage,
   looksLikeReport,
+  MAX_TRACE_EXITS,
+  MAX_TRACE_HOLDINGS,
+  MAX_TRACE_ORDERS,
+  MAX_TRACE_POSITIONS,
+  ordersFrom,
+  positionsFrom,
+  postTradeTruthFrom,
+  quotesFrom,
   requestedActionNames,
   truthFrom,
 } from "./cycle-trace.ts";
@@ -174,6 +184,299 @@ test("returns an empty list when there are no external holdings, or on junk", ()
   assert.deepEqual(externalGbpValuesFrom({}), []);
   assert.deepEqual(externalGbpValuesFrom(null), []);
   assert.deepEqual(externalGbpValuesFrom({ holdings: "nope" }), []);
+});
+
+// --- the POST-TRADE snapshot from record_cycle ---
+//
+// record_cycle runs LAST and does its own fresh broker fetch, so it is the only figure that
+// describes the account after the day's orders. review_performance runs EARLY, which is why its
+// cash figure made a correct report look like a misstatement.
+
+test("reads the post-trade equity and cash record_cycle actually recorded", () => {
+  assert.deepEqual(
+    postTradeTruthFrom({
+      recorded: true,
+      fx: { rate: 1.34, source: "live", fallbackUsed: false },
+      accountValueGbp: 148.05,
+      cashGbp: 114.99,
+    }),
+    { accountValueGbp: 148.05, cashGbp: 114.99 },
+  );
+});
+
+test("a record_cycle that failed carries no snapshot, and must not invent one", () => {
+  // The tool swallows broker/memory failures and returns {recorded:false}: there is no fresh
+  // snapshot in that case, so the pre-trade figures stay the best available truth.
+  assert.equal(postTradeTruthFrom({ recorded: false, note: "memory or broker unavailable" }), null);
+  assert.equal(postTradeTruthFrom({ recorded: true, fx: { rate: 1.34 } }), null);
+  assert.equal(postTradeTruthFrom({ accountValueGbp: Number.NaN, cashGbp: "114.99" }), null);
+  assert.equal(postTradeTruthFrom(null), null);
+});
+
+test("a partial snapshot keeps the half it has", () => {
+  assert.deepEqual(postTradeTruthFrom({ recorded: true, cashGbp: 114.99 }), {
+    cashGbp: 114.99,
+  });
+});
+
+// --- orders, from the submit_orders result ---
+
+const SUBMIT_RESULT = {
+  placed: [
+    {
+      proposal: {
+        ticker: "AMZN_US_EQ",
+        side: "BUY",
+        notional: 15,
+        price: 231.4,
+        thesis: "cloud demand",
+        strategyTag: "momentum",
+      },
+      quantity: 0.048,
+      dryRun: false,
+    },
+    {
+      proposal: { ticker: "SHOP_US_EQ", side: "BUY", notional: 20, price: 118, thesis: "advice" },
+      quantity: 0,
+      dryRun: false,
+      skipped: "held in the external advisory account",
+    },
+    {
+      proposal: { ticker: "KO_US_EQ", side: "BUY", notional: 15, price: 71.2, thesis: "defensive" },
+      quantity: 0.21,
+      dryRun: true,
+    },
+  ],
+  rejected: [
+    {
+      proposal: { ticker: "XOM_US_EQ", side: "BUY", notional: 5000, price: 173, thesis: "big" },
+      reason: "exceeds max position size",
+    },
+  ],
+};
+
+test("records every order the cycle placed, simulated, skipped and had rejected", () => {
+  const captured = ordersFrom(SUBMIT_RESULT);
+  assert.equal(captured?.truncated, false);
+  assert.deepEqual(captured?.orders, [
+    {
+      ticker: "AMZN_US_EQ",
+      side: "BUY",
+      notionalGbp: 15,
+      status: "placed",
+      strategyTag: "momentum",
+    },
+    {
+      ticker: "SHOP_US_EQ",
+      side: "BUY",
+      notionalGbp: 20,
+      status: "skipped",
+      detail: "held in the external advisory account",
+    },
+    { ticker: "KO_US_EQ", side: "BUY", notionalGbp: 15, status: "simulated" },
+    {
+      ticker: "XOM_US_EQ",
+      side: "BUY",
+      notionalGbp: 5000,
+      status: "rejected",
+      detail: "exceeds max position size",
+    },
+  ]);
+});
+
+test("a cycle that submitted nothing records an EMPTY order list, not an absent one", () => {
+  // Captured-and-empty means "no orders happened", which the judge can adjudicate. Absent means
+  // "nothing was recorded", which it cannot. Collapsing the two would make a report claiming an
+  // order look either always fine or always invented.
+  assert.deepEqual(ordersFrom({ placed: [], rejected: [] }), { orders: [], truncated: false });
+  assert.equal(ordersFrom({}), null);
+  assert.equal(ordersFrom(null), null);
+  assert.equal(ordersFrom({ placed: "nope", rejected: 7 }), null);
+});
+
+test("orders are bounded, and truncation is marked rather than silently dropping them", () => {
+  const many = {
+    placed: Array.from({ length: MAX_TRACE_ORDERS + 5 }, (_v, i) => ({
+      proposal: { ticker: `T${i}_US_EQ`, side: "BUY", notional: 1, price: 1, thesis: "x" },
+      quantity: 1,
+      dryRun: false,
+    })),
+    rejected: [],
+  };
+  const captured = ordersFrom(many);
+  assert.equal(captured?.orders.length, MAX_TRACE_ORDERS);
+  assert.equal(captured?.truncated, true);
+});
+
+// --- exits, from the manage_positions result ---
+
+test("records the exits the exit engine triggered, with the reason", () => {
+  const captured = exitsFrom({
+    exitsTriggered: [
+      {
+        ticker: "CVS_US_EQ",
+        reason: "trailing-stop",
+        pnlPct: -0.081,
+        marketValue: 14.2,
+        detail: "trailing stop: 8.1% below peak $79.10",
+      },
+    ],
+    placed: [],
+    rejected: [],
+    dryRun: false,
+    note: "1 exit(s)",
+  });
+  assert.equal(captured?.truncated, false);
+  assert.deepEqual(captured?.exits, [
+    {
+      ticker: "CVS_US_EQ",
+      reason: "trailing-stop",
+      detail: "trailing stop: 8.1% below peak $79.10",
+    },
+  ]);
+});
+
+test("a cycle with no exit conditions met records an EMPTY exit list", () => {
+  assert.deepEqual(exitsFrom({ exitsTriggered: [], placed: [], rejected: [] }), {
+    exits: [],
+    truncated: false,
+  });
+  assert.equal(exitsFrom({}), null);
+  assert.equal(exitsFrom(null), null);
+});
+
+test("exits are bounded, and truncation is marked", () => {
+  const captured = exitsFrom({
+    exitsTriggered: Array.from({ length: MAX_TRACE_EXITS + 3 }, (_v, i) => ({
+      ticker: `T${i}_US_EQ`,
+      reason: "max-hold",
+    })),
+  });
+  assert.equal(captured?.exits.length, MAX_TRACE_EXITS);
+  assert.equal(captured?.truncated, true);
+});
+
+// --- the held position list, from the review_performance result ---
+
+test("records the held tickers and the full position count", () => {
+  assert.deepEqual(
+    positionsFrom({
+      accountValueGbp: 148.2,
+      openPositions: [{ ticker: "AMZN_US_EQ" }, { ticker: "KO_US_EQ" }],
+    }),
+    { tickers: ["AMZN_US_EQ", "KO_US_EQ"], count: 2, truncated: false },
+  );
+  assert.deepEqual(positionsFrom({ openPositions: [] }), {
+    tickers: [],
+    count: 0,
+    truncated: false,
+  });
+  assert.equal(positionsFrom({}), null);
+  assert.equal(positionsFrom(null), null);
+});
+
+test("the position list is bounded but the COUNT stays exact, so a stated count is checkable", () => {
+  const captured = positionsFrom({
+    openPositions: Array.from({ length: MAX_TRACE_POSITIONS + 7 }, (_v, i) => ({
+      ticker: `T${i}_US_EQ`,
+    })),
+  });
+  assert.equal(captured?.tickers.length, MAX_TRACE_POSITIONS);
+  assert.equal(captured?.count, MAX_TRACE_POSITIONS + 7);
+  assert.equal(captured?.truncated, true);
+});
+
+// --- quoted prices, from the get_prices results ---
+
+test("records a compact ticker-to-price map from a get_prices result", () => {
+  assert.deepEqual(
+    quotesFrom({
+      quotes: [
+        { symbol: "AMZN", price: 231.4, prevClose: 229, changePct: 1.05 },
+        { symbol: "KO", price: 71.2, prevClose: 69.5, changePct: 2.45 },
+      ],
+      failures: [{ symbol: "NKE", error: "rate limited" }],
+    }),
+    { AMZN: 231.4, KO: 71.2 },
+  );
+});
+
+test("quotesFrom skips unusable rows and tolerates junk", () => {
+  assert.deepEqual(
+    quotesFrom({
+      quotes: [
+        { symbol: "AMZN", price: Number.NaN },
+        { symbol: "", price: 10 },
+        { symbol: "KO", price: "71.2" },
+        { symbol: "SBUX", price: 96.4 },
+      ],
+    }),
+    { SBUX: 96.4 },
+  );
+  assert.deepEqual(quotesFrom({}), {});
+  assert.deepEqual(quotesFrom(null), {});
+});
+
+// --- external holdings, LABELLED for the judge ---
+
+test("records each external holding's value, cost and P&L under NAMED fields", () => {
+  // Defect (C): the judge was given the bare magnitude allow-list and read it as a checklist of
+  // figures the report owed the reader. Labels make it reference context instead.
+  const output = {
+    tradable: false,
+    holdings: [
+      {
+        ticker: "SHOP",
+        valueGbp: 7629.26,
+        costBasisGbp: 9982.65,
+        unrealisedPnlGbp: -2353.39,
+        priceInstrumentCcy: 118.4,
+      },
+    ],
+  };
+  assert.deepEqual(externalHoldingsFrom(output), {
+    holdings: [
+      {
+        ticker: "SHOP",
+        currentValueGbp: 7629.26,
+        costBasisGbp: 9982.65,
+        unrealisedPnlGbp: -2353.39,
+      },
+    ],
+    truncated: false,
+  });
+  // The BARE array the deterministic magnitude rule consumes is unchanged: both come off the
+  // same tool result, and neither replaces the other.
+  assert.deepEqual(externalGbpValuesFrom(output), [7629.26, 9982.65, -2353.39]);
+});
+
+test("a holding whose quote failed keeps its ticker and cost, without inventing a value", () => {
+  assert.deepEqual(
+    externalHoldingsFrom({
+      holdings: [{ ticker: "SHOP", valueGbp: null, costBasisGbp: 9982.65, unrealisedPnlGbp: null }],
+    }),
+    { holdings: [{ ticker: "SHOP", costBasisGbp: 9982.65 }], truncated: false },
+  );
+});
+
+test("external holdings are bounded, and truncation is marked", () => {
+  const captured = externalHoldingsFrom({
+    holdings: Array.from({ length: MAX_TRACE_HOLDINGS + 2 }, (_v, i) => ({
+      ticker: `T${i}`,
+      valueGbp: 1,
+    })),
+  });
+  assert.equal(captured.holdings.length, MAX_TRACE_HOLDINGS);
+  assert.equal(captured.truncated, true);
+});
+
+test("externalHoldingsFrom tolerates junk and an empty account", () => {
+  assert.deepEqual(externalHoldingsFrom({ holdings: [] }), { holdings: [], truncated: false });
+  assert.deepEqual(externalHoldingsFrom(null), { holdings: [], truncated: false });
+  assert.deepEqual(externalHoldingsFrom({ holdings: "nope" }), {
+    holdings: [],
+    truncated: false,
+  });
 });
 
 // --- which turns are cycles ---
