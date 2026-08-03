@@ -325,6 +325,32 @@ test("REGRESSION (defect A): the judge is given POST-TRADE cash, not the stale p
   );
 });
 
+test("a PARTIAL post-trade snapshot never labels a pre-trade figure post-trade", () => {
+  // Both figures come from record_cycle's single fetch, so a partial is rare. But labelling a
+  // pre-trade fallback "post-trade" because the OTHER half was post-trade would resurrect defect
+  // (A) for exactly the figure the defect was about, silently this time.
+  const cashOnly = judgeGroundTruth(trace({ postTradeCashGbp: POST_TRADE_CASH }));
+  assert.equal(cashOnly.cashStage, "post-trade");
+  assert.equal(cashOnly.cashGbp, POST_TRADE_CASH);
+  assert.equal(cashOnly.accountValueStage, "pre-trade");
+  assert.equal(cashOnly.accountValueGbp, 148.2);
+  assert.equal(cashOnly.snapshotStage, "mixed");
+  // No pre-trade label on a figure that is itself the pre-trade one: that would be circular.
+  assert.equal(cashOnly.preTradeAccountValueGbp, undefined);
+  assert.equal(cashOnly.preTradeCashGbp, PRE_TRADE_CASH);
+
+  const equityOnly = judgeGroundTruth(trace({ postTradeAccountValueGbp: 148.05 }));
+  assert.equal(equityOnly.accountValueStage, "post-trade");
+  assert.equal(equityOnly.cashStage, "pre-trade");
+  assert.equal(equityOnly.cashGbp, PRE_TRADE_CASH);
+  assert.equal(equityOnly.snapshotStage, "mixed");
+  // And the mixed stage is stated, not left for the judge to infer from the numbers.
+  assert.ok(
+    equityOnly.coverage.some((line) => /DIFFERENT stages/.test(line)),
+    "a mixed snapshot must say so",
+  );
+});
+
 test("falls back to the pre-trade figures when record_cycle did not run", () => {
   // A cycle that died before record_cycle still gets graded, against the only snapshot there is,
   // and the stage says which one it is rather than implying it is post-trade.
@@ -421,6 +447,80 @@ test("a category that was NOT captured is omitted and said so, never read as an 
   assert.equal(truth.quotes, undefined);
   assert.ok(truth.coverage.some((line) => /orders/i.test(line) && /not captured/i.test(line)));
   assert.ok(truth.coverage.some((line) => /quoted prices/i.test(line) && /not captured/i.test(line)));
+});
+
+// --- THE NO-TRADE CYCLE: absence of a tool is evidence, absence of a recording is not ---
+//
+// A quiet cycle never calls submit_orders, so `orders` is ABSENT rather than empty on the most
+// common kind of cycle there is. Read as plain not-captured, a report claiming "I bought GBP 20 of
+// Tesla today" on that cycle would be merely unverifiable, and since report-check.ts does not grade
+// orders at all, nothing would catch a hallucinated trade. The tool sequence is what settles it.
+
+test("REGRESSION: a fabricated order on a NO-TRADE cycle is REFUTED, not merely unverifiable", () => {
+  const quiet = judgeGroundTruth(
+    trace({
+      // A real no-trade cycle: it looked, it held off, it recorded the decision. No submit_orders.
+      toolSequence: [
+        "recall_memory",
+        "review_performance",
+        "manage_positions",
+        "get_prices",
+        "record_cycle",
+      ],
+      exits: [],
+    }),
+  );
+  assert.equal(quiet.orders, undefined);
+  assert.equal(quiet.truncatedToolSequence, false);
+  const note = quiet.coverage.find((line) => /^orders:/.test(line));
+  assert.ok(note, "the orders category must always get a coverage note");
+  assert.match(note, /never exercised/i);
+  assert.match(note, /CONTRADICTS/);
+  // And it must NOT be the line that tells the judge to let it go.
+  assert.doesNotMatch(note, /do not mark the report down/i);
+});
+
+test("the same rule covers exits, so a fabricated automatic sale is refuted too", () => {
+  const note = judgeGroundTruth(
+    trace({ toolSequence: ["review_performance", "submit_orders", "record_cycle"] }),
+  ).coverage.find((line) => /^exits:/.test(line));
+  assert.ok(note);
+  assert.match(note, /never exercised/i);
+  assert.match(note, /CONTRADICTS/);
+  // manage_positions is the tool that would have produced them, and it is absent from the sequence.
+  assert.match(note, /manage_positions/);
+});
+
+test("a TRUNCATED tool sequence keeps a missing order list UNVERIFIABLE", () => {
+  // A capped record proves nothing about what is not in it, so absence stops being evidence.
+  const note = judgeGroundTruth(
+    trace({ toolSequence: ["review_performance", "record_cycle"], truncated: true }),
+  ).coverage.find((line) => /^orders:/.test(line));
+  assert.ok(note);
+  assert.match(note, /NOT CAPTURED/);
+  assert.match(note, /do not mark the report down/i);
+  assert.doesNotMatch(note, /CONTRADICTS/);
+});
+
+test("a cycle that DID submit but whose capture failed stays UNVERIFIABLE", () => {
+  // submit_orders is in the sequence, so the order path WAS exercised and only the recording is
+  // missing. That is an observability failure of ours, never a lie in the report.
+  const note = judgeGroundTruth(
+    trace({ toolSequence: ["review_performance", "submit_orders", "record_cycle"] }),
+  ).coverage.find((line) => /^orders:/.test(line));
+  assert.ok(note);
+  assert.match(note, /NOT CAPTURED/);
+  assert.doesNotMatch(note, /CONTRADICTS/);
+});
+
+test("an EMPTY tool sequence proves nothing either, so absence stays unverifiable", () => {
+  // Nothing was recorded at all, which is a dead trace, not a quiet cycle.
+  const note = judgeGroundTruth(trace({ toolSequence: [] })).coverage.find((line) =>
+    /^orders:/.test(line),
+  );
+  assert.ok(note);
+  assert.match(note, /NOT CAPTURED/);
+  assert.doesNotMatch(note, /CONTRADICTS/);
 });
 
 test("an empty captured collection means NONE happened, which IS adjudicable", () => {

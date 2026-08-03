@@ -137,6 +137,12 @@ export function judgeThresholdsFromEnv(env: EnvLike = process.env): JudgeThresho
 //      (The DETERMINISTIC check in report-check.ts still reads the PRE-TRADE `accountValueGbp`,
 //      deliberately: its account-value-present rule grades the value the report was told to quote
 //      verbatim, which review_performance produced before record_cycle existed for that cycle.)
+//      ONE ASSUMPTION, worth knowing if this ever starts alerting again: the report computes its
+//      post-trade cash ARITHMETICALLY (pre-trade cash minus notional) before record_cycle fetches
+//      reality, and the live evidence shows the two agree exactly (14.99, 19.84, 25.19), because a
+//      Trading 212 notional order debits exactly its notional. If per-order fees or commissions
+//      ever appear, the report's figure would sit slightly above the fetched one and the judge
+//      could start flagging pennies. The fix then is a tolerance, not a return to pre-trade cash.
 //  (B) INCOMPLETENESS. With no orders, positions, exits or prices in it, every correctly sourced
 //      figure in a report was unverifiable from the judge's seat and read as invented.
 //  (C) MISREAD ALLOW-LIST. The bare `externalGbpValues` array is the magnitude allow-list for
@@ -149,6 +155,16 @@ export function judgeThresholdsFromEnv(env: EnvLike = process.env): JudgeThresho
 // cycle really did none of that, and a report describing one contradicts the record. An ABSENT
 // list means nothing was recorded, and absence of data is not evidence of invention. Collapsing
 // the two would either blind the judge to a fabricated order or convict a real one.
+//
+// THE THIRD CASE, and it is the one that matters most: a NO-TRADE cycle never calls submit_orders,
+// so `orders` is ABSENT rather than empty, on the most common kind of cycle there is. Read as
+// plain not-captured, a report claiming "I bought GBP 20 of Tesla today" on a quiet cycle would be
+// merely unverifiable, and since report-check.ts does not cover orders at all, the judge is the
+// ONLY line of defence against a hallucinated trade. So absence is disambiguated against the TOOL
+// SEQUENCE, which is recorded independently: when the sequence is COMPLETE and contains no
+// submit_orders, the order path was never exercised and a described purchase CONTRADICTS the
+// record. Only a truncated sequence, or a sequence that DOES contain the tool (so the tool ran and
+// the capture failed), stays unverifiable. Exits work the same way against manage_positions.
 
 /** The subset of a stored cycle trace the judge's ground truth is assembled from. */
 export interface JudgeTrace {
@@ -178,12 +194,23 @@ export interface JudgeTrace {
   reportFindings?: readonly { rule: string; detail: string }[];
 }
 
+/**
+ * Which moment in the cycle one money figure describes. Tracked PER FIGURE, not for the pair:
+ * both come from record_cycle's single fetch, so a partial is rare, but labelling a pre-trade
+ * fallback figure "post-trade" because the OTHER figure was post-trade would quietly resurrect
+ * defect (A) for exactly the figure the defect was about.
+ */
+export type SnapshotStage = "post-trade" | "pre-trade" | "none";
+
 export interface JudgeGroundTruth {
-  /** POST-TRADE where record_cycle recorded it, else the pre-trade figure. See `snapshotStage`. */
+  /** POST-TRADE where record_cycle recorded it, else the pre-trade figure. See `*Stage` below. */
   accountValueGbp?: number;
   cashGbp?: number;
-  snapshotStage: "post-trade" | "pre-trade" | "none";
-  /** Kept and LABELLED when the figures above are post-trade, so a difference reads correctly. */
+  /** The stage of `accountValueGbp` and `cashGbp` when they agree, else "mixed". */
+  snapshotStage: SnapshotStage | "mixed";
+  accountValueStage: SnapshotStage;
+  cashStage: SnapshotStage;
+  /** Kept and LABELLED when the figure above is post-trade, so a difference reads correctly. */
   preTradeAccountValueGbp?: number;
   preTradeCashGbp?: number;
   /** Pre-trade only: nothing recomputes it after the orders. */
@@ -210,12 +237,15 @@ function categoryLines(
   captured: boolean,
   empty: boolean,
   truncated: boolean,
+  /** Replaces the default not-captured wording when absence is itself evidence. */
+  absentNote?: string,
 ): string[] {
   if (!captured) {
     return [
-      `${noun}: NOT CAPTURED for this cycle. Nothing here can confirm or refute a claim about ` +
-        `${noun}, and absence of data is not evidence of an invented claim: do not mark the ` +
-        `report down for grounding on ${noun}.`,
+      absentNote ??
+        `${noun}: NOT CAPTURED for this cycle. Nothing here can confirm or refute a claim about ` +
+          `${noun}, and absence of data is not evidence of an invented claim: do not mark the ` +
+          `report down for grounding on ${noun}.`,
     ];
   }
   const lines: string[] = [];
@@ -235,6 +265,41 @@ function categoryLines(
   return lines;
 }
 
+function stageOf(postTrade: number | undefined, preTrade: number | undefined): SnapshotStage {
+  if (postTrade !== undefined) return "post-trade";
+  return preTrade !== undefined ? "pre-trade" : "none";
+}
+
+/**
+ * When a category was not captured, is its ABSENCE itself evidence?
+ *
+ * Yes, and only when the tool sequence can prove it: the sequence is non-empty (so something was
+ * recorded at all), COMPLETE (not capped), and contains no trace of the tool that would have
+ * produced the category. Then the path was never exercised, and a report describing one of these
+ * events contradicts the record. This is the case that keeps a fabricated trade on a NO-TRADE cycle
+ * convictable, which matters because report-check.ts does not grade orders at all.
+ *
+ * Returns undefined, leaving the default unverifiable wording in place, when the sequence is
+ * truncated (a capped record proves nothing) or when it DOES contain the tool (the tool ran and the
+ * capture failed, which is an observability problem, not a lie in the prose).
+ */
+function neverExercisedNote(
+  trace: JudgeTrace,
+  noun: string,
+  tool: string,
+  described: string,
+): string | undefined {
+  if (trace.truncated === true) return undefined;
+  if (trace.toolSequence.length === 0) return undefined;
+  if (trace.toolSequence.includes(tool)) return undefined;
+  return (
+    `${noun}: not captured, AND the COMPLETE tool sequence for this cycle contains no ${tool} at ` +
+    `all, so the ${noun} path was never exercised. That absence IS evidence: ${described} ` +
+    `described in the report CONTRADICTS the record, and must be scored exactly as an invented ` +
+    `${noun} would be.`
+  );
+}
+
 /**
  * Assemble one cycle's ground truth for the judge from its stored trace row.
  *
@@ -245,33 +310,42 @@ function categoryLines(
 export function judgeGroundTruth(trace: JudgeTrace): JudgeGroundTruth {
   const accountValueGbp = trace.postTradeAccountValueGbp ?? trace.accountValueGbp;
   const cashGbp = trace.postTradeCashGbp ?? trace.cashGbp;
-  const isPostTrade =
-    trace.postTradeAccountValueGbp !== undefined || trace.postTradeCashGbp !== undefined;
-  const snapshotStage: JudgeGroundTruth["snapshotStage"] = isPostTrade
-    ? "post-trade"
-    : accountValueGbp !== undefined || cashGbp !== undefined
-      ? "pre-trade"
-      : "none";
+  // PER FIGURE. Labelling a pre-trade fallback "post-trade" because the other half of the pair
+  // was post-trade would silently reintroduce defect (A) for that figure.
+  const accountValueStage = stageOf(trace.postTradeAccountValueGbp, trace.accountValueGbp);
+  const cashStage = stageOf(trace.postTradeCashGbp, trace.cashGbp);
+  const snapshotStage = accountValueStage === cashStage ? accountValueStage : "mixed";
 
   const coverage: string[] = [];
-  if (snapshotStage === "post-trade") {
+  if (cashStage === "post-trade") {
     coverage.push(
-      "account value and cash are the POST-TRADE snapshot: a fresh broker fetch taken at the " +
-        "END of the cycle, after the day's orders. The report describes the cash left after " +
-        "trading, so a figure in the report that differs from the pre-trade figure below is the " +
-        "day's spending and is NOT a contradiction.",
+      "cashGbp is the POST-TRADE figure: a fresh broker fetch taken at the END of the cycle, " +
+        "after the day's orders. The report describes the cash left after trading, so a figure in " +
+        "the report that is lower than the pre-trade cash below is the day's spending and is NOT " +
+        "a contradiction.",
     );
-  } else if (snapshotStage === "pre-trade") {
+  } else if (cashStage === "pre-trade") {
     coverage.push(
-      "account value and cash are the PRE-TRADE snapshot, taken early in the cycle before any " +
-        "order: no post-trade snapshot was recorded. Cash stated in the report as what is left " +
-        "after today will legitimately be LOWER than this figure, by roughly what the cycle " +
-        "spent, and that is NOT a contradiction.",
+      "cashGbp is the PRE-TRADE figure, taken early in the cycle before any order: no post-trade " +
+        "cash was recorded. Cash stated in the report as what is left after today will " +
+        "legitimately be LOWER than this figure, by roughly what the cycle spent, and that is NOT " +
+        "a contradiction.",
     );
   } else {
+    coverage.push("no cash figure was recorded for this cycle, so cash cannot be adjudicated.");
+  }
+  coverage.push(
+    accountValueStage === "none"
+      ? "no account value was recorded for this cycle, so it cannot be adjudicated."
+      : `accountValueGbp is the ${accountValueStage.toUpperCase()} figure. Account value is close ` +
+          "to trade-neutral (cash falls, holdings rise), so the two stages of it rarely differ by " +
+          "much, and a small difference is market movement rather than a defect.",
+  );
+  if (snapshotStage === "mixed") {
     coverage.push(
-      "no account value or cash was recorded for this cycle, so money figures cannot be " +
-        "adjudicated here at all.",
+      `the two money figures are from DIFFERENT stages (account value ${accountValueStage}, cash ` +
+        `${cashStage}), because only part of the end-of-cycle snapshot was recorded. Read each ` +
+        "against its own stage; do not infer one from the other.",
     );
   }
   if (trace.deployedGbp !== undefined) {
@@ -287,12 +361,14 @@ export function judgeGroundTruth(trace: JudgeTrace): JudgeGroundTruth {
       trace.orders !== undefined,
       (trace.orders?.length ?? 0) === 0,
       trace.ordersTruncated === true,
+      neverExercisedNote(trace, "orders", "submit_orders", "a purchase or a sale"),
     ),
     ...categoryLines(
       "exits",
       trace.exits !== undefined,
       (trace.exits?.length ?? 0) === 0,
       trace.exitsTruncated === true,
+      neverExercisedNote(trace, "exits", "manage_positions", "an exit or an automatic sale"),
     ),
     ...categoryLines(
       "positions",
@@ -324,10 +400,14 @@ export function judgeGroundTruth(trace: JudgeTrace): JudgeGroundTruth {
     ...(accountValueGbp !== undefined ? { accountValueGbp } : {}),
     ...(cashGbp !== undefined ? { cashGbp } : {}),
     snapshotStage,
-    ...(isPostTrade && trace.accountValueGbp !== undefined
+    accountValueStage,
+    cashStage,
+    ...(accountValueStage === "post-trade" && trace.accountValueGbp !== undefined
       ? { preTradeAccountValueGbp: trace.accountValueGbp }
       : {}),
-    ...(isPostTrade && trace.cashGbp !== undefined ? { preTradeCashGbp: trace.cashGbp } : {}),
+    ...(cashStage === "post-trade" && trace.cashGbp !== undefined
+      ? { preTradeCashGbp: trace.cashGbp }
+      : {}),
     ...(trace.deployedGbp !== undefined ? { deployedGbp: trace.deployedGbp } : {}),
     ...(trace.orders !== undefined ? { orders: trace.orders } : {}),
     ...(trace.exits !== undefined ? { exits: trace.exits } : {}),

@@ -375,6 +375,17 @@ test("records the held tickers and the full position count", () => {
   assert.equal(positionsFrom(null), null);
 });
 
+test("a malformed position row does not inflate the count", () => {
+  // An inflated count could convict a report that correctly said "10 stocks", which is the exact
+  // opposite of what this capture is for. Only readable rows are counted.
+  assert.deepEqual(
+    positionsFrom({
+      openPositions: [{ ticker: "AMZN_US_EQ" }, null, { ticker: "" }, 42, { marketValue: 12 }],
+    }),
+    { tickers: ["AMZN_US_EQ"], count: 1, truncated: false },
+  );
+});
+
 test("the position list is bounded but the COUNT stays exact, so a stated count is checkable", () => {
   const captured = positionsFrom({
     openPositions: Array.from({ length: MAX_TRACE_POSITIONS + 7 }, (_v, i) => ({

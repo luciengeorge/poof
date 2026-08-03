@@ -299,17 +299,17 @@ export function positionsFrom(
   const positions = (output as { openPositions?: unknown }).openPositions;
   if (!Array.isArray(positions)) return null;
   const tickers: string[] = [];
+  // Counted from READABLE rows only. Counting a malformed row would inflate the count and could
+  // convict a report that correctly said "10 stocks", which is the opposite of the point.
+  let count = 0;
   for (const position of positions) {
     if (typeof position !== "object" || position === null) continue;
     const ticker = nonEmptyString((position as { ticker?: unknown }).ticker);
-    if (ticker === null || tickers.length >= MAX_TRACE_POSITIONS) continue;
-    tickers.push(ticker);
+    if (ticker === null) continue;
+    count += 1;
+    if (tickers.length < MAX_TRACE_POSITIONS) tickers.push(ticker);
   }
-  return {
-    tickers,
-    count: positions.length,
-    truncated: positions.length > tickers.length,
-  };
+  return { tickers, count, truncated: count > tickers.length };
 }
 
 /**
