@@ -143,10 +143,81 @@ export default defineSchema({
     violations: v.number(),
     // Ground truth observed from the cycle's own tool results, kept so the report check can
     // run at the turn boundary even when the report arrived in an earlier durable step.
+    //
+    // PRE-TRADE, from review_performance, which runs EARLY in the cycle. `accountValueGbp` is the
+    // figure the DETERMINISTIC check in agent/lib/report-check.ts grades against, because the
+    // report is instructed to quote that value verbatim and is written before record_cycle runs.
     accountValueGbp: v.optional(v.number()),
     cashGbp: v.optional(v.number()),
     deployedGbp: v.optional(v.number()),
+    // POST-TRADE, from record_cycle's own fresh broker fetch at the END of the cycle. Kept
+    // SEPARATE rather than overwriting the two fields above: the report-quality JUDGE needs the
+    // post-trade cash (the report describes what is left after trading, so grading it against the
+    // pre-trade figure produced a guaranteed false "cash is misstated" finding on every cycle that
+    // traded), while the deterministic check must keep grading the pre-trade account value it has
+    // always graded. Both stages are therefore available and each consumer reads the one it means.
+    postTradeAccountValueGbp: v.optional(v.number()),
+    postTradeCashGbp: v.optional(v.number()),
+    // ALLOW-LIST of GBP magnitudes for the deterministic magnitude rule, NOT a content checklist.
+    // The judge gets `externalAdvisoryHoldings` below instead: given this bare array it read the
+    // allowance as a list of figures the report owed the reader.
     externalGbpValues: v.optional(v.array(v.number())),
+    // EXPANDED GROUND TRUTH for the judge, all of it read from tool results the cycle already
+    // produced (no extra broker or FX calls). Without it the judge could adjudicate six numbers
+    // and nothing else, so every correctly sourced order, exit, holding or price in a report was
+    // unverifiable from its seat and scored as invented.
+    //
+    // ABSENT and EMPTY mean different things, deliberately, exactly like "not-applicable" in the
+    // invariants: absent means nothing was recorded, so a claim cannot be adjudicated; empty means
+    // the cycle really did none, so a claim contradicts the record. Every collection is BOUNDED,
+    // and its `*Truncated` flag is set loudly when the cap bit, so an incomplete list is never
+    // read as proof that a real event never happened.
+    orders: v.optional(
+      v.array(
+        v.object({
+          ticker: v.string(),
+          side: v.string(),
+          notionalGbp: v.optional(v.number()),
+          status: v.string(), // "placed" | "simulated" | "skipped" | "rejected"
+          strategyTag: v.optional(v.string()),
+          detail: v.optional(v.string()),
+        }),
+      ),
+    ),
+    ordersTruncated: v.optional(v.boolean()),
+    exits: v.optional(
+      v.array(
+        v.object({
+          ticker: v.string(),
+          reason: v.string(),
+          detail: v.optional(v.string()),
+        }),
+      ),
+    ),
+    exitsTruncated: v.optional(v.boolean()),
+    positionTickers: v.optional(v.array(v.string())),
+    // The EXACT number held, even when the ticker list above was truncated, so a report stating
+    // "10 stocks" stays checkable.
+    positionCount: v.optional(v.number()),
+    positionsTruncated: v.optional(v.boolean()),
+    // Ticker to price, in the instrument's own currency (USD for US stocks), NEVER GBP. Merged
+    // across the cycle's several get_prices calls (convex/traceAppend.ts) so an early quote the
+    // report cites is not erased by a later batch.
+    quotes: v.optional(v.record(v.string(), v.number())),
+    quotesTruncated: v.optional(v.boolean()),
+    // ADVISORY-ONLY external holdings with LABELLED GBP fields, for the judge. Reference context
+    // only: a report that does not restate a cost basis or an unrealised P&L is not defective.
+    externalAdvisoryHoldings: v.optional(
+      v.array(
+        v.object({
+          ticker: v.string(),
+          currentValueGbp: v.optional(v.number()),
+          costBasisGbp: v.optional(v.number()),
+          unrealisedPnlGbp: v.optional(v.number()),
+        }),
+      ),
+    ),
+    externalAdvisoryHoldingsTruncated: v.optional(v.boolean()),
     reportText: v.optional(v.string()), // truncated by the hook
     reportPass: v.optional(v.boolean()),
     reportFindings: v.optional(

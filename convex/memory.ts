@@ -2,7 +2,7 @@ import { mutation, query, type QueryCtx } from "./_generated/server";
 import type { Doc } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { assertSecret } from "./auth";
-import { decideAppend, MAX_TOOL_SEQUENCE } from "./traceAppend";
+import { decideAppend, mergeQuoteMap, MAX_TOOL_SEQUENCE } from "./traceAppend";
 
 // --- mutations (writes) ---
 
@@ -472,8 +472,41 @@ export const appendCycleTraceTool = mutation({
 });
 
 /**
+ * Cap on any one recorded collection, enforced here at the STORAGE boundary as well.
+ *
+ * The primary bound is agent/lib/cycle-trace.ts, which is where truncation is detected and the
+ * matching `*Truncated` flag is raised. This one exists so a future caller cannot grow a trace
+ * document without a flag saying the list is incomplete, in the same spirit as `saveReportScore`
+ * re-checking a judged verdict rather than trusting its caller.
+ */
+const MAX_TRACE_ROWS = 30;
+
+function boundedRows<T>(
+  rows: readonly T[],
+  truncated: boolean | undefined,
+): { rows: T[]; truncated: boolean } {
+  return {
+    rows: rows.slice(0, MAX_TRACE_ROWS),
+    truncated: truncated === true || rows.length > MAX_TRACE_ROWS,
+  };
+}
+
+/**
  * Record the cycle's observed ground truth and/or its latest report candidate. Every field is
  * optional so one caller can save whichever it just saw. Returns null when there is no trace.
+ *
+ * TWO SNAPSHOT STAGES are stored, not one. The pre-trade figures come from review_performance
+ * (early in the cycle) and the post-trade ones from record_cycle's own fresh broker fetch (last).
+ * They are kept in separate fields because two different checks need different stages: the
+ * deterministic report check grades the pre-trade account value the report was told to quote
+ * verbatim, while the report-quality judge needs the post-trade cash, since the report describes
+ * the cash left AFTER trading and grading that against the pre-trade figure produced a guaranteed
+ * false finding on every cycle that traded.
+ *
+ * Collections are set wholesale (each comes from one tool result, and a re-delivered event
+ * therefore rewrites the same value, which is idempotent). QUOTES are the exception: a cycle calls
+ * get_prices several times, so they are MERGED into the stored map, because a price the report
+ * cites may have come from the first batch.
  */
 export const saveCycleTraceContext = mutation({
   args: {
@@ -484,7 +517,47 @@ export const saveCycleTraceContext = mutation({
     accountValueGbp: v.optional(v.number()),
     cashGbp: v.optional(v.number()),
     deployedGbp: v.optional(v.number()),
+    postTradeAccountValueGbp: v.optional(v.number()),
+    postTradeCashGbp: v.optional(v.number()),
     externalGbpValues: v.optional(v.array(v.number())),
+    orders: v.optional(
+      v.array(
+        v.object({
+          ticker: v.string(),
+          side: v.string(),
+          notionalGbp: v.optional(v.number()),
+          status: v.string(),
+          strategyTag: v.optional(v.string()),
+          detail: v.optional(v.string()),
+        }),
+      ),
+    ),
+    ordersTruncated: v.optional(v.boolean()),
+    exits: v.optional(
+      v.array(
+        v.object({
+          ticker: v.string(),
+          reason: v.string(),
+          detail: v.optional(v.string()),
+        }),
+      ),
+    ),
+    exitsTruncated: v.optional(v.boolean()),
+    positionTickers: v.optional(v.array(v.string())),
+    positionCount: v.optional(v.number()),
+    positionsTruncated: v.optional(v.boolean()),
+    quotes: v.optional(v.record(v.string(), v.number())),
+    externalAdvisoryHoldings: v.optional(
+      v.array(
+        v.object({
+          ticker: v.string(),
+          currentValueGbp: v.optional(v.number()),
+          costBasisGbp: v.optional(v.number()),
+          unrealisedPnlGbp: v.optional(v.number()),
+        }),
+      ),
+    ),
+    externalAdvisoryHoldingsTruncated: v.optional(v.boolean()),
     reportText: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -495,12 +568,49 @@ export const saveCycleTraceContext = mutation({
     // Reject non-finite money before it is stored: a NaN account value would silently
     // disable the report check rather than failing visibly.
     const patch: Record<string, unknown> = {};
-    for (const key of ["accountValueGbp", "cashGbp", "deployedGbp"] as const) {
+    for (const key of [
+      "accountValueGbp",
+      "cashGbp",
+      "deployedGbp",
+      "postTradeAccountValueGbp",
+      "postTradeCashGbp",
+      "positionCount",
+    ] as const) {
       const value = rest[key];
       if (value !== undefined && Number.isFinite(value)) patch[key] = value;
     }
     if (rest.externalGbpValues !== undefined) {
       patch.externalGbpValues = rest.externalGbpValues.filter((n) => Number.isFinite(n));
+    }
+    if (rest.orders !== undefined) {
+      const bounded = boundedRows(rest.orders, rest.ordersTruncated);
+      patch.orders = bounded.rows;
+      patch.ordersTruncated = bounded.truncated;
+    }
+    if (rest.exits !== undefined) {
+      const bounded = boundedRows(rest.exits, rest.exitsTruncated);
+      patch.exits = bounded.rows;
+      patch.exitsTruncated = bounded.truncated;
+    }
+    if (rest.positionTickers !== undefined) {
+      const bounded = boundedRows(rest.positionTickers, rest.positionsTruncated);
+      patch.positionTickers = bounded.rows;
+      patch.positionsTruncated = bounded.truncated;
+    }
+    if (rest.externalAdvisoryHoldings !== undefined) {
+      const bounded = boundedRows(
+        rest.externalAdvisoryHoldings,
+        rest.externalAdvisoryHoldingsTruncated,
+      );
+      patch.externalAdvisoryHoldings = bounded.rows;
+      patch.externalAdvisoryHoldingsTruncated = bounded.truncated;
+    }
+    if (rest.quotes !== undefined) {
+      const merged = mergeQuoteMap(existing.quotes, rest.quotes);
+      patch.quotes = merged.quotes;
+      // Sticky: once a quote has been dropped, the map stays INCOMPLETE for this cycle however
+      // many later batches fit.
+      patch.quotesTruncated = merged.truncated || existing.quotesTruncated === true;
     }
     if (rest.reportText !== undefined) {
       patch.reportText = rest.reportText.slice(0, MAX_REPORT_TEXT);

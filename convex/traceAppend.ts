@@ -1,5 +1,6 @@
 /**
- * The append rule for a cycle trace's tool sequence, as a pure decision.
+ * The ACCUMULATION rules for a cycle trace, as pure decisions: how a tool name joins the
+ * sequence, and how a batch of quoted prices joins the stored map.
  *
  * It lives in `convex/` (not `agent/lib/`) so `convex/memory.ts` can import it: the Convex
  * typecheck config does not allow `.ts` import specifiers, so it cannot reach into `agent/`.
@@ -27,6 +28,42 @@ export type AppendDecision =
   | { kind: "truncated" }
   /** Record it, with the resulting arrays. */
   | { kind: "append"; toolSequence: string[]; callIds: string[] };
+
+/**
+ * Hard cap on the recorded quote map. Unlike the orders/exits/positions bounds (which live in
+ * agent/lib/cycle-trace.ts, because one tool result is capped there and then stored whole), the
+ * quote map ACCUMULATES across the several get_prices calls one cycle makes, so its cap has to
+ * be applied where the already-stored map is visible: here.
+ */
+export const MAX_TRACE_QUOTES = 30;
+
+/**
+ * Merge one batch of ticker-to-price quotes into the map already on the trace, bounded.
+ *
+ * Accumulating rather than overwriting is the point: a price the report quotes may have been
+ * fetched in the cycle's first batch, and a later batch must not erase it, or the judge would
+ * read a correctly sourced price as invented. Past the cap, a NEW ticker is dropped and reported
+ * (the caller marks the map truncated, loudly, exactly like the tool-sequence cap); updating a
+ * ticker already in the map is always allowed, since it cannot grow the document and refusing it
+ * would leave a stale price standing as ground truth.
+ */
+export function mergeQuoteMap(
+  existing: Readonly<Record<string, number>> | undefined,
+  incoming: Readonly<Record<string, number>>,
+  cap: number = MAX_TRACE_QUOTES,
+): { quotes: Record<string, number>; truncated: boolean } {
+  const quotes: Record<string, number> = { ...(existing ?? {}) };
+  let truncated = false;
+  for (const [ticker, price] of Object.entries(incoming)) {
+    if (!Number.isFinite(price)) continue;
+    if (!(ticker in quotes) && Object.keys(quotes).length >= cap) {
+      truncated = true;
+      continue;
+    }
+    quotes[ticker] = price;
+  }
+  return { quotes, truncated };
+}
 
 export function decideAppend(
   existing: { toolSequence: readonly string[]; callIds: readonly string[] },

@@ -4,7 +4,12 @@ import { checkInvariants, violatedInvariants } from "./invariants.ts";
 // The rule under test lives in convex/ so the Convex mutation can import it (the Convex
 // typecheck config cannot resolve `.ts` specifiers into agent/). The test lives here only
 // because that is where the test-runner glob looks.
-import { decideAppend, MAX_TOOL_SEQUENCE } from "../../convex/traceAppend.ts";
+import {
+  decideAppend,
+  mergeQuoteMap,
+  MAX_TOOL_SEQUENCE,
+  MAX_TRACE_QUOTES,
+} from "../../convex/traceAppend.ts";
 
 /** A trace that has already recorded `names` under matching callIds. */
 function trace(names: string[]): { toolSequence: string[]; callIds: string[] } {
@@ -149,4 +154,55 @@ test("a duplicate is recognised even at the cap, so the cap cannot mask a re-del
 test("the cap is a bound a real cycle never approaches", () => {
   // A cycle makes a few dozen tool calls; the cap exists for a runaway turn, not normal use.
   assert.ok(MAX_TOOL_SEQUENCE >= 100);
+});
+
+// --- the quoted-price map: merged across calls, and BOUNDED ---
+//
+// A cycle calls get_prices several times, so the stored map has to accumulate rather than
+// overwrite: a report quoting a price fetched in the first batch must still be checkable after
+// the third. Cumulative growth is exactly why the cap lives here, next to the tool-sequence cap,
+// where the existing state is visible.
+
+test("quotes from a later call merge into the ones already recorded", () => {
+  const first = mergeQuoteMap(undefined, { AMZN: 231.4 });
+  assert.deepEqual(first, { quotes: { AMZN: 231.4 }, truncated: false });
+  assert.deepEqual(mergeQuoteMap(first.quotes, { KO: 71.2, SBUX: 96.4 }), {
+    quotes: { AMZN: 231.4, KO: 71.2, SBUX: 96.4 },
+    truncated: false,
+  });
+});
+
+test("a re-quoted ticker takes the latest price rather than duplicating", () => {
+  assert.deepEqual(mergeQuoteMap({ AMZN: 231.4 }, { AMZN: 232.9 }), {
+    quotes: { AMZN: 232.9 },
+    truncated: false,
+  });
+});
+
+test("the map is capped, and a dropped quote is reported rather than silently lost", () => {
+  const full = Object.fromEntries(
+    Array.from({ length: MAX_TRACE_QUOTES }, (_v, i) => [`T${i}`, i + 1]),
+  );
+  const merged = mergeQuoteMap(full, { LATE: 99 });
+  assert.equal(Object.keys(merged.quotes).length, MAX_TRACE_QUOTES);
+  assert.equal(merged.quotes.LATE, undefined);
+  assert.equal(merged.truncated, true);
+});
+
+test("at the cap, updating a ticker already in the map still works", () => {
+  // It cannot grow the document, and refusing it would leave a stale price in the ground truth.
+  const full = Object.fromEntries(
+    Array.from({ length: MAX_TRACE_QUOTES }, (_v, i) => [`T${i}`, i + 1]),
+  );
+  const merged = mergeQuoteMap(full, { T0: 1_000 });
+  assert.equal(merged.quotes.T0, 1_000);
+  assert.equal(merged.truncated, false);
+});
+
+test("merging quotes is pure and mutates neither side", () => {
+  const existing = { AMZN: 231.4 };
+  const incoming = { KO: 71.2 };
+  mergeQuoteMap(existing, incoming);
+  assert.deepEqual(existing, { AMZN: 231.4 });
+  assert.deepEqual(incoming, { KO: 71.2 });
 });

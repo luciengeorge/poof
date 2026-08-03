@@ -1,6 +1,7 @@
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 import { memoryFromEnv } from "../lib/memory.ts";
+import { judgeGroundTruth } from "../lib/report-judge.ts";
 import { tradingEnv } from "../lib/risk-runtime.ts";
 
 /**
@@ -69,19 +70,13 @@ export default defineTool({
         turnId: trace.turnId,
         completedAt: trace.completedAt,
         reportText: trace.reportText,
-        // The ONLY source of truth the judge may use. These are the figures the code computed
-        // for that cycle, not anything re-derived now.
-        groundTruth: {
-          accountValueGbp: trace.accountValueGbp,
-          cashGbp: trace.cashGbp,
-          deployedGbp: trace.deployedGbp,
-          externalAdvisoryGbpValues: trace.externalGbpValues,
-          toolSequence: trace.toolSequence,
-          truncatedToolSequence: trace.truncated === true,
-          invariants: trace.invariants,
-          numericSelfConsistencyPass: trace.reportPass,
-          numericSelfConsistencyFindings: trace.reportFindings,
-        },
+        // The ONLY source of truth the judge may use: what the code observed for that cycle, never
+        // anything re-derived now. Assembled by a pure, tested function (agent/lib/report-judge.ts)
+        // rather than inline here, because WHICH SNAPSHOT each figure is decides whether a correct
+        // report looks like a lie: cash is preferred POST-TRADE, and the `coverage` notes say what
+        // the ground truth can and cannot adjudicate. The bare `externalGbpValues` allow-list is
+        // deliberately NOT included; the judge gets the labelled holdings instead.
+        groundTruth: judgeGroundTruth(trace),
       }));
 
     return { env, cycles, notJudgeable, scanned: traces.length };
