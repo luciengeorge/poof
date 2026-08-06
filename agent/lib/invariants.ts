@@ -87,6 +87,31 @@ export interface CheckOptions {
   ordersTruncated?: boolean;
 }
 
+/**
+ * Did this cycle attempt a BUY at all?
+ *
+ * The three guards below are named "before-buy" / "before-entries" but were gated on `submit_orders`
+ * PRESENCE, which is not the same thing. A cycle that submits only exits trips them, and on
+ * 2026-08-06 one did: it read as "orders placed with no adversarial review" on a live-money account
+ * when nothing was wrong, because de-risking needs no thesis and therefore no red team.
+ *
+ * ANY buy row counts, whatever its status. A BUY that the gate rejected still represents a decision
+ * to buy, and that decision is exactly what should have been red-teamed first.
+ *
+ * "unknown" is deliberately NOT treated as "no". If the order list was never captured, or was
+ * truncated, the guard keeps its stricter behaviour and stays applicable. Gating a safety guard on
+ * evidence that might be missing would convert a noisy guard into a silently vacuous one, which is
+ * strictly worse: a guard that says nothing looks exactly like a guard saying all is well.
+ */
+function buyAttempted(opts: CheckOptions): "yes" | "no" | "unknown" {
+  if (opts.orders === undefined || opts.ordersTruncated === true) return "unknown";
+  return opts.orders.some((o) => o.side.toUpperCase() === "BUY") ? "yes" : "no";
+}
+
+const SELL_ONLY_NOTE =
+  "this cycle submitted only exits and attempted no BUY, so the guard was never exercised; " +
+  "de-risking needs no thesis and therefore no review";
+
 const TRUNCATED_NOTE =
   "the recorded tool sequence was TRUNCATED at its cap, so absence cannot be distinguished " +
   "from not-recorded; treated as not-applicable rather than a violation";
@@ -104,6 +129,8 @@ function prerequisiteBeforeSubmit(
   truncated: boolean,
   /** The tool whose first occurrence must be preceded. Defaults to placing an order. */
   trigger: string = SUBMIT_ORDERS,
+  /** When "no", the guarded path was not reached even though the trigger ran. */
+  attempted: "yes" | "no" | "unknown" = "unknown",
 ): InvariantResult {
   const SUBMIT_ORDERS = trigger;
   const submitAt = sequence.indexOf(SUBMIT_ORDERS);
@@ -115,6 +142,9 @@ function prerequisiteBeforeSubmit(
         ? `no ${SUBMIT_ORDERS} recorded, but ${TRUNCATED_NOTE}`
         : `no ${SUBMIT_ORDERS} in this cycle, so the guard was never exercised`,
     };
+  }
+  if (attempted === "no") {
+    return { name, status: "not-applicable", detail: SELL_ONLY_NOTE };
   }
   const prerequisiteAt = sequence.indexOf(prerequisite);
   if (prerequisiteAt === -1) {
@@ -153,11 +183,35 @@ export function checkInvariants(
   opts: CheckOptions = {},
 ): InvariantResult[] {
   const truncated = opts.truncated === true;
+  const attempted = buyAttempted(opts);
 
   return [
-    prerequisiteBeforeSubmit("earnings-before-buy", "get_earnings_calendar", sequence, truncated),
-    prerequisiteBeforeSubmit("red-team-before-buy", "red_team", sequence, truncated),
-    prerequisiteBeforeSubmit("exits-before-entries", "manage_positions", sequence, truncated),
+    // All three are BUY-gated: they ask "if the agent decided to buy, did it do X first?". Passing
+    // `attempted` is what stops a SELL-only cycle from reporting them as violations.
+    prerequisiteBeforeSubmit(
+      "earnings-before-buy",
+      "get_earnings_calendar",
+      sequence,
+      truncated,
+      SUBMIT_ORDERS,
+      attempted,
+    ),
+    prerequisiteBeforeSubmit(
+      "red-team-before-buy",
+      "red_team",
+      sequence,
+      truncated,
+      SUBMIT_ORDERS,
+      attempted,
+    ),
+    prerequisiteBeforeSubmit(
+      "exits-before-entries",
+      "manage_positions",
+      sequence,
+      truncated,
+      SUBMIT_ORDERS,
+      attempted,
+    ),
     // Unconditional: every cycle must leave a decision-log row, trade or no trade. Normally
     // never vacuous, which is exactly why it is the invariant that catches a cycle that died
     // silently part-way through. A truncated trace is the ONE case where its absence proves

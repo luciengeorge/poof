@@ -345,3 +345,69 @@ test("unknown tool names are ignored rather than treated as violations", () => {
 test("invariantByName returns undefined for a name that is not an invariant", () => {
   assert.equal(invariantByName(checkInvariants([]), "not-a-real-invariant"), undefined);
 });
+
+// --- BUY-gating: a SELL-only cycle must not trip the three "before-buy" guards ---
+//
+// The live false alarm this pins. On 2026-08-06 a cycle submitted only exits of tiny residual
+// positions, red_team correctly never ran (there was no thesis to review), and the alert read as
+// "orders placed with no adversarial review" on a real-money account. Nothing was wrong. The guards
+// were gated on submit_orders PRESENCE rather than on an actual BUY.
+
+const SELL = (ticker: string, status = "placed") => ({ ticker, side: "SELL", status });
+const BUY = (ticker: string, status = "placed") => ({ ticker, side: "BUY", status });
+const BUY_GATED = ["earnings-before-buy", "red-team-before-buy", "exits-before-entries"] as const;
+
+test("REGRESSION: a SELL-only cycle leaves all three BUY guards not-applicable", () => {
+  const results = checkInvariants(["submit_orders", "record_cycle"], {
+    orders: [SELL("LNG_US_EQ"), SELL("OXY_US_EQ"), SELL("COP_US_EQ")],
+  });
+  assert.deepEqual(violatedInvariants(results), [], "a sell-only cycle violates nothing");
+  for (const name of BUY_GATED) {
+    assert.equal(status(results, name), "not-applicable", name);
+    assert.match(invariantByName(results, name)!.detail ?? "", /only exits|no BUY/i);
+  }
+});
+
+test("a BUY with no red team still FAILS, so the guard has not been weakened", () => {
+  const results = checkInvariants(["submit_orders", "record_cycle"], {
+    orders: [BUY("AAPL_US_EQ")],
+  });
+  assert.equal(status(results, "red-team-before-buy"), "fail");
+  assert.equal(status(results, "earnings-before-buy"), "fail");
+});
+
+test("a BUY the gate REJECTED still demands the guards: it was still a decision to buy", () => {
+  const results = checkInvariants(["submit_orders"], {
+    orders: [BUY("AAPL_US_EQ", "rejected")],
+  });
+  assert.equal(status(results, "red-team-before-buy"), "fail");
+});
+
+test("a mixed cycle is judged on its BUY, not excused by its sells", () => {
+  const results = checkInvariants(["submit_orders"], {
+    orders: [SELL("LNG_US_EQ"), BUY("AAPL_US_EQ")],
+  });
+  assert.equal(status(results, "red-team-before-buy"), "fail");
+});
+
+test("UNCAPTURED orders keep the STRICTER behaviour, never the lenient one", () => {
+  // The safety-critical half. If the order list is missing or truncated we cannot prove a BUY did
+  // not happen, so the guard stays applicable. Gating on evidence that might be absent would turn a
+  // noisy guard into a silently vacuous one, which is strictly worse.
+  const missing = checkInvariants(["submit_orders"]);
+  assert.equal(status(missing, "red-team-before-buy"), "fail");
+
+  const truncated = checkInvariants(["submit_orders"], {
+    orders: [SELL("LNG_US_EQ")],
+    ordersTruncated: true,
+  });
+  assert.equal(status(truncated, "red-team-before-buy"), "fail");
+});
+
+test("a properly guarded BUY still passes all three", () => {
+  const results = checkInvariants(
+    ["manage_positions", "get_earnings_calendar", "red_team", "submit_orders", "record_cycle"],
+    { orders: [BUY("AAPL_US_EQ")] },
+  );
+  for (const name of BUY_GATED) assert.equal(status(results, name), "pass", name);
+});
