@@ -8,6 +8,13 @@ import {
   mergeQuoteMap,
   MAX_TOOL_SEQUENCE,
 } from "./traceAppend";
+import {
+  admitEdits,
+  decayed,
+  OBSERVATION_TTL_MS,
+  type Edit,
+  type MemoryRow,
+} from "./memoryPolicy";
 
 // --- mutations (writes) ---
 
@@ -213,6 +220,213 @@ export const recordOrderIntent = mutation({
     assertSecret(args.token);
     const { env, key } = args;
     return await ctx.db.insert("orderIntents", { env, key, createdAt: Date.now() });
+  },
+});
+
+// --- durable structured memory (replaces the free-form lessons note) ---
+//
+// The write path is deliberately narrow: atomic edits only, each with a reason, and the SAME
+// admission policy the tool showed the model is re-applied here at the storage boundary. The tool
+// runs it to explain refusals; this mutation runs it so a future caller cannot bypass the caps,
+// grant itself a directive, or grow memory without an audit trail. Same defence-in-depth spirit as
+// `boundedRows` and as saveReportScore re-checking a judged verdict.
+
+const memoryEdit = v.union(
+  v.object({
+    op: v.literal("add"),
+    id: v.string(),
+    class: v.string(),
+    category: v.string(),
+    condition: v.string(),
+    action: v.string(),
+    provenance: v.string(),
+    reason: v.string(),
+  }),
+  v.object({
+    op: v.literal("modify"),
+    id: v.string(),
+    condition: v.optional(v.string()),
+    action: v.optional(v.string()),
+    confidence: v.optional(v.number()),
+    reason: v.string(),
+  }),
+  v.object({
+    op: v.literal("retire"),
+    id: v.string(),
+    reason: v.string(),
+  }),
+);
+
+/** Convex rows -> the shape the pure policy reasons about. */
+function toMemoryRows(docs: readonly Doc<"agentMemory">[]): MemoryRow[] {
+  return docs.map((d) => ({
+    id: d.memoryId,
+    class: d.class as MemoryRow["class"],
+    category: d.category,
+    condition: d.condition,
+    action: d.action,
+    provenance: d.provenance as MemoryRow["provenance"],
+    confidence: d.confidence,
+    createdAt: d.createdAt,
+    lastConfirmedAt: d.lastConfirmedAt,
+    ...(d.expiresAt !== undefined ? { expiresAt: d.expiresAt } : {}),
+  }));
+}
+
+async function memoryDocs(
+  ctx: QueryCtx,
+  env: string,
+): Promise<Doc<"agentMemory">[]> {
+  return await ctx.db
+    .query("agentMemory")
+    .withIndex("by_env", (q) => q.eq("env", env))
+    .collect();
+}
+
+export const listAgentMemory = query({
+  args: { token: v.string(), env: v.string() },
+  handler: async (ctx, args) => {
+    assertSecret(args.token);
+    return await memoryDocs(ctx, args.env);
+  },
+});
+
+/**
+ * Apply up to a few atomic edits, returning a DECISION for every one of them.
+ *
+ * Refusals are returned rather than thrown: a rejected edit is information the agent should see
+ * ("that duplicates broker_min_position"), not a failed cycle. The reason each refusal names its
+ * rule is so a wrongly-refused memory is diagnosable instead of silently absent.
+ */
+export const applyMemoryEdits = mutation({
+  args: {
+    token: v.string(),
+    env: v.string(),
+    edits: v.array(memoryEdit),
+    sourceCycle: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    assertSecret(args.token);
+    const now = Date.now();
+    const docs = await memoryDocs(ctx, args.env);
+    const byMemoryId = new Map(docs.map((d) => [d.memoryId, d]));
+    const decisions = admitEdits(toMemoryRows(docs), args.edits as Edit[], now);
+
+    const applied: string[] = [];
+    for (const decision of decisions) {
+      if (!decision.admitted) continue;
+      const edit = decision.edit;
+      if (edit.op === "add") {
+        await ctx.db.insert("agentMemory", {
+          env: args.env,
+          memoryId: edit.id,
+          class: edit.class,
+          category: edit.category,
+          condition: edit.condition,
+          action: edit.action,
+          provenance: edit.provenance,
+          // A fresh memory is a hypothesis, not a fact: it starts mid-confidence and has to earn
+          // standing by being reconfirmed, per the survey's probation guidance.
+          confidence: edit.provenance === "user" ? 1 : 0.6,
+          createdAt: now,
+          lastConfirmedAt: now,
+          ...(edit.class === "observation" ? { expiresAt: now + OBSERVATION_TTL_MS } : {}),
+          ...(args.sourceCycle !== undefined ? { sourceCycle: args.sourceCycle } : {}),
+        });
+        applied.push(`add:${edit.id}`);
+        continue;
+      }
+      const doc = byMemoryId.get(edit.id);
+      if (!doc) continue; // policy already refused unknown targets; belt and braces
+      if (edit.op === "modify") {
+        await ctx.db.patch("agentMemory", doc._id, {
+          ...(edit.condition !== undefined ? { condition: edit.condition } : {}),
+          ...(edit.action !== undefined ? { action: edit.action } : {}),
+          ...(edit.confidence !== undefined ? { confidence: edit.confidence } : {}),
+          // An edited rule counts as reconfirmed: someone just looked at it deliberately.
+          lastConfirmedAt: now,
+        });
+        applied.push(`modify:${edit.id}`);
+        continue;
+      }
+      await ctx.db.insert("memoryRetirements", {
+        env: args.env,
+        memoryId: doc.memoryId,
+        class: doc.class,
+        condition: doc.condition,
+        action: doc.action,
+        reason: edit.reason,
+        retiredBy: "agent",
+        retiredAt: now,
+      });
+      await ctx.db.delete("agentMemory", doc._id);
+      applied.push(`retire:${edit.id}`);
+    }
+    return {
+      applied,
+      decisions: decisions.map((d) => ({
+        op: d.edit.op,
+        id: d.edit.id,
+        admitted: d.admitted,
+        ...(d.rule !== undefined ? { rule: d.rule } : {}),
+        ...(d.detail !== undefined ? { detail: d.detail } : {}),
+      })),
+    };
+  },
+});
+
+/**
+ * Retire whatever has lapsed, logging each one.
+ *
+ * Called once per cycle. This is what stops a belief formed in one market regime from standing
+ * forever with the authority of a hard constraint, which is exactly what happened when an
+ * observation about a single oil-price episode sat in memory as standing guidance long after it
+ * stopped being true. Directives are exempt: they are not the agent's inferences and do not rot.
+ */
+export const expireAgentMemory = mutation({
+  args: { token: v.string(), env: v.string() },
+  handler: async (ctx, args) => {
+    assertSecret(args.token);
+    const now = Date.now();
+    const docs = await memoryDocs(ctx, args.env);
+    const byMemoryId = new Map(docs.map((d) => [d.memoryId, d]));
+    const { active, expired } = decayed(toMemoryRows(docs), now);
+
+    for (const row of expired) {
+      const doc = byMemoryId.get(row.id);
+      if (!doc) continue;
+      await ctx.db.insert("memoryRetirements", {
+        env: args.env,
+        memoryId: doc.memoryId,
+        class: doc.class,
+        condition: doc.condition,
+        action: doc.action,
+        reason: "lapsed without reconfirmation",
+        retiredBy: "expiry",
+        retiredAt: now,
+      });
+      await ctx.db.delete("agentMemory", doc._id);
+    }
+    // Persist decayed confidence so the weakening is visible in the store, not only at read time.
+    for (const row of active) {
+      const doc = byMemoryId.get(row.id);
+      if (doc && doc.confidence !== row.confidence) {
+        await ctx.db.patch("agentMemory", doc._id, { confidence: row.confidence });
+      }
+    }
+    return { expired: expired.map((r) => r.id), active: active.length };
+  },
+});
+
+export const listMemoryRetirements = query({
+  args: { token: v.string(), env: v.string(), limit: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    assertSecret(args.token);
+    return await ctx.db
+      .query("memoryRetirements")
+      .withIndex("by_env", (q) => q.eq("env", args.env))
+      .order("desc")
+      .take(Math.min(Math.max(args.limit ?? 20, 1), 100));
   },
 });
 
@@ -800,6 +1014,30 @@ export const getCycleTrace = query({
 });
 
 /** Most recently finished traces first. Bounded; 50 max, so the read stays cheap as we grow. */
+/**
+ * Lucien's messages on their OWN budget, separate from the agent's.
+ *
+ * WHY THIS IS NOT JUST recallRecent. That returns the most recent messages regardless of author,
+ * and the agent's own reports are long and frequent: measured on live data, its prose was 15,157
+ * characters of the window against 515 of Lucien's, so his instructions scrolled out within a
+ * couple of cycles. "Long context is not memory" (arXiv 2603.07670): what matters is that the
+ * right thing is retrievable, not that a lot is present.
+ */
+export const recentUserMessages = query({
+  args: { token: v.string(), env: v.string(), limit: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    assertSecret(args.token);
+    const recent = await ctx.db
+      .query("messages")
+      .withIndex("by_env", (q) => q.eq("env", args.env))
+      .order("desc")
+      .take(200);
+    return recent
+      .filter((m) => m.role === "user")
+      .slice(0, Math.min(Math.max(args.limit ?? 15, 1), 50));
+  },
+});
+
 export const recentCycleTraces = query({
   args: { token: v.string(), env: v.string(), limit: v.optional(v.number()) },
   handler: async (ctx, args) => {

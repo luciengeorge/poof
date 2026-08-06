@@ -52,7 +52,7 @@ test("the subagent list is discovered from disk and is not empty (the guard cann
   const subagents = declaredSubagents();
   assert.ok(subagents.length > 0, "no subagents found: this test would otherwise assert nothing");
   // Pinned so a directory rename cannot quietly shrink what is checked.
-  assert.deepEqual(subagents, ["red_team", "report_judge"]);
+  assert.deepEqual(subagents, ["memory_gate", "red_team", "report_judge"]);
 });
 
 test("the ROOT agent disables the built-in ask_question", () => {

@@ -1,4 +1,5 @@
 import { ConvexHttpClient } from "convex/browser";
+import type { Edit, MemoryRow } from "../../convex/memoryPolicy.ts";
 import { anyApi, type FunctionReference } from "convex/server";
 import { timeoutFetch } from "./fetch-timeout.ts";
 
@@ -255,6 +256,45 @@ export class Memory {
   getLessons(env: Env): Promise<unknown> {
     return this.query("getLessons", { env });
   }
+  // --- durable structured memory (supersedes the free-form lessons note above) ---
+  listAgentMemory(env: Env): Promise<StoredMemoryRow[]> {
+    return this.query("listAgentMemory", { env }) as Promise<StoredMemoryRow[]>;
+  }
+  /**
+   * Apply atomic edits. Returns a decision per edit, including REFUSALS with the policy rule that
+   * refused them, so the agent can be told "that duplicates broker_min_position" rather than
+   * silently losing the edit. There is no full-rewrite counterpart by design.
+   */
+  applyMemoryEdits(
+    env: Env,
+    edits: readonly Edit[],
+    sourceCycle?: string,
+  ): Promise<MemoryEditOutcome> {
+    return this.mutation("applyMemoryEdits", {
+      env,
+      edits,
+      ...(sourceCycle !== undefined ? { sourceCycle } : {}),
+    }) as Promise<MemoryEditOutcome>;
+  }
+  expireAgentMemory(env: Env): Promise<{ expired: string[]; active: number }> {
+    return this.mutation("expireAgentMemory", { env }) as Promise<{
+      expired: string[];
+      active: number;
+    }>;
+  }
+  /** Lucien's messages on their own budget, so the agent's own prose cannot crowd them out. */
+  recentUserMessages(env: Env, limit?: number): Promise<{ text: string; createdAt: number }[]> {
+    return this.query("recentUserMessages", {
+      env,
+      ...(limit !== undefined ? { limit } : {}),
+    }) as Promise<{ text: string; createdAt: number }[]>;
+  }
+  listMemoryRetirements(env: Env, limit?: number): Promise<StoredRetirement[]> {
+    return this.query("listMemoryRetirements", {
+      env,
+      ...(limit !== undefined ? { limit } : {}),
+    }) as Promise<StoredRetirement[]>;
+  }
   recordCycle(c: CycleRecord): Promise<unknown> {
     return this.mutation("recordCycle", { ...c });
   }
@@ -421,4 +461,33 @@ export function memoryFromEnv(
       ? new ConvexHttpClient(url)
       : new ConvexHttpClient(url, { fetch: timeoutFetch(opts.timeoutMs) });
   return new Memory(httpClient as unknown as ConvexLike, token);
+}
+
+/** One stored memory row, as Convex returns it (semantic `memoryId` plus bookkeeping). */
+export interface StoredMemoryRow extends Omit<MemoryRow, "id"> {
+  memoryId: string;
+  env: string;
+  sourceCycle?: string;
+}
+
+/** One retirement, kept forever so a dropped rule can be told from a crowded-out one. */
+export interface StoredRetirement {
+  memoryId: string;
+  class: string;
+  condition: string;
+  action: string;
+  reason: string;
+  retiredBy: string;
+  retiredAt: number;
+}
+
+export interface MemoryEditOutcome {
+  applied: string[];
+  decisions: {
+    op: string;
+    id: string;
+    admitted: boolean;
+    rule?: string;
+    detail?: string;
+  }[];
 }

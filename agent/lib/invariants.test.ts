@@ -29,7 +29,8 @@ const GOOD_CYCLE = [
   "submit_orders",
   "review_external_holdings",
   "record_cycle",
-  "update_lessons",
+  "memory_gate",
+  "amend_memory",
 ];
 
 /**
@@ -209,7 +210,7 @@ test("a duplicate send is still a violation on a truncated TOOL sequence", () =>
 
 // --- vacuity tracking: the whole point of the not-applicable status ---
 
-test("a no-trade cycle is green but reports FOUR vacuous guards, not four verified ones", () => {
+test("a no-trade cycle is green but reports FIVE vacuous guards, not five verified ones", () => {
   const results = checkInvariants([
     "recall_memory",
     "manage_positions",
@@ -223,12 +224,17 @@ test("a no-trade cycle is green but reports FOUR vacuous guards, not four verifi
     "red-team-before-buy",
     "exits-before-entries",
     "no-duplicate-orders",
+    "memory-gate-before-amend",
   ]);
 });
 
 test("a not-applicable invariant always explains why it did not apply", () => {
+  // Each guard names the TOOL that would have exercised it, which differs per guard: the trading
+  // guards wait on submit_orders, the memory guard on amend_memory. What matters is that a vacuous
+  // result is never silent about which path was not reached.
   for (const r of vacuousInvariants(checkInvariants(["record_cycle"]))) {
-    assert.match(r.detail ?? "", /submit_orders/);
+    assert.match(r.detail ?? "", /submit_orders|amend_memory/);
+    assert.match(r.detail ?? "", /never exercised|not recorded/);
   }
 });
 
@@ -242,7 +248,8 @@ test("violatedInvariants counts only failures, never vacuous ones", () => {
     "exits-before-entries",
     "cycle-recorded",
   ]);
-  assert.deepEqual(vacuousInvariants(results), []);
+  // The memory guard is vacuous here: this cycle never touched memory, which is not a fault.
+  assert.deepEqual(vacuousInvariants(results).map((r) => r.name), ["memory-gate-before-amend"]);
 });
 
 // --- truncation: an UNKNOWN must never masquerade as a violation ---
@@ -259,6 +266,7 @@ test("a truncated trace turns absence-based failures into not-applicable, not fa
     "red-team-before-buy",
     "exits-before-entries",
     "cycle-recorded",
+    "memory-gate-before-amend",
   ]);
   // The same sequence WITHOUT truncation is four real violations: truncation is the only
   // difference, so a cap can no longer silently change a verdict into a false alert.
@@ -290,7 +298,15 @@ test("a truncated trace still fails an OBSERVED duplicate send", () => {
 
 test("a truncated trace still passes what it positively observed", () => {
   const results = checkInvariants(
-    ["manage_positions", "get_earnings_calendar", "red_team", "submit_orders", "record_cycle"],
+    [
+      "manage_positions",
+      "get_earnings_calendar",
+      "red_team",
+      "submit_orders",
+      "record_cycle",
+      "memory_gate",
+      "amend_memory",
+    ],
     { truncated: true, orders: ONE_CLEAN_ORDER },
   );
   for (const r of results) {

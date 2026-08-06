@@ -60,7 +60,57 @@ export default defineSchema({
     .index("by_env_and_ticker", ["env", "ticker"])
     .index("by_env_side_status", ["env", "side", "status"]),
 
-  // The agent's standing lessons: a single, concise, agent-maintained note of what keeps
+  // DURABLE MEMORY, structured. Replaces the free-form `lessons` note below, which the agent
+  // rewrote IN FULL every cycle. SHARP (arXiv 2605.06822) ablates exactly that: bounded atomic
+  // edits scored +33.2% return where free-form full rewrites scored -12.1%, because a rewrite
+  // makes credit assignment impossible. There is no "replace everything" mutation here by design.
+  //
+  // Three classes with SEPARATE budgets (see convex/memoryPolicy.ts). One shared budget is what
+  // let a passing remark about oil prices compete with a hard account constraint and win:
+  //   directive   - Lucien's standing instruction or a hard constraint. Never auto-evicted.
+  //   lesson      - a mechanic the agent derived from outcomes. Confidence decays unconfirmed.
+  //   observation - current regime or portfolio state. Expires by default.
+  //
+  // `memoryId` is a stable SEMANTIC id ("broker_min_position"), distinct from Convex's `_id`, so
+  // an edit can name what it is changing and an audit trail can follow one rule across revisions.
+  agentMemory: defineTable({
+    env: v.string(),
+    memoryId: v.string(),
+    class: v.string(),
+    category: v.string(),
+    condition: v.string(),
+    action: v.string(),
+    provenance: v.string(),
+    confidence: v.number(),
+    createdAt: v.number(),
+    lastConfirmedAt: v.number(),
+    expiresAt: v.optional(v.number()),
+    /** Which cycle proposed it, for attribution back to the outcome that motivated it. */
+    sourceCycle: v.optional(v.string()),
+  })
+    .index("by_env", ["env"])
+    .index("by_env_and_class", ["env", "class"])
+    .index("by_env_and_memoryId", ["env", "memoryId"]),
+
+  // Every retirement, kept forever. SHARP logs each removal with its motivation; without this a
+  // lesson simply vanished at the cap and nobody could tell whether it was wrong or just crowded
+  // out. This is the audit trail for what the agent stopped believing, and why.
+  memoryRetirements: defineTable({
+    env: v.string(),
+    memoryId: v.string(),
+    class: v.string(),
+    condition: v.string(),
+    action: v.string(),
+    reason: v.string(),
+    /** "agent" (proposed), "policy" (cap or conflict), "expiry" (lapsed), "user" (Lucien). */
+    retiredBy: v.string(),
+    retiredAt: v.number(),
+  })
+    .index("by_env", ["env"])
+    .index("by_env_and_memoryId", ["env", "memoryId"]),
+
+  // SUPERSEDED by agentMemory above, kept for read-back during the transition. The agent's
+  // standing lessons: a single, concise, agent-maintained note of what keeps
   // working / losing. Read at the start of every cycle, rewritten at the end. In-context
   // learning from its own track record.
   lessons: defineTable({

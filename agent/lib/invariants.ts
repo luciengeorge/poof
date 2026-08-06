@@ -31,6 +31,9 @@ export interface InvariantResult {
 
 /** The tool whose presence makes the conditional invariants applicable. */
 export const SUBMIT_ORDERS = "submit_orders";
+/** The tool that changes durable memory, and the judge that must vet a change first. */
+export const AMEND_MEMORY = "amend_memory";
+export const MEMORY_GATE = "memory_gate";
 
 /** Every invariant name, in the order `checkInvariants` reports them. */
 export const INVARIANT_NAMES = [
@@ -39,6 +42,7 @@ export const INVARIANT_NAMES = [
   "exits-before-entries",
   "cycle-recorded",
   "no-duplicate-orders",
+  "memory-gate-before-amend",
 ] as const;
 
 export type InvariantName = (typeof INVARIANT_NAMES)[number];
@@ -98,7 +102,10 @@ function prerequisiteBeforeSubmit(
   prerequisite: string,
   sequence: readonly string[],
   truncated: boolean,
+  /** The tool whose first occurrence must be preceded. Defaults to placing an order. */
+  trigger: string = SUBMIT_ORDERS,
 ): InvariantResult {
+  const SUBMIT_ORDERS = trigger;
   const submitAt = sequence.indexOf(SUBMIT_ORDERS);
   if (submitAt === -1) {
     return {
@@ -169,6 +176,17 @@ export function checkInvariants(
             detail: "record_cycle never ran, so this cycle left no decision-log row",
           },
     noDuplicateOrders(sequence, truncated, opts),
+    // Durable memory may only change after an INDEPENDENT judge has vetted the change. The gate
+    // advises on quality and this codebase's policy module enforces the structural rules, but
+    // neither is worth much if the proposer can simply skip the review, so the sequence is checked
+    // in production exactly as it is for red-teaming a trade.
+    prerequisiteBeforeSubmit(
+      "memory-gate-before-amend",
+      MEMORY_GATE,
+      sequence,
+      truncated,
+      AMEND_MEMORY,
+    ),
   ];
 }
 
