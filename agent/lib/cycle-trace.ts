@@ -76,6 +76,47 @@ interface RequestedAction {
  * results as they arrive. Both feed the same `checkInvariants`. Subagent delegations are
  * included under their subagent name so `red_team` participates in the ordering invariants.
  */
+/**
+ * Every order a run recorded, read from its `action.result` events, accumulated across ALL
+ * `submit_orders` results.
+ *
+ * OFFLINE MIRROR of what the production hook merges into the trace. It exists so
+ * `no-duplicate-orders` is graded on both surfaces from one definition: that invariant is a
+ * property of the ORDERS, so a sequence of tool names cannot decide it, and without this the
+ * guard would be production-only and silently unexercised in CI.
+ *
+ * Returns null when no `submit_orders` result was observed at all, or when none of them carried a
+ * readable order list. Null means UNKNOWN, never "no orders": the invariant reports
+ * not-applicable rather than treating an observability gap as a clean cycle.
+ *
+ * Accumulates rather than replaces, for the same reason the stored trace does: a cycle submits
+ * more than once whenever the broker rejects a first attempt and the agent retries.
+ */
+export function resultOrders(
+  events: readonly EventLike[],
+): { orders: TracedOrder[]; truncated: boolean } | null {
+  const orders: TracedOrder[] = [];
+  let truncated = false;
+  let seenAny = false;
+  for (const event of events) {
+    if (event.type !== "action.result") continue;
+    const result = (event.data as { result?: unknown })?.result;
+    if (actionResultName(result) !== "submit_orders") continue;
+    const batch = ordersFrom((result as { output?: unknown })?.output);
+    if (!batch) continue;
+    seenAny = true;
+    truncated = truncated || batch.truncated;
+    for (const order of batch.orders) {
+      if (orders.length >= MAX_TRACE_ORDERS) {
+        truncated = true;
+        break;
+      }
+      orders.push(order);
+    }
+  }
+  return seenAny ? { orders, truncated } : null;
+}
+
 export function requestedActionNames(events: readonly EventLike[]): string[] {
   const requested: string[] = [];
   for (const event of events) {

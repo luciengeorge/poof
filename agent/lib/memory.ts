@@ -294,19 +294,31 @@ export class Memory {
   startCycleTrace(key: CycleTraceKey): Promise<unknown> {
     return this.mutation("startCycleTrace", { ...key });
   }
-  /** `callId` is the idempotency key: a re-delivered action result must not double-append. */
+  /**
+   * `callId` is the idempotency key: a re-delivered action result must not double-append.
+   *
+   * Returns the append DECISION so the caller can tell a first delivery from a re-delivery.
+   * "duplicate" means this exact action result was already recorded, and the caller must NOT
+   * then save its context: the accumulating collections would double-count, turning one real
+   * order into an apparent duplicate send. "truncated" is still a first delivery (the tool
+   * missed the sequence cap, but its orders and exits are real).
+   */
   appendCycleTraceTool(
     key: CycleTraceKey,
     toolName: string,
     callId: string,
-  ): Promise<unknown> {
-    return this.mutation("appendCycleTraceTool", { ...key, toolName, callId });
+  ): Promise<"no-trace" | "duplicate" | "truncated" | "append"> {
+    return this.mutation("appendCycleTraceTool", { ...key, toolName, callId }) as Promise<
+      "no-trace" | "duplicate" | "truncated" | "append"
+    >;
   }
   /**
    * Save whichever pieces of a cycle's ground truth the caller just observed.
    *
-   * Collections are SET (each comes from one tool result, so a re-delivered event rewrites the
-   * same value); `quotes` are MERGED server-side across the cycle's several get_prices calls.
+   * SNAPSHOTS (money figures, position tickers and count, external holdings) are SET: the latest
+   * observation is the best one. EVENT LISTS (`orders`, `exits`) and `quotes` are MERGED
+   * server-side, because a cycle produces them across several tool calls and an earlier batch
+   * must not be erased. Call this only on a FIRST delivery (see `appendCycleTraceTool`).
    */
   saveCycleTraceContext(
     key: CycleTraceKey,

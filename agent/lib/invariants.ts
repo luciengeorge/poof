@@ -38,12 +38,35 @@ export const INVARIANT_NAMES = [
   "red-team-before-buy",
   "exits-before-entries",
   "cycle-recorded",
-  "single-submit",
+  "no-duplicate-orders",
 ] as const;
 
 export type InvariantName = (typeof INVARIANT_NAMES)[number];
 
-/** Options describing how complete the recorded sequence is. */
+/**
+ * One recorded order, reduced to what duplicate detection needs.
+ *
+ * `status` matters as much as the identity: only an order that actually reached the broker can be
+ * a duplicate send.
+ */
+export interface OrderRowLike {
+  ticker: string;
+  side: string;
+  status: string;
+}
+
+/**
+ * Order statuses meaning the order REACHED THE BROKER, and so could constitute a duplicate send.
+ *
+ * "rejected" and "skipped" are deliberately excluded, and that exclusion is the whole reason this
+ * invariant can be trusted. A cycle that tries to fully close a position, gets rejected on the
+ * broker's minimum-position rule, and retries a workable partial produces two rows for the same
+ * ticker and side. Only one was ever sent. Counting rejections would fail that cycle, which is
+ * correct behaviour being reported as a violation.
+ */
+const SENT_TO_BROKER = new Set(["placed", "simulated"]);
+
+/** Options describing how complete the recorded sequence is, plus the orders it produced. */
 export interface CheckOptions {
   /**
    * The trace hit its recording cap, so tools beyond it are missing. An ABSENCE can then no
@@ -51,6 +74,13 @@ export interface CheckOptions {
    * violation, so absence-based conclusions degrade to "not-applicable".
    */
   truncated?: boolean;
+  /**
+   * The orders this cycle recorded, if they were captured. Absent means "not observed", which is
+   * never read as "none": duplication is then simply unknowable, not disproven.
+   */
+  orders?: readonly OrderRowLike[];
+  /** The recorded order list hit its cap, so it is INCOMPLETE and cannot settle duplication. */
+  ordersTruncated?: boolean;
 }
 
 const TRUNCATED_NOTE =
@@ -116,7 +146,6 @@ export function checkInvariants(
   opts: CheckOptions = {},
 ): InvariantResult[] {
   const truncated = opts.truncated === true;
-  const submitCount = sequence.filter((name) => name === SUBMIT_ORDERS).length;
 
   return [
     prerequisiteBeforeSubmit("earnings-before-buy", "get_earnings_calendar", sequence, truncated),
@@ -139,24 +168,72 @@ export function checkInvariants(
             status: "fail" as const,
             detail: "record_cycle never ran, so this cycle left no decision-log row",
           },
-    // One cycle places one batch of orders. A second submit means the agent (or a step
-    // re-run) is placing orders twice off one decision.
-    submitCount === 0
-      ? {
-          name: "single-submit" as const,
-          status: "not-applicable" as const,
-          detail: truncated
-            ? `no ${SUBMIT_ORDERS} recorded, but ${TRUNCATED_NOTE}`
-            : `no ${SUBMIT_ORDERS} in this cycle, so the guard was never exercised`,
-        }
-      : submitCount === 1
-        ? { name: "single-submit" as const, status: "pass" as const }
-        : {
-            name: "single-submit" as const,
-            status: "fail" as const,
-            detail: `${SUBMIT_ORDERS} ran ${submitCount} times in one cycle`,
-          },
+    noDuplicateOrders(sequence, truncated, opts),
   ];
+}
+
+/**
+ * No instrument was sent to the broker twice in one cycle.
+ *
+ * THIS REPLACED A COUNT OF `submit_orders` CALLS, which was the wrong measurement. Multiple
+ * submits are legitimate and routine: the agent submits sells and buys separately, and it retries
+ * a workable variant when the broker rejects a first attempt. The first production cycle to do
+ * that was reported as a violation while nothing whatever was wrong, and a guard that fires on
+ * correct behaviour trains its reader to ignore it. The hazard actually worth alerting on is a
+ * duplicate SEND (the same position sold or bought twice off one decision), which is a property
+ * of the orders, not of how many calls produced them.
+ *
+ * Absence never convicts. No submits at all means the guard was not exercised; unrecorded or
+ * truncated orders mean duplication is unknowable. Both are "not-applicable", so an observability
+ * gap cannot masquerade as a double-spend.
+ */
+function noDuplicateOrders(
+  sequence: readonly string[],
+  truncated: boolean,
+  opts: CheckOptions,
+): InvariantResult {
+  const name = "no-duplicate-orders" as const;
+  if (!sequence.includes(SUBMIT_ORDERS)) {
+    return {
+      name,
+      status: "not-applicable",
+      detail: truncated
+        ? `no ${SUBMIT_ORDERS} recorded, but ${TRUNCATED_NOTE}`
+        : `no ${SUBMIT_ORDERS} in this cycle, so the guard was never exercised`,
+    };
+  }
+  if (opts.orders === undefined) {
+    return {
+      name,
+      status: "not-applicable",
+      detail: `${SUBMIT_ORDERS} ran but its orders were not recorded, so duplication is unknowable`,
+    };
+  }
+  if (opts.ordersTruncated === true) {
+    return {
+      name,
+      status: "not-applicable",
+      detail:
+        "the recorded order list was TRUNCATED at its cap, so a duplicate may sit beyond it; " +
+        "treated as not-applicable rather than a violation",
+    };
+  }
+
+  const seen = new Map<string, number>();
+  for (const order of opts.orders) {
+    if (!SENT_TO_BROKER.has(order.status)) continue;
+    const key = `${order.ticker}|${order.side}`;
+    seen.set(key, (seen.get(key) ?? 0) + 1);
+  }
+  const duplicates = [...seen.entries()].filter(([, count]) => count > 1);
+  if (duplicates.length === 0) return { name, status: "pass" };
+  return {
+    name,
+    status: "fail",
+    detail: duplicates
+      .map(([key, count]) => `${key.replace("|", " ")} sent ${count} times`)
+      .join("; "),
+  };
 }
 
 /** The invariants that were broken. Empty means nothing is known to be wrong. */

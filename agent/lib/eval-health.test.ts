@@ -115,12 +115,12 @@ test("the vacuity rate is explicit in the counts and in the wording", () => {
       sessionId: `v${i}`,
     })),
   ];
-  const guard = invariantHealthByName(aggregateEvalHealth(window), "single-submit");
+  const guard = invariantHealthByName(aggregateEvalHealth(window), "no-duplicate-orders");
   assert.deepEqual(
     { pass: guard?.pass, fail: guard?.fail, notApplicable: guard?.notApplicable },
     { pass: 2, fail: 0, notApplicable: 3 },
   );
-  assert.match(lines(window), /single-submit: 2 passed, 0 failed, 3 not-applicable/);
+  assert.match(lines(window), /no-duplicate-orders: 2 passed, 0 failed, 3 not-applicable/);
 });
 
 // --- violations ---
@@ -130,17 +130,17 @@ test("a violation is listed with its cycle and its tool sequence", () => {
     sessionId: "sBad",
     turnId: "tBad",
     toolSequence: ["submit_orders", "submit_orders"],
-    invariants: invariants({ "single-submit": "fail" }),
+    invariants: invariants({ "no-duplicate-orders": "fail" }),
   });
   const health = aggregateEvalHealth([...cycles(3), bad]);
   assert.equal(health.violations.length, 1);
-  assert.equal(health.violations[0].invariant, "single-submit");
+  assert.equal(health.violations[0].invariant, "no-duplicate-orders");
   assert.equal(health.violations[0].sessionId, "sBad");
   assert.equal(health.violations[0].turnId, "tBad");
   assert.equal(health.violations[0].toolSequence, "submit_orders -> submit_orders");
 
   const text = formatEvalHealth(health).join("\n");
-  assert.match(text, /single-submit/);
+  assert.match(text, /no-duplicate-orders/);
   assert.match(text, /sBad/);
   assert.match(text, /submit_orders -> submit_orders/);
 });
@@ -152,7 +152,7 @@ test("a window with no violations says so without claiming the guards were exerc
 
 test("two violations in one cycle are both listed", () => {
   const bad = trace({
-    invariants: invariants({ "single-submit": "fail", "cycle-recorded": "fail" }),
+    invariants: invariants({ "no-duplicate-orders": "fail", "cycle-recorded": "fail" }),
   });
   assert.equal(aggregateEvalHealth([bad]).violations.length, 2);
 });
@@ -414,8 +414,8 @@ test("an invariant name from an older deploy is still reported, never dropped", 
 });
 
 test("an unrecognised status is counted as unknown rather than as a pass", () => {
-  const window = [trace({ invariants: [{ name: "single-submit", status: "weird" }] })];
-  const guard = invariantHealthByName(aggregateEvalHealth(window), "single-submit");
+  const window = [trace({ invariants: [{ name: "no-duplicate-orders", status: "weird" }] })];
+  const guard = invariantHealthByName(aggregateEvalHealth(window), "no-duplicate-orders");
   assert.deepEqual(
     { pass: guard?.pass, fail: guard?.fail, notApplicable: guard?.notApplicable },
     { pass: 0, fail: 0, notApplicable: 0 },

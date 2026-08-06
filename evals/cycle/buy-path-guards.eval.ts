@@ -1,6 +1,6 @@
 import { defineEval } from "eve/evals";
 import { STRATEGY_TAGS } from "../../agent/lib/positions.ts";
-import { invariantVerified } from "../lib/cycle-invariants.ts";
+import { guardedPathExercised, invariantVerified } from "../lib/cycle-invariants.ts";
 
 // POSITIVE verification of the guarded BUY path. The other three cycle guards
 // (earnings-guard, red-team-before-buy, strategy-tag-on-buy) assert CONDITIONAL invariants:
@@ -42,7 +42,11 @@ export default defineEval({
     // is only meaningful because of this assertion, and it is a gate, never a conditional.
     t.eventsSatisfy(
       "the cycle actually reached submit_orders, so the guarded BUY path was exercised",
-      (events) => invariantVerified(events, "single-submit"),
+      // Asked of the sequence directly rather than through an invariant. This previously read the
+      // old `single-submit` guard, whose not-applicable state coincided with "never submitted"
+      // but was answering a different question, so the two came apart as soon as that guard was
+      // replaced by the orders-based `no-duplicate-orders`.
+      (events) => guardedPathExercised(events, "the guarded BUY path"),
     );
 
     // 2-4. Each guard held BEFORE that real submit_orders: earnings checked (binary-event gap
@@ -59,6 +63,14 @@ export default defineEval({
     t.eventsSatisfy(
       "manage_positions ran before the first submit_orders",
       (events) => invariantVerified(events, "exits-before-entries"),
+    );
+    // Verified POSITIVELY here, on the one eval guaranteed to reach a real submit_orders: this
+    // guard is a property of the orders, so it can only be graded where orders exist. Offline
+    // coverage matters because in production it is the last line against sending an instrument
+    // twice off one decision.
+    t.eventsSatisfy(
+      "no instrument was sent to the broker twice in this cycle",
+      (events) => invariantVerified(events, "no-duplicate-orders"),
     );
 
     // 5. Value-level: at least one BUY was proposed, and every BUY carries a strategyTag from

@@ -42,6 +42,12 @@ function cash(over: Partial<CashBalance> = {}): CashBalance {
 
 /** A tool sequence that violates every submit-gated invariant: a buy with no guards at all. */
 const VIOLATING_SEQUENCE = ["submit_orders", "submit_orders"];
+/** The same instrument sent to the broker twice, which is what `no-duplicate-orders` catches. */
+const DUPLICATE_ORDERS = [
+  { ticker: "KO_US_EQ", side: "BUY", status: "placed" },
+  { ticker: "KO_US_EQ", side: "BUY", status: "placed" },
+];
+const VIOLATING_OPTS = { orders: DUPLICATE_ORDERS };
 /** A report claiming the account is worth GBP 282 when it holds GBP 248: the real incident. */
 const LYING_REPORT = "Bottom line: your account is worth about £282.00 today.";
 const TRUTH = { accountValueGbp: 248.16, cashGbp: 248.16, deployedGbp: 0 };
@@ -63,7 +69,7 @@ const SICK_WINDOW = [
     turnId: "t1",
     completedAt: 1,
     toolSequence: VIOLATING_SEQUENCE,
-    invariants: checkInvariants(VIOLATING_SEQUENCE),
+    invariants: checkInvariants(VIOLATING_SEQUENCE, VIOLATING_OPTS),
     reportScore: {
       status: "judged",
       grounding: 1,
@@ -77,8 +83,9 @@ const SICK_WINDOW = [
 ];
 
 test("the observers really are failing in these tests (the guard cannot go vacuous)", () => {
-  // All five: no earnings check, no red team, no exits, no record_cycle, and a double submit.
-  assert.equal(violatedInvariants(checkInvariants(VIOLATING_SEQUENCE)).length, 5);
+  // All five: no earnings check, no red team, no exits, no record_cycle, and one instrument
+  // sent to the broker twice.
+  assert.equal(violatedInvariants(checkInvariants(VIOLATING_SEQUENCE, VIOLATING_OPTS)).length, 5);
   assert.equal(checkReportNumbers(LYING_REPORT, TRUTH).pass, false);
   // Both judge thresholds tripped: overall below 3 and grounding below 4.
   assert.equal(judgeAlertReasons(DAMNING_VERDICT).length, 2);
