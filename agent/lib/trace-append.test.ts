@@ -5,6 +5,7 @@ import { checkInvariants, violatedInvariants } from "./invariants.ts";
 // typecheck config cannot resolve `.ts` specifiers into agent/). The test lives here only
 // because that is where the test-runner glob looks.
 import {
+  contextAlreadyMerged,
   decideAppend,
   mergeEventRows,
   mergeQuoteMap,
@@ -248,4 +249,32 @@ test("merging quotes is pure and mutates neither side", () => {
   mergeQuoteMap(existing, incoming);
   assert.deepEqual(existing, { AMZN: 231.4 });
   assert.deepEqual(incoming, { KO: 71.2 });
+});
+
+// --- contextAlreadyMerged: re-delivery safety WITHOUT losing a later, fuller delivery ---
+
+test("REGRESSION: a duplicate APPEND must not stop the context save", () => {
+  // The bug this pins. The hook used to return early whenever the tool append reported a duplicate,
+  // so a live cycle on 2026-08-06 recorded neither its orders nor its exits: the only delivery whose
+  // output parsed was one the append had already seen. Sequence-dedupe and data-dedupe are separate
+  // questions, and answering the second with the first silently discarded real orders.
+  const existing = { toolSequence: ["submit_orders"], callIds: ["call_0"] };
+  assert.deepEqual(decideAppend(existing, "submit_orders", "call_0"), { kind: "duplicate" });
+  // ...yet its context has NOT been merged, so it still must be:
+  assert.equal(contextAlreadyMerged(undefined, "call_0"), false);
+});
+
+test("a callId that already contributed does not merge twice", () => {
+  assert.equal(contextAlreadyMerged(["call_0"], "call_0"), true);
+});
+
+test("a different callId still merges, so two tools both contribute", () => {
+  assert.equal(contextAlreadyMerged(["call_0"], "call_1"), false);
+});
+
+test("an absent or empty callId always merges: losing real orders is the worse failure", () => {
+  // It cannot be deduplicated. A missing order makes the judge read an accurate report as a
+  // fabrication, which is worse than counting one order twice.
+  assert.equal(contextAlreadyMerged(["call_0"], undefined), false);
+  assert.equal(contextAlreadyMerged(["call_0"], ""), false);
 });

@@ -122,3 +122,25 @@ export function decideAppend(
     callIds: callId === "" ? [...existing.callIds] : [...existing.callIds, callId],
   };
 }
+
+/**
+ * Has this action result already contributed to the ACCUMULATING collections?
+ *
+ * The counterpart to `decideAppend`, and separate from it on purpose. `decideAppend` answers "is
+ * this a second delivery of the same tool call?" for the SEQUENCE; this answers "have I already
+ * merged this call's orders, exits or quotes?" for the DATA. Conflating the two cost real data: the
+ * hook used to skip the entire context save whenever the append reported a duplicate, so on
+ * 2026-08-06 a live cycle recorded neither its orders nor its exits, because the only delivery whose
+ * output actually parsed was one the append had already seen.
+ *
+ * An absent or empty callId always merges. It cannot be deduplicated, and silently dropping real
+ * orders is a worse failure than counting one twice: a missing order makes the judge read an
+ * accurate report as a fabrication, which is the exact failure this ground truth exists to prevent.
+ */
+export function contextAlreadyMerged(
+  contextCallIds: readonly string[] | undefined,
+  callId: string | undefined,
+): boolean {
+  if (callId === undefined || callId === "") return false;
+  return (contextCallIds ?? []).includes(callId);
+}

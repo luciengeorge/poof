@@ -385,7 +385,7 @@ export class Memory {
         | "externalAdvisoryHoldingsTruncated"
         | "reportText"
       >
-    >,
+    > & { callId?: string },
   ): Promise<unknown> {
     return this.mutation("saveCycleTraceContext", { ...key, ...context });
   }

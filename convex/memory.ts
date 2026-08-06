@@ -3,6 +3,7 @@ import type { Doc } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { assertSecret } from "./auth";
 import {
+  contextAlreadyMerged,
   decideAppend,
   mergeEventRows,
   mergeQuoteMap,
@@ -797,12 +798,22 @@ export const saveCycleTraceContext = mutation({
     ),
     externalAdvisoryHoldingsTruncated: v.optional(v.boolean()),
     reportText: v.optional(v.string()),
+    /** The action result this context came from. Makes the ACCUMULATING merges idempotent. */
+    callId: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     assertSecret(args.token);
-    const { token, env, sessionId, turnId, ...rest } = args;
+    const { token, env, sessionId, turnId, callId, ...rest } = args;
     const existing = await findTrace(ctx, env, sessionId, turnId);
     if (!existing) return null;
+    // Has this exact action result already contributed to the accumulating collections? If so the
+    // merges below are skipped while the snapshots still apply, because re-writing a snapshot is
+    // idempotent whereas re-merging an event list would invent a duplicate order.
+    //
+    // This replaced a blunter rule that skipped the ENTIRE save whenever the tool append reported a
+    // duplicate. That lost real data: on 2026-08-06 a cycle recorded neither its orders nor its
+    // exits, because the only delivery whose output parsed was one the append had already seen.
+    const alreadyMerged = contextAlreadyMerged(existing.contextCallIds, callId);
     // Reject non-finite money before it is stored: a NaN account value would silently
     // disable the report check rather than failing visibly.
     const patch: Record<string, unknown> = {};
@@ -826,13 +837,13 @@ export const saveCycleTraceContext = mutation({
     // judge, reading a complete list that lacked a real order, would score an accurate report as
     // a fabrication. Truncation is STICKY for the same reason as the quote map: once something
     // has been dropped, the list stays INCOMPLETE for this cycle however many later batches fit.
-    if (rest.orders !== undefined) {
+    if (rest.orders !== undefined && !alreadyMerged) {
       const merged = mergeEventRows(existing.orders, rest.orders);
       patch.orders = merged.rows;
       patch.ordersTruncated =
         merged.truncated || existing.ordersTruncated === true || rest.ordersTruncated === true;
     }
-    if (rest.exits !== undefined) {
+    if (rest.exits !== undefined && !alreadyMerged) {
       const merged = mergeEventRows(existing.exits, rest.exits);
       patch.exits = merged.rows;
       patch.exitsTruncated =
@@ -851,7 +862,7 @@ export const saveCycleTraceContext = mutation({
       patch.externalAdvisoryHoldings = bounded.rows;
       patch.externalAdvisoryHoldingsTruncated = bounded.truncated;
     }
-    if (rest.quotes !== undefined) {
+    if (rest.quotes !== undefined && !alreadyMerged) {
       const merged = mergeQuoteMap(existing.quotes, rest.quotes);
       patch.quotes = merged.quotes;
       // Sticky: once a quote has been dropped, the map stays INCOMPLETE for this cycle however
@@ -860,6 +871,13 @@ export const saveCycleTraceContext = mutation({
     }
     if (rest.reportText !== undefined) {
       patch.reportText = rest.reportText.slice(0, MAX_REPORT_TEXT);
+    }
+    // Record the contribution only when something accumulating was actually merged, so a snapshot
+    // save does not burn the callId and block a later, fuller delivery of the same call.
+    const mergedSomething =
+      patch.orders !== undefined || patch.exits !== undefined || patch.quotes !== undefined;
+    if (mergedSomething && callId !== undefined && callId !== "") {
+      patch.contextCallIds = [...(existing.contextCallIds ?? []), callId];
     }
     if (Object.keys(patch).length === 0) return existing._id;
     await ctx.db.patch("cycleTraces", existing._id, patch);
