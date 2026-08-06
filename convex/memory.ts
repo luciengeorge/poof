@@ -2,7 +2,12 @@ import { mutation, query, type QueryCtx } from "./_generated/server";
 import type { Doc } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { assertSecret } from "./auth";
-import { decideAppend, mergeQuoteMap, MAX_TOOL_SEQUENCE } from "./traceAppend";
+import {
+  decideAppend,
+  mergeEventRows,
+  mergeQuoteMap,
+  MAX_TOOL_SEQUENCE,
+} from "./traceAppend";
 
 // --- mutations (writes) ---
 
@@ -443,12 +448,15 @@ export const appendCycleTraceTool = mutation({
     toolName: v.string(),
     callId: v.string(),
   },
-  handler: async (ctx, args) => {
+  // Returns the append DECISION, not just an id. The caller needs it: a re-delivered result must
+  // not merge its orders or exits a second time, which would manufacture a duplicate send out of
+  // one real order.
+  handler: async (ctx, args): Promise<"no-trace" | "duplicate" | "truncated" | "append"> => {
     assertSecret(args.token);
     const existing = await findTrace(ctx, args.env, args.sessionId, args.turnId);
-    if (!existing) return null;
+    if (!existing) return "no-trace";
     const decision = decideAppend(existing, args.toolName, args.callId);
-    if (decision.kind === "duplicate") return existing._id;
+    if (decision.kind === "duplicate") return "duplicate";
     if (decision.kind === "truncated") {
       // Mark the trace LOUDLY rather than silently dropping tools: checkInvariants downgrades
       // absence-based conclusions on a truncated trace, so a cap can never turn an unknown
@@ -461,13 +469,15 @@ export const appendCycleTraceTool = mutation({
         );
         await ctx.db.patch("cycleTraces", existing._id, { truncated: true });
       }
-      return existing._id;
+      // Still a FIRST delivery: the tool did not fit the sequence cap, but its orders and exits
+      // are real and must still be merged, so this is not reported as a duplicate.
+      return "truncated";
     }
     await ctx.db.patch("cycleTraces", existing._id, {
       toolSequence: decision.toolSequence,
       callIds: decision.callIds,
     });
-    return existing._id;
+    return "append";
   },
 });
 
@@ -503,10 +513,23 @@ function boundedRows<T>(
  * the cash left AFTER trading and grading that against the pre-trade figure produced a guaranteed
  * false finding on every cycle that traded.
  *
- * Collections are set wholesale (each comes from one tool result, and a re-delivered event
- * therefore rewrites the same value, which is idempotent). QUOTES are the exception: a cycle calls
- * get_prices several times, so they are MERGED into the stored map, because a price the report
- * cites may have come from the first batch.
+ * COLLECTIONS FALL INTO TWO KINDS, and getting this wrong silently corrupted the ground truth
+ * once already. The original rule was "set wholesale, because each comes from one tool result".
+ * That premise held for the snapshots and was FALSE for the event lists:
+ *
+ *  - SNAPSHOTS (the money figures, position tickers and count, external holdings) describe the
+ *    account at a moment. The latest observation is the best one, so last-write-wins is correct
+ *    even when review_performance runs more than once.
+ *  - EVENT LISTS (orders, exits) and the QUOTE MAP ACCUMULATE across the several submit_orders,
+ *    manage_positions and get_prices calls one cycle makes. They are MERGED, because an order,
+ *    exit or price the report cites may have come from the first batch, and erasing it would
+ *    leave the judge grading an accurate report against an incomplete record that claims to be
+ *    complete.
+ *
+ * Re-delivery is handled by the CALLER, which skips this write entirely when
+ * `appendCycleTraceTool` reports the action result was a duplicate. Merging cannot be made
+ * idempotent by value here: two identical placed orders are a real duplicate send, and collapsing
+ * them would hide exactly what `no-duplicate-orders` exists to catch.
  */
 export const saveCycleTraceContext = mutation({
   args: {
@@ -582,15 +605,23 @@ export const saveCycleTraceContext = mutation({
     if (rest.externalGbpValues !== undefined) {
       patch.externalGbpValues = rest.externalGbpValues.filter((n) => Number.isFinite(n));
     }
+    // ORDERS and EXITS ACCUMULATE. A cycle calls submit_orders (and manage_positions) more than
+    // once whenever the broker rejects a first attempt and the agent retries a workable variant,
+    // so overwriting would drop the earlier batch while still marking the list COMPLETE. The
+    // judge, reading a complete list that lacked a real order, would score an accurate report as
+    // a fabrication. Truncation is STICKY for the same reason as the quote map: once something
+    // has been dropped, the list stays INCOMPLETE for this cycle however many later batches fit.
     if (rest.orders !== undefined) {
-      const bounded = boundedRows(rest.orders, rest.ordersTruncated);
-      patch.orders = bounded.rows;
-      patch.ordersTruncated = bounded.truncated;
+      const merged = mergeEventRows(existing.orders, rest.orders);
+      patch.orders = merged.rows;
+      patch.ordersTruncated =
+        merged.truncated || existing.ordersTruncated === true || rest.ordersTruncated === true;
     }
     if (rest.exits !== undefined) {
-      const bounded = boundedRows(rest.exits, rest.exitsTruncated);
-      patch.exits = bounded.rows;
-      patch.exitsTruncated = bounded.truncated;
+      const merged = mergeEventRows(existing.exits, rest.exits);
+      patch.exits = merged.rows;
+      patch.exitsTruncated =
+        merged.truncated || existing.exitsTruncated === true || rest.exitsTruncated === true;
     }
     if (rest.positionTickers !== undefined) {
       const bounded = boundedRows(rest.positionTickers, rest.positionsTruncated);

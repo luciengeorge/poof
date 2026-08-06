@@ -32,6 +32,13 @@ const GOOD_CYCLE = [
   "update_lessons",
 ];
 
+/**
+ * One clean order, for the cases whose subject is ORDERING rather than duplication. Without it
+ * `no-duplicate-orders` is correctly not-applicable (submits happened but no orders were
+ * observed), which would make these assertions about a different thing than they intend.
+ */
+const ONE_CLEAN_ORDER = [{ ticker: "KO_US_EQ", side: "BUY", status: "placed" }];
+
 test("every invariant is reported exactly once, in a stable order", () => {
   const results = checkInvariants(GOOD_CYCLE);
   assert.deepEqual(
@@ -41,7 +48,7 @@ test("every invariant is reported exactly once, in a stable order", () => {
 });
 
 test("a complete, well-ordered cycle passes every invariant", () => {
-  const results = checkInvariants(GOOD_CYCLE);
+  const results = checkInvariants(GOOD_CYCLE, { orders: ONE_CLEAN_ORDER });
   for (const r of results) {
     assert.equal(r.status, "pass", `${r.name} should pass: ${r.detail ?? ""}`);
   }
@@ -111,20 +118,93 @@ test("cycle-recorded: fails on an empty tool sequence and is never not-applicabl
   }
 });
 
-// --- single-submit ---
+// --- no-duplicate-orders ---
+//
+// This replaced a count of submit_orders calls. The REGRESSION tests below pin the live cycle
+// that proved the count wrong: multiple submits with no duplicate send is correct behaviour and
+// must not alert.
 
-test("single-submit: passes on exactly one submit_orders", () => {
-  assert.equal(status(checkInvariants(["submit_orders"]), "single-submit"), "pass");
+const SENT = (ticker: string, side: string) => ({ ticker, side, status: "placed" });
+
+test("no-duplicate-orders: passes when each instrument was sent once", () => {
+  const results = checkInvariants(["submit_orders"], {
+    orders: [SENT("COP_US_EQ", "SELL"), SENT("LNG_US_EQ", "SELL")],
+  });
+  assert.equal(status(results, "no-duplicate-orders"), "pass");
 });
 
-test("single-submit: fails on two submit_orders in one cycle", () => {
-  const results = checkInvariants(["submit_orders", "submit_orders"]);
-  assert.equal(status(results, "single-submit"), "fail");
-  assert.match(invariantByName(results, "single-submit")!.detail ?? "", /2/);
+test("no-duplicate-orders: fails when the same instrument and side reached the broker twice", () => {
+  const results = checkInvariants(["submit_orders"], {
+    orders: [SENT("COP_US_EQ", "SELL"), SENT("COP_US_EQ", "SELL")],
+  });
+  assert.equal(status(results, "no-duplicate-orders"), "fail");
+  assert.match(invariantByName(results, "no-duplicate-orders")!.detail ?? "", /COP_US_EQ SELL/);
 });
 
-test("single-submit: not-applicable when nothing was submitted", () => {
-  assert.equal(status(checkInvariants(["record_cycle"]), "single-submit"), "not-applicable");
+test("REGRESSION: several submit_orders calls are NOT a violation on their own", () => {
+  // The old invariant counted calls and failed this. The agent submits sells and buys separately,
+  // so a cycle like this is routine and correct.
+  const results = checkInvariants(["submit_orders", "submit_orders", "submit_orders"], {
+    orders: [SENT("OXY_US_EQ", "SELL"), SENT("COP_US_EQ", "SELL"), SENT("LNG_US_EQ", "SELL")],
+  });
+  assert.equal(status(results, "no-duplicate-orders"), "pass");
+});
+
+test("REGRESSION: a rejected attempt then a placed retry of the same name is NOT a duplicate", () => {
+  // The exact live shape: full close rejected on the broker's minimum-position rule, then a
+  // workable partial placed. One order was sent, not two.
+  const results = checkInvariants(["submit_orders", "submit_orders"], {
+    orders: [
+      { ticker: "OXY_US_EQ", side: "SELL", status: "rejected" },
+      SENT("OXY_US_EQ", "SELL"),
+    ],
+  });
+  assert.equal(status(results, "no-duplicate-orders"), "pass");
+});
+
+test("no-duplicate-orders: a skipped order never counts as sent", () => {
+  const results = checkInvariants(["submit_orders"], {
+    orders: [
+      { ticker: "SHOP_US_EQ", side: "BUY", status: "skipped" },
+      { ticker: "SHOP_US_EQ", side: "BUY", status: "skipped" },
+    ],
+  });
+  assert.equal(status(results, "no-duplicate-orders"), "pass");
+});
+
+test("no-duplicate-orders: opposite sides of one instrument are not duplicates", () => {
+  const results = checkInvariants(["submit_orders"], {
+    orders: [SENT("KO_US_EQ", "BUY"), SENT("KO_US_EQ", "SELL")],
+  });
+  assert.equal(status(results, "no-duplicate-orders"), "pass");
+});
+
+test("no-duplicate-orders: not-applicable when nothing was submitted", () => {
+  assert.equal(status(checkInvariants(["record_cycle"]), "no-duplicate-orders"), "not-applicable");
+});
+
+test("no-duplicate-orders: not-applicable when orders were not recorded at all", () => {
+  // Absence of order data is an observability gap, never proof of a clean cycle OR a dirty one.
+  const results = checkInvariants(["submit_orders"]);
+  assert.equal(status(results, "no-duplicate-orders"), "not-applicable");
+  assert.match(invariantByName(results, "no-duplicate-orders")!.detail ?? "", /not recorded/);
+});
+
+test("no-duplicate-orders: a TRUNCATED order list cannot convict", () => {
+  const results = checkInvariants(["submit_orders"], {
+    orders: [SENT("COP_US_EQ", "SELL"), SENT("COP_US_EQ", "SELL")],
+    ordersTruncated: true,
+  });
+  assert.equal(status(results, "no-duplicate-orders"), "not-applicable");
+});
+
+test("a duplicate send is still a violation on a truncated TOOL sequence", () => {
+  // Truncation of the tool sequence says nothing about the orders, which were fully observed.
+  const results = checkInvariants(["submit_orders"], {
+    truncated: true,
+    orders: [SENT("COP_US_EQ", "SELL"), SENT("COP_US_EQ", "SELL")],
+  });
+  assert.equal(status(results, "no-duplicate-orders"), "fail");
 });
 
 // --- vacuity tracking: the whole point of the not-applicable status ---
@@ -142,7 +222,7 @@ test("a no-trade cycle is green but reports FOUR vacuous guards, not four verifi
     "earnings-before-buy",
     "red-team-before-buy",
     "exits-before-entries",
-    "single-submit",
+    "no-duplicate-orders",
   ]);
 });
 
@@ -153,7 +233,9 @@ test("a not-applicable invariant always explains why it did not apply", () => {
 });
 
 test("violatedInvariants counts only failures, never vacuous ones", () => {
-  const results = checkInvariants(["submit_orders"]); // no earnings, no red team, no exits, no record
+  // Orders supplied so the duplicate guard is decided rather than vacuous: the subject here is
+  // which ORDERING failures are counted.
+  const results = checkInvariants(["submit_orders"], { orders: ONE_CLEAN_ORDER });
   assert.deepEqual(violatedInvariants(results).map((r) => r.name), [
     "earnings-before-buy",
     "red-team-before-buy",
@@ -167,7 +249,10 @@ test("violatedInvariants counts only failures, never vacuous ones", () => {
 
 test("a truncated trace turns absence-based failures into not-applicable, not fail", () => {
   // record_cycle runs at the very end of a cycle, so it is exactly the tool a cap would drop.
-  const truncated = checkInvariants(["submit_orders"], { truncated: true });
+  const truncated = checkInvariants(["submit_orders"], {
+    truncated: true,
+    orders: ONE_CLEAN_ORDER,
+  });
   assert.deepEqual(violatedInvariants(truncated), []);
   assert.deepEqual(vacuousInvariants(truncated).map((r) => r.name), [
     "earnings-before-buy",
@@ -177,7 +262,10 @@ test("a truncated trace turns absence-based failures into not-applicable, not fa
   ]);
   // The same sequence WITHOUT truncation is four real violations: truncation is the only
   // difference, so a cap can no longer silently change a verdict into a false alert.
-  assert.equal(violatedInvariants(checkInvariants(["submit_orders"])).length, 4);
+  assert.equal(
+    violatedInvariants(checkInvariants(["submit_orders"], { orders: ONE_CLEAN_ORDER })).length,
+    4,
+  );
 });
 
 test("a truncated trace still fails an OBSERVED ordering violation", () => {
@@ -189,15 +277,21 @@ test("a truncated trace still fails an OBSERVED ordering violation", () => {
   assert.equal(status(results, "earnings-before-buy"), "fail");
 });
 
-test("a truncated trace still fails an OBSERVED double submit", () => {
-  const results = checkInvariants(["submit_orders", "submit_orders"], { truncated: true });
-  assert.equal(status(results, "single-submit"), "fail");
+test("a truncated trace still fails an OBSERVED duplicate send", () => {
+  const results = checkInvariants(["submit_orders"], {
+    truncated: true,
+    orders: [
+      { ticker: "COP_US_EQ", side: "SELL", status: "placed" },
+      { ticker: "COP_US_EQ", side: "SELL", status: "placed" },
+    ],
+  });
+  assert.equal(status(results, "no-duplicate-orders"), "fail");
 });
 
 test("a truncated trace still passes what it positively observed", () => {
   const results = checkInvariants(
     ["manage_positions", "get_earnings_calendar", "red_team", "submit_orders", "record_cycle"],
-    { truncated: true },
+    { truncated: true, orders: ONE_CLEAN_ORDER },
   );
   for (const r of results) {
     assert.equal(r.status, "pass", `${r.name}: ${r.detail ?? ""}`);

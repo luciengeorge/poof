@@ -37,7 +37,7 @@ import { tradingEnv } from "../lib/risk-runtime.ts";
  *
  *  1. INVARIANTS over the ordered tool sequence, using the very same `checkInvariants` the
  *     offline evals call (agent/lib/invariants.ts). Guards the cycle discipline: earnings and
- *     red-team before a buy, exits before entries, exactly one submit, a recorded cycle.
+ *     red-team before a buy, exits before entries, no instrument sent twice, a recorded cycle.
  *  2. REPORT SELF-CONSISTENCY: does the account value the agent WROTE match the one the code
  *     COMPUTED (agent/lib/report-check.ts)? This is the check that would have caught the report
  *     claiming about GBP 282 when the account held GBP 248.
@@ -131,8 +131,17 @@ export default defineHook({
 
         const memory = observerMemory();
         // The callId makes the append idempotent: a durable turn can re-deliver this very event
-        // after a crash-and-resume, and a double-append would false-trip `single-submit`.
-        await memory.appendCycleTraceTool(traceKey, name, actionResultCallId(result));
+        // after a crash-and-resume, and a double-append would put a second submit_orders in the
+        // sequence.
+        const delivery = await memory.appendCycleTraceTool(
+          traceKey,
+          name,
+          actionResultCallId(result),
+        );
+        // A RE-DELIVERY must stop here. The ground-truth collections below accumulate (orders and
+        // exits arrive across several tool calls), so merging the same result twice would record
+        // one real order as two and report a duplicate send that never happened.
+        if (delivery === "duplicate") return;
 
         // Ground truth for the report check AND for the later report-quality judge, taken from
         // results the cycle already computed: no extra broker or FX calls, so observing cannot
@@ -257,7 +266,14 @@ export default defineHook({
         // A truncated trace is missing tools, so checkInvariants downgrades absence-based
         // conclusions to not-applicable: a recording cap must never produce a false violation.
         const truncated = trace.truncated === true;
-        const invariants = checkInvariants(trace.toolSequence, { truncated });
+        // The recorded orders are passed too: `no-duplicate-orders` is a property of the orders,
+        // not of how many submit_orders calls produced them. Without them it would report
+        // not-applicable on every cycle, which is a guard that never runs.
+        const invariants = checkInvariants(trace.toolSequence, {
+          truncated,
+          orders: trace.orders,
+          ordersTruncated: trace.ordersTruncated,
+        });
         const violations = violatedInvariants(invariants);
         const vacuous = vacuousInvariants(invariants);
         if (truncated) {

@@ -17,6 +17,7 @@ import {
   postTradeTruthFrom,
   quotesFrom,
   requestedActionNames,
+  resultOrders,
   truthFrom,
 } from "./cycle-trace.ts";
 
@@ -537,4 +538,92 @@ test("interim narration with no money in it is not a report candidate", () => {
   assert.equal(looksLikeReport("Let me check the news first."), false);
   assert.equal(looksLikeReport("Bought 0.4 shares of Exxon at $173.79."), false);
   assert.equal(looksLikeReport(null), false);
+});
+
+// --- resultOrders: the OFFLINE mirror of the accumulated orders ---
+//
+// This is what lets `no-duplicate-orders` be graded in CI as well as in production. The event
+// shape asserted here is the one the production hook already relies on (`action.result` carrying
+// `{toolName, output}`), so both surfaces read the same thing.
+
+/** One `action.result` event for a submit_orders call, in eve's shape. */
+const submitResult = (placed: unknown[], rejected: unknown[] = []) => ({
+  type: "action.result",
+  data: {
+    result: {
+      kind: "tool-result",
+      toolName: "submit_orders",
+      callId: "c1",
+      output: { placed, rejected },
+    },
+  },
+});
+
+test("resultOrders accumulates orders across SEVERAL submit_orders results", () => {
+  // The live shape that exposed the overwrite bug: one submit, then a second 33 seconds later.
+  const events = [
+    submitResult([{ proposal: { ticker: "OXY_US_EQ", side: "SELL", notional: 8 } }]),
+    submitResult([
+      { proposal: { ticker: "COP_US_EQ", side: "SELL", notional: 8 } },
+      { proposal: { ticker: "LNG_US_EQ", side: "SELL", notional: 7 } },
+    ]),
+  ];
+  const observed = resultOrders(events);
+  assert.ok(observed);
+  assert.deepEqual(
+    observed.orders.map((o) => o.ticker),
+    ["OXY_US_EQ", "COP_US_EQ", "LNG_US_EQ"],
+  );
+  assert.equal(observed.truncated, false);
+});
+
+test("resultOrders returns null when no submit_orders result was observed", () => {
+  // UNKNOWN, never "no orders": the invariant must report not-applicable rather than pass.
+  assert.equal(resultOrders([{ type: "actions.requested", data: { actions: [] } }]), null);
+});
+
+test("resultOrders returns null when a submit result carries no readable order list", () => {
+  const events = [
+    {
+      type: "action.result",
+      data: { result: { kind: "tool-result", toolName: "submit_orders", output: {} } },
+    },
+  ];
+  assert.equal(resultOrders(events), null);
+});
+
+test("resultOrders ignores results from other tools", () => {
+  const events = [
+    {
+      type: "action.result",
+      data: {
+        result: {
+          kind: "tool-result",
+          toolName: "manage_positions",
+          output: { placed: [{ proposal: { ticker: "KO_US_EQ", side: "SELL" } }], rejected: [] },
+        },
+      },
+    },
+  ];
+  assert.equal(resultOrders(events), null);
+});
+
+test("resultOrders carries the status through, so a rejection is not read as a send", () => {
+  const events = [
+    submitResult(
+      [{ proposal: { ticker: "OXY_US_EQ", side: "SELL", notional: 8 } }],
+      [
+        {
+          proposal: { ticker: "OXY_US_EQ", side: "SELL", notional: 30 },
+          reason: "below minimum position",
+        },
+      ],
+    ),
+  ];
+  const observed = resultOrders(events);
+  assert.ok(observed);
+  assert.deepEqual(
+    observed.orders.map((o) => o.status).sort(),
+    ["placed", "rejected"],
+  );
 });

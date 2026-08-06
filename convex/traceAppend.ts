@@ -12,7 +12,9 @@
  * nobody believes is worse than no alert:
  *  1. RE-DELIVERY. A turn is a durable workflow that resumes from its last completed step, so an
  *     `action.result` recorded just before a crash can fire again. Appending it twice would put a
- *     second `submit_orders` in the sequence and trip `single-submit`.
+ *     second `submit_orders` in the sequence and, worse, double-count its orders as a duplicate
+ *     send. This is why the append decision is reported back to the caller: the accumulating
+ *     collections must be merged only for a FIRST delivery.
  *  2. TRUNCATION. Past the cap, tools are no longer recorded. Dropping them silently would make
  *     a late `record_cycle` look absent and fail `cycle-recorded`, so the cap is reported instead
  *     and the caller marks the trace truncated.
@@ -30,12 +32,52 @@ export type AppendDecision =
   | { kind: "append"; toolSequence: string[]; callIds: string[] };
 
 /**
- * Hard cap on the recorded quote map. Unlike the orders/exits/positions bounds (which live in
- * agent/lib/cycle-trace.ts, because one tool result is capped there and then stored whole), the
- * quote map ACCUMULATES across the several get_prices calls one cycle makes, so its cap has to
- * be applied where the already-stored map is visible: here.
+ * Hard cap on the recorded quote map. The bound lives here rather than in
+ * agent/lib/cycle-trace.ts (which caps ONE tool result) because the map ACCUMULATES across the
+ * several get_prices calls one cycle makes, so the cap has to be applied where the already-stored
+ * map is visible.
  */
 export const MAX_TRACE_QUOTES = 30;
+
+/**
+ * Hard cap on an accumulating EVENT list (orders, exits), applied here for the same reason as
+ * the quote cap: the stored rows are only visible at this boundary.
+ */
+export const MAX_TRACE_EVENT_ROWS = 30;
+
+/**
+ * Append one tool result's rows to the event rows already on the trace, bounded.
+ *
+ * WHY APPEND AND NOT REPLACE. This was originally a wholesale write, on the premise that each
+ * collection "comes from one tool result". That premise is FALSE for orders and exits: a cycle
+ * calls `submit_orders` (and `manage_positions`) more than once whenever the broker rejects a
+ * first attempt and the agent retries a workable variant. Overwriting silently dropped the
+ * earlier batch while leaving the list marked COMPLETE, so a real order was missing from the
+ * ground truth and the judge, reading a complete list that lacked it, would score an accurate
+ * report as a fabrication. That is the same false-accusation failure the ground-truth work was
+ * meant to end, arriving by a different route.
+ *
+ * Rows are NOT deduplicated by value, deliberately. Two identical placed orders in one cycle are
+ * exactly the duplicate send `no-duplicate-orders` exists to catch, so collapsing them would
+ * hide the violation. Re-delivery is handled upstream instead, by callId, which distinguishes
+ * "the same event twice" from "the same order twice".
+ */
+export function mergeEventRows<T>(
+  existing: readonly T[] | undefined,
+  incoming: readonly T[],
+  cap: number = MAX_TRACE_EVENT_ROWS,
+): { rows: T[]; truncated: boolean } {
+  const rows: T[] = [...(existing ?? [])];
+  let truncated = false;
+  for (const row of incoming) {
+    if (rows.length >= cap) {
+      truncated = true;
+      continue;
+    }
+    rows.push(row);
+  }
+  return { rows, truncated };
+}
 
 /**
  * Merge one batch of ticker-to-price quotes into the map already on the trace, bounded.

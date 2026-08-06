@@ -6,8 +6,10 @@ import { checkInvariants, violatedInvariants } from "./invariants.ts";
 // because that is where the test-runner glob looks.
 import {
   decideAppend,
+  mergeEventRows,
   mergeQuoteMap,
   MAX_TOOL_SEQUENCE,
+  MAX_TRACE_EVENT_ROWS,
   MAX_TRACE_QUOTES,
 } from "../../convex/traceAppend.ts";
 
@@ -49,25 +51,66 @@ test("THE RESUME CASE: a re-delivered action result is a duplicate, not a second
   assert.deepEqual(decideAppend(existing, "submit_orders", "call_0"), { kind: "duplicate" });
 });
 
-test("re-delivering submit_orders no longer false-trips single-submit", () => {
-  // This is the whole point: without dedupe the sequence would hold two submits and the
-  // invariant would report a violation that never happened, which erodes trust in every alert.
+test("re-delivering submit_orders does not record a second tool call", () => {
+  // Without dedupe the sequence would hold two submits off one real call. The ordering invariants
+  // read the FIRST submit, so a phantom extra one distorts what they are grading.
   const first = apply({ toolSequence: [], callIds: [] }, "submit_orders", "call_0");
   const redelivered = apply(first, "submit_orders", "call_0");
   assert.deepEqual(redelivered.toolSequence, ["submit_orders"]);
-  const results = checkInvariants(redelivered.toolSequence);
-  assert.equal(
-    violatedInvariants(results).some((r) => r.name === "single-submit"),
-    false,
-  );
 
-  // A genuinely different call (its own callId) IS still recorded and still trips the guard.
+  // A genuinely different call (its own callId) IS still recorded.
   const genuine = apply(first, "submit_orders", "call_1");
   assert.deepEqual(genuine.toolSequence, ["submit_orders", "submit_orders"]);
-  assert.ok(
-    violatedInvariants(checkInvariants(genuine.toolSequence)).some(
-      (r) => r.name === "single-submit",
-    ),
+});
+
+// --- mergeEventRows: orders and exits ACCUMULATE across a cycle's several tool calls ---
+
+const ORDER = (ticker: string) => ({ ticker, side: "SELL", status: "placed" });
+
+test("REGRESSION: a later batch of orders does not erase an earlier one", () => {
+  // The live bug. Three energy sells went out across two submit_orders calls; the stored orders
+  // were overwritten by the last call, so the trace held 2 of 3 while claiming to be COMPLETE.
+  // The judge, reading a complete list that lacked a real order, would score an accurate report
+  // as a fabrication.
+  const first = mergeEventRows(undefined, [ORDER("OXY_US_EQ")]);
+  const second = mergeEventRows(first.rows, [ORDER("COP_US_EQ"), ORDER("LNG_US_EQ")]);
+  assert.deepEqual(
+    second.rows.map((r) => r.ticker),
+    ["OXY_US_EQ", "COP_US_EQ", "LNG_US_EQ"],
+  );
+  assert.equal(second.truncated, false);
+});
+
+test("merging is bounded, and reports the drop rather than losing it silently", () => {
+  const full = Array.from({ length: MAX_TRACE_EVENT_ROWS }, (_, i) => ORDER(`T${i}`));
+  const merged = mergeEventRows(full, [ORDER("ONE_TOO_MANY")]);
+  assert.equal(merged.rows.length, MAX_TRACE_EVENT_ROWS);
+  assert.equal(merged.truncated, true);
+});
+
+test("merging is pure and mutates neither side", () => {
+  const existing = [ORDER("KO_US_EQ")];
+  const incoming = [ORDER("PEP_US_EQ")];
+  mergeEventRows(existing, incoming);
+  assert.equal(existing.length, 1);
+  assert.equal(incoming.length, 1);
+});
+
+test("WHY THE CALLER MUST SKIP A DUPLICATE: merging cannot dedupe by value", () => {
+  // Two identical placed orders are a REAL duplicate send, which is precisely what
+  // `no-duplicate-orders` exists to catch, so the merge must not collapse them. That makes
+  // re-delivery the caller's problem: it is handled by callId, upstream, where "the same event
+  // twice" can still be told apart from "the same order twice".
+  const batch = [ORDER("COP_US_EQ")];
+  const doubled = mergeEventRows(mergeEventRows(undefined, batch).rows, batch);
+  assert.equal(doubled.rows.length, 2);
+  assert.equal(
+    violatedInvariants(
+      checkInvariants(["submit_orders"], { orders: doubled.rows }),
+    ).some((r) => r.name === "no-duplicate-orders"),
+    true,
+    "a double-merged batch looks exactly like a duplicate send, which is why the hook must " +
+      "skip the context save when the append reports a duplicate",
   );
 });
 

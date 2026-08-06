@@ -22,7 +22,28 @@ import {
   SUBMIT_ORDERS,
   type InvariantName,
 } from "../../agent/lib/invariants.ts";
-import { requestedActionNames, type EventLike } from "../../agent/lib/cycle-trace.ts";
+import {
+  requestedActionNames,
+  resultOrders,
+  type EventLike,
+} from "../../agent/lib/cycle-trace.ts";
+
+/**
+ * The options `checkInvariants` needs, derived from one run's events.
+ *
+ * Orders are included because `no-duplicate-orders` is a property of the orders rather than of
+ * the tool sequence. Deriving them here keeps ONE definition of every invariant across the
+ * offline and online surfaces, instead of a guard that only ever runs in production.
+ */
+function optionsFrom(events: readonly EventLike[]): {
+  orders?: readonly { ticker: string; side: string; status: string }[];
+  ordersTruncated?: boolean;
+} {
+  const observed = resultOrders(events);
+  return observed === null
+    ? {}
+    : { orders: observed.orders, ordersTruncated: observed.truncated };
+}
 
 /**
  * Grade one named invariant against the run, keeping the existing pass/fail semantics:
@@ -34,7 +55,7 @@ export function invariantSatisfied(
   name: InvariantName,
 ): boolean {
   const sequence = requestedActionNames(events);
-  const result = invariantByName(checkInvariants(sequence), name);
+  const result = invariantByName(checkInvariants(sequence, optionsFrom(events)), name);
   if (!result) {
     console.error(`[eval] no invariant named ${name}`);
     return false;
@@ -76,7 +97,7 @@ export function invariantVerified(
   name: InvariantName,
 ): boolean {
   const sequence = requestedActionNames(events);
-  const result = invariantByName(checkInvariants(sequence), name);
+  const result = invariantByName(checkInvariants(sequence, optionsFrom(events)), name);
   if (!result) {
     console.error(`[eval] no invariant named ${name}`);
     return false;
@@ -103,8 +124,10 @@ export function guardedPathExercised(
   label: string,
 ): boolean {
   const sequence = requestedActionNames(events);
-  const submitted = invariantByName(checkInvariants(sequence), "single-submit");
-  if (submitted?.status === "not-applicable") {
+  // Asked of the sequence DIRECTLY. This used to read the old `single-submit` invariant's
+  // not-applicable state, which happened to coincide with "no submit_orders" but was really
+  // answering a different question; that coupling broke the moment the invariant changed.
+  if (!sequence.includes(SUBMIT_ORDERS)) {
     console.log(
       `[eval] ${label}: PASSED VACUOUSLY (no ${SUBMIT_ORDERS} in this run). ` +
         `Tool sequence: ${sequence.join(" -> ")}`,
