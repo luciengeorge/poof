@@ -92,6 +92,26 @@ function observerMemory(): Memory {
  * proof the report invented it. The flag travels to the judge in the ground truth as well; this
  * line is so the same fact is visible to a human reading the logs.
  */
+/**
+ * An output that will NOT parse must say so.
+ *
+ * This silence is why a real capture gap took a long chase to find: `ordersFrom` returning null
+ * looked identical to a cycle that placed nothing, so the trace simply had no orders and nothing
+ * anywhere said why. Absence of capture has to announce itself, exactly like the truncation cap
+ * does. The top-level keys are logged (never the values, which contain positions and prices) so the
+ * shape mismatch is diagnosable from the log alone.
+ */
+function warnUnparseable(key: CycleTraceKey, toolName: string, output: unknown): void {
+  const shape =
+    typeof output === "object" && output !== null
+      ? `object with keys [${Object.keys(output as object).join(", ")}]`
+      : typeof output;
+  console.warn(
+    `[online-eval] cycle ${key.sessionId}/${key.turnId}: could NOT parse ${toolName} output, so ` +
+      `its ground truth is MISSING from the trace and the judge will see nothing for it. Got ${shape}.`,
+  );
+}
+
 function warnIfTruncated(key: CycleTraceKey, what: string, truncated: boolean): void {
   if (!truncated) return;
   console.warn(
@@ -133,15 +153,14 @@ export default defineHook({
         // The callId makes the append idempotent: a durable turn can re-deliver this very event
         // after a crash-and-resume, and a double-append would put a second submit_orders in the
         // sequence.
-        const delivery = await memory.appendCycleTraceTool(
-          traceKey,
-          name,
-          actionResultCallId(result),
-        );
-        // A RE-DELIVERY must stop here. The ground-truth collections below accumulate (orders and
-        // exits arrive across several tool calls), so merging the same result twice would record
-        // one real order as two and report a duplicate send that never happened.
-        if (delivery === "duplicate") return;
+        const callId = actionResultCallId(result);
+        await memory.appendCycleTraceTool(traceKey, name, callId);
+
+        // NOTE: the context saves below are deliberately NOT skipped when the append reports a
+        // duplicate. They used to be, and that lost real data: on 2026-08-06 a cycle recorded
+        // neither its orders nor its exits. Re-delivery is instead handled inside the mutation, per
+        // callId, so a repeated result cannot double-count into an accumulating collection while a
+        // later delivery of the SAME call carrying fuller output is still captured.
 
         // Ground truth for the report check AND for the later report-quality judge, taken from
         // results the cycle already computed: no extra broker or FX calls, so observing cannot
@@ -194,7 +213,10 @@ export default defineHook({
             await memory.saveCycleTraceContext(traceKey, {
               orders: captured.orders,
               ordersTruncated: captured.truncated,
+              callId,
             });
+          } else {
+            warnUnparseable(traceKey, name, output);
           }
         } else if (name === "manage_positions") {
           const captured = exitsFrom(output);
@@ -203,14 +225,17 @@ export default defineHook({
             await memory.saveCycleTraceContext(traceKey, {
               exits: captured.exits,
               exitsTruncated: captured.truncated,
+              callId,
             });
+          } else {
+            warnUnparseable(traceKey, name, output);
           }
         } else if (name === "get_prices") {
           // Merged server-side across the cycle's several calls, so an early quote the report
           // cites is not erased by a later batch.
           const quotes = quotesFrom(output);
           if (Object.keys(quotes).length > 0) {
-            await memory.saveCycleTraceContext(traceKey, { quotes });
+            await memory.saveCycleTraceContext(traceKey, { quotes, callId });
           }
         } else if (name === "review_external_holdings") {
           // Two forms of the same tool result, and neither replaces the other: the BARE array is

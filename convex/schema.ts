@@ -181,6 +181,11 @@ export default defineSchema({
     // can re-deliver an `action.result` after a crash-and-resume, and a double-append could
     // false-trip `single-submit`; a false violation alert erodes trust in the whole system.
     callIds: v.array(v.string()),
+    // Action-result callIds whose CONTEXT has already been merged. Distinct from `callIds`, which
+    // tracks the tool SEQUENCE. Needed because a re-delivered result must not double-count into an
+    // accumulating collection, while a later delivery of the SAME call carrying fuller output must
+    // still be captured. Skipping the whole save on a duplicate append lost real orders.
+    contextCallIds: v.optional(v.array(v.string())),
     // The recording cap was hit, so tools beyond it are missing. Set loudly rather than
     // silently, because `checkInvariants` then downgrades absence-based conclusions to
     // "not-applicable": a cap must never turn an unknown into a reported violation.
