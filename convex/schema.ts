@@ -41,6 +41,10 @@ export default defineSchema({
     // Strategy taxonomy tag set at entry (see agent/lib/positions.ts STRATEGY_TAGS).
     // Optional for backward compatibility; existing rows bucket as "other" on aggregation.
     strategyTag: v.optional(v.string()),
+    // What the agent CLAIMED at entry, 0..1, scored against the realised outcome once closed.
+    // "The Alpha Illusion" (arXiv 2605.16895) protocol P4: language confidence is routinely
+    // miscalibrated as trading probability, and the only way to know is to score forecasts.
+    predictedConfidence: v.optional(v.number()),
     status: v.string(), // "placed" | "dry-run" | "skipped" | "closed"
     // Exit levels set at entry (fractions of entry price), read by the exit engine.
     stopLossPct: v.optional(v.number()),

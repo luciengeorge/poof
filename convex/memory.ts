@@ -32,6 +32,7 @@ export const recordTrade = mutation({
     thesis: v.string(),
     redTeamVerdict: v.optional(v.string()),
     strategyTag: v.optional(v.string()),
+    predictedConfidence: v.optional(v.number()),
     status: v.string(),
     stopLossPct: v.optional(v.number()),
     takeProfitPct: v.optional(v.number()),

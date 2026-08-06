@@ -27,6 +27,8 @@ export interface TradeRecord {
   quantity: number;
   dryRun: boolean;
   thesis: string;
+  /** Claimed probability of success at entry, 0..1. Scored by agent/lib/calibration.ts on close. */
+  predictedConfidence?: number;
   redTeamVerdict?: string;
   strategyTag?: string;
   status: string;

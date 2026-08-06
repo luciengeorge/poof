@@ -98,6 +98,8 @@ export interface Proposal {
   thesis: string;
   redTeamVerdict?: string;
   strategyTag?: string;
+  /** The agent's claimed probability this trade works, 0..1. Scored once the position closes. */
+  confidence?: number;
   stopLossPct?: number;
   takeProfitPct?: number;
   trailingStopPct?: number;

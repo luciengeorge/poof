@@ -38,6 +38,14 @@ const proposalSchema = z.object({
     .describe(
       "Strategy type for this trade, from the fixed taxonomy. REQUIRED on every BUY so per-type performance can be tracked. Choose the closest fit: news-catalyst, earnings-play, momentum, mean-reversion, index-event, or other.",
     ),
+  confidence: z
+    .number()
+    .min(0.01)
+    .max(0.99)
+    .optional()
+    .describe(
+      "Your honest probability that this BUY makes money, 0.01 to 0.99. REQUIRED on every BUY. It is SCORED against the actual outcome once the position closes, and the measured gap between what you claim and what happens is reported back to you, so inflating it only makes you look miscalibrated later. A genuine 0.55 is more useful than a reflexive 0.8.",
+    ),
   // Exit plan, set on BUYs. Stop-loss/take-profit are fractions of entry price
   // (e.g. 0.1 = 10%). The exit engine clamps to sane bounds and applies defaults if omitted.
   stopLossPct: z

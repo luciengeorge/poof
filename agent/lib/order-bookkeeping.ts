@@ -28,6 +28,8 @@ export function buildRecordTradeArgs(placed: PlacedResult[], env: Env): TradeRec
     thesis: p.proposal.thesis,
     redTeamVerdict: p.proposal.redTeamVerdict,
     strategyTag: p.proposal.strategyTag,
+    // Carried through so calibration can score the claim against the realised outcome later.
+    predictedConfidence: p.proposal.confidence,
     status: p.skipped ? "skipped" : p.dryRun ? "dry-run" : PLACED_STATUS,
     stopLossPct: p.proposal.stopLossPct,
     takeProfitPct: p.proposal.takeProfitPct,
