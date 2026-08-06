@@ -58,6 +58,7 @@ test("buildRecordTradeArgs: carries exit levels + trade fields through unchanged
     maxHoldDays: 30,
     redTeamVerdict: "approved",
     strategyTag: "momentum",
+    confidence: 0.62,
   });
   const args = buildRecordTradeArgs(
     [{ proposal, quantity: 5, dryRun: false }],
@@ -74,6 +75,8 @@ test("buildRecordTradeArgs: carries exit levels + trade fields through unchanged
     thesis: "t",
     redTeamVerdict: "approved",
     strategyTag: "momentum",
+    // Carried through so calibration can score the claim once the position closes.
+    predictedConfidence: 0.62,
     status: "placed",
     stopLossPct: 0.1,
     takeProfitPct: 0.2,

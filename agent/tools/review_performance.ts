@@ -14,6 +14,8 @@ import {
   type OpenBuyTrade,
 } from "../lib/positions.ts";
 import { computeAlpha, type Benchmark } from "../lib/benchmark.ts";
+import { attributeFailures } from "../lib/attribution.ts";
+import { calibrationFrom } from "../lib/calibration.ts";
 import { effectiveLevels, DEFAULT_EXITS } from "../lib/exits.ts";
 
 const DAY = 86_400_000;
@@ -39,11 +41,23 @@ export default defineTool({
       memory.recallRecent(env, { tradeLimit: 50 }),
     ]);
     const openBuys = (openBuysRaw ?? []) as OpenBuyTrade[];
+    // Full trade rows, not a narrow projection: attribution needs the entry price, the timestamps
+    // and the exit levels to tell a stop-loss exit from a time exit, and calibration needs the
+    // confidence claimed at entry. These come straight from Convex, so the fields are present.
     const closedTrades =
       ((recall as { trades?: unknown[] })?.trades ?? []) as {
+        ticker: string;
+        status: string;
+        price: number;
+        createdAt: number;
+        closedAt?: number;
         pnl?: number;
-        status?: string;
         strategyTag?: string;
+        redTeamVerdict?: string;
+        exitPrice?: number;
+        stopLossPct?: number;
+        maxHoldDays?: number;
+        predictedConfidence?: number;
       }[];
 
     const now = Date.now();
@@ -108,6 +122,15 @@ export default defineTool({
       openPositions: managed,
       realized,
       realizedByTag,
+      // WHERE the money actually went, across the whole closed record rather than this cycle.
+      // A pattern is only reported once it recurs (see agent/lib/attribution.ts): below that
+      // threshold nothing is shown, because one or two losses cannot be told apart from variance
+      // and inventing a rule from them is how a belief based on noise becomes permanent.
+      failurePatterns: attributeFailures(closedTrades),
+      // Whether the confidence claimed at entry matches what actually happened. Reported as a
+      // number and a named verdict rather than an impression, because language confidence is
+      // routinely miscalibrated as probability.
+      calibration: calibrationFrom(closedTrades),
       benchmark,
       spyPrice,
       alpha,
