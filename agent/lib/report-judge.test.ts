@@ -12,6 +12,7 @@ import {
   parseJudgeVerdict,
   summarizeJudgeVerdict,
   type JudgeTrace,
+  groundingIsActionable,
 } from "./report-judge.ts";
 import { checkReportNumbers, parseGbpFigures } from "./report-check.ts";
 
@@ -579,4 +580,71 @@ test("assembling the ground truth is pure and mutates no input", () => {
   const snapshot = JSON.stringify(input);
   assert.deepEqual(judgeGroundTruth(input), judgeGroundTruth(input));
   assert.equal(JSON.stringify(input), snapshot);
+});
+
+// --- grounding alerts are gated on what was actually captured ---
+//
+// The rubric already tells the judge not to lower the score for a claim it merely cannot verify. It
+// did anyway: grounding came back at the FLOOR on eight consecutive live cycles, its own findings
+// reading "unverifiable rather than confirmed". A score with no variance carries no information, and
+// an alert that fires every time trains its reader to ignore it. So actionability is decided in code.
+
+const LOW_GROUNDING = parseJudgeVerdict({
+  grounding: 1,
+  consistency: 4,
+  calibration: 5,
+  completeness: 5,
+  overall: 4,
+  findings: ["the figure is unverifiable because the orders were not captured"],
+});
+
+const FULL_CAPTURE = { ordersCaptured: true, exitsCaptured: true, truncated: false };
+
+test("REGRESSION: a low grounding score does NOT alert when capture was incomplete", () => {
+  for (const capture of [
+    { ordersCaptured: false, exitsCaptured: true },
+    { ordersCaptured: true, exitsCaptured: false },
+    { ordersCaptured: true, exitsCaptured: true, truncated: true },
+  ]) {
+    assert.deepEqual(
+      judgeAlertReasons(LOW_GROUNDING, DEFAULT_JUDGE_THRESHOLDS, capture),
+      [],
+      `should not alert with capture ${JSON.stringify(capture)}`,
+    );
+  }
+});
+
+test("a low grounding score DOES still alert when the ground truth was complete", () => {
+  const reasons = judgeAlertReasons(LOW_GROUNDING, DEFAULT_JUDGE_THRESHOLDS, FULL_CAPTURE);
+  assert.equal(reasons.length, 1);
+  assert.match(reasons[0] ?? "", /grounding=1/);
+});
+
+test("suppression is NARROW: a bad overall still alerts however poor the capture", () => {
+  // Only the grounding dimension depends on the captured categories. A damning overall verdict is
+  // the judge's summary judgement and must never be silenced by an observability gap.
+  const damning = parseJudgeVerdict({
+    grounding: 1,
+    consistency: 1,
+    calibration: 1,
+    completeness: 1,
+    overall: 1,
+    findings: ["everything is wrong"],
+  });
+  const reasons = judgeAlertReasons(damning, DEFAULT_JUDGE_THRESHOLDS, {
+    ordersCaptured: false,
+    exitsCaptured: false,
+  });
+  assert.equal(reasons.length, 1);
+  assert.match(reasons[0] ?? "", /overall=1/);
+});
+
+test("omitting the capture state preserves the old behaviour, so no caller silently changes", () => {
+  assert.equal(judgeAlertReasons(LOW_GROUNDING).length, 1);
+});
+
+test("groundingIsActionable requires BOTH lists and no truncation", () => {
+  assert.equal(groundingIsActionable(FULL_CAPTURE), true);
+  assert.equal(groundingIsActionable({ ordersCaptured: true, exitsCaptured: true }), true);
+  assert.equal(groundingIsActionable({ ordersCaptured: false, exitsCaptured: true }), false);
 });

@@ -86,13 +86,6 @@ function observerMemory(): Memory {
 }
 
 /**
- * Say out loud when a recorded collection hit its cap, exactly as the 200-tool cap does.
- *
- * A silently short list is the dangerous case: the judge would read a missing order or price as
- * proof the report invented it. The flag travels to the judge in the ground truth as well; this
- * line is so the same fact is visible to a human reading the logs.
- */
-/**
  * An output that will NOT parse must say so.
  *
  * This silence is why a real capture gap took a long chase to find: `ordersFrom` returning null
@@ -112,6 +105,13 @@ function warnUnparseable(key: CycleTraceKey, toolName: string, output: unknown):
   );
 }
 
+/**
+ * Say out loud when a recorded collection hit its cap, exactly as the 200-tool cap does.
+ *
+ * A silently short list is the dangerous case: the judge would read a missing order or price as
+ * proof the report invented it. The flag travels to the judge in the ground truth as well; this
+ * line is so the same fact is visible to a human reading the logs.
+ */
 function warnIfTruncated(key: CycleTraceKey, what: string, truncated: boolean): void {
   if (!truncated) return;
   console.warn(
@@ -315,6 +315,10 @@ export default defineHook({
           trace.accountValueGbp !== undefined && trace.reportText !== undefined
             ? checkReportNumbers(trace.reportText, {
                 accountValueGbp: trace.accountValueGbp,
+                // Both stages are supplied: a report written after trading legitimately quotes the
+                // post-trade figure, and grading it against the pre-trade one produced a guaranteed
+                // false finding on every cycle that traded.
+                postTradeAccountValueGbp: trace.postTradeAccountValueGbp,
                 cashGbp: trace.cashGbp ?? 0,
                 deployedGbp: trace.deployedGbp ?? 0,
                 externalGbpValues: trace.externalGbpValues,

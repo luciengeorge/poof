@@ -545,9 +545,45 @@ export function parseJudgeVerdict(raw: unknown): JudgeVerdict {
  * alert channel gets trained into noise. It is surfaced in the weekly eval-health section
  * instead (agent/lib/eval-health.ts), which is the read path that exists to catch exactly that.
  */
+/**
+ * How complete was the ground truth the judge was actually given?
+ *
+ * A grounding verdict on an INCOMPLETELY captured cycle is uninformative by construction: the judge
+ * cannot tell "invented" from "not recorded", so a low score says nothing about the report. This is
+ * the same doctrine the invariants already follow, where absence must never convict.
+ */
+export interface CaptureState {
+  /** The order list was recorded for this cycle. */
+  ordersCaptured: boolean;
+  /** The exit list was recorded for this cycle. */
+  exitsCaptured: boolean;
+  /** Any recorded collection hit its cap, so something real may be missing from it. */
+  truncated?: boolean;
+}
+
+/**
+ * Is a grounding score worth alerting on at all?
+ *
+ * WHY THIS EXISTS. The rubric already tells the judge, in plain words, not to lower the score for a
+ * claim it merely cannot verify. It did anyway: grounding came back at the floor on EIGHT
+ * consecutive live cycles, its own findings saying "unverifiable rather than confirmed". A score
+ * with no variance carries no information, and an alert that fires every time trains its reader to
+ * ignore it.
+ *
+ * The lesson from the rest of this codebase applies to the judge too: prose is a second line of
+ * defence, never the only one. So whether a grounding score is ACTIONABLE is decided here, in code,
+ * from what was actually captured. The judge's opinion is still recorded in full; only the alert is
+ * gated, so nothing is hidden from the weekly read path.
+ */
+export function groundingIsActionable(capture: CaptureState): boolean {
+  return capture.ordersCaptured && capture.exitsCaptured && capture.truncated !== true;
+}
+
 export function judgeAlertReasons(
   verdict: JudgeVerdict,
   thresholds: JudgeThresholds = DEFAULT_JUDGE_THRESHOLDS,
+  /** When given, a grounding alert is suppressed unless the ground truth was complete. */
+  capture?: CaptureState,
 ): string[] {
   if (verdict.status !== "judged") return [];
   const reasons: string[] = [];
@@ -556,10 +592,14 @@ export function judgeAlertReasons(
     reasons.push(`overall=${overall} is below the alert threshold ${thresholds.overallBelow}`);
   }
   if (grounding < thresholds.groundingBelow) {
-    reasons.push(
-      `grounding=${grounding} is below the alert threshold ${thresholds.groundingBelow}: ` +
-        "an unsupported claim or an invented number is the worst failure mode for this report",
-    );
+    if (capture === undefined || groundingIsActionable(capture)) {
+      reasons.push(
+        `grounding=${grounding} is below the alert threshold ${thresholds.groundingBelow}: ` +
+          "an unsupported claim or an invented number is the worst failure mode for this report",
+      );
+    }
+    // Otherwise: recorded, visible in the weekly scorecard, but NOT alerted. The judge could not
+    // distinguish an invented number from an unrecorded one, so the score is not evidence.
   }
   return reasons;
 }
@@ -582,9 +622,11 @@ export function alertReasonsForStoredVerdict(
   verdict: JudgeVerdict,
   outcome: SaveOutcome,
   thresholds: JudgeThresholds = DEFAULT_JUDGE_THRESHOLDS,
+  /** Pass the cycle's capture state so an uninformative grounding score does not alert. */
+  capture?: CaptureState,
 ): string[] {
   if (outcome !== "stored") return [];
-  return judgeAlertReasons(verdict, thresholds);
+  return judgeAlertReasons(verdict, thresholds, capture);
 }
 
 /** One-line summary for a log line or a Slack alert. */
