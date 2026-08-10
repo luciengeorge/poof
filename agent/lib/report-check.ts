@@ -13,6 +13,11 @@
 
 /** Ground truth for one cycle, taken from the tools that already compute it. */
 export interface ReportTruth {
+  /**
+   * The account value AFTER the cycle's trades, when record_cycle observed one. Either stage
+   * satisfies `account-value-present`: see the rule for why accepting both cannot weaken it.
+   */
+  postTradeAccountValueGbp?: number;
   /** The single authoritative account value (agent/lib/execution.ts accountValueGbp). */
   accountValueGbp: number;
   cashGbp: number;
@@ -100,11 +105,20 @@ export function checkReportNumbers(
 
   const figures = parseGbpFigures(reportText);
 
-  if (!figures.some((figure) => matchesWithinTolerance(figure, accountValueGbp))) {
+  // EITHER SNAPSHOT STAGE SATISFIES THIS RULE. The account value is fetched early (pre-trade) and
+  // again by record_cycle after trading, and a report is legitimately written from either: the
+  // pre-trade figure when nothing traded, the post-trade one when something did. Accepting both
+  // cannot weaken what this rule exists to catch, because the GBP 282 incident matched NEITHER
+  // figure. Insisting on one stage instead produced a guaranteed finding on every cycle that
+  // traded, which is a false alarm rather than a defect.
+  const acceptable = [accountValueGbp, truth.postTradeAccountValueGbp].filter(
+    (v): v is number => typeof v === "number" && Number.isFinite(v) && v > 0,
+  );
+  if (!figures.some((figure) => acceptable.some((v) => matchesWithinTolerance(figure, v)))) {
     findings.push({
       rule: "account-value-present",
       detail:
-        `the report never states the account value of GBP ${accountValueGbp} ` +
+        `the report never states the account value of GBP ${acceptable.join(" or GBP ")} ` +
         `(within GBP ${tolerance(accountValueGbp).toFixed(2)}); GBP figures found: ` +
         `${figures.length > 0 ? figures.join(", ") : "none"}`,
     });

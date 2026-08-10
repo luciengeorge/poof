@@ -4,6 +4,7 @@ import { alert } from "../lib/alert.ts";
 import { memoryFromEnv } from "../lib/memory.ts";
 import {
   alertReasonsForStoredVerdict,
+  type CaptureState,
   judgeThresholdsFromEnv,
   parseJudgeVerdict,
   summarizeJudgeVerdict,
@@ -86,9 +87,35 @@ export default defineTool({
       return { status: "unjudged", summary, alerted: false, outcome };
     }
 
+    // How complete was the ground truth this verdict was formed against? A grounding score on an
+    // incompletely captured cycle cannot tell "invented" from "not recorded", so it is recorded but
+    // not alerted on. Read here rather than inferred, and non-fatal: if the lookup fails the state
+    // is simply unknown and the old (stricter) alerting behaviour applies.
+    let capture: CaptureState | undefined;
+    try {
+      const trace = await memoryFromEnv().getCycleTrace(key);
+      if (trace) {
+        capture = {
+          ordersCaptured: trace.orders !== undefined,
+          exitsCaptured: trace.exits !== undefined,
+          truncated:
+            trace.truncated === true ||
+            trace.ordersTruncated === true ||
+            trace.exitsTruncated === true,
+        };
+      }
+    } catch (err) {
+      console.warn("[online-eval] capture-state lookup failed; alerting strictly:", err);
+    }
+
     // The gate on `outcome` lives inside this pure function, so "never alert on a verdict that
     // was not persisted" is one tested rule rather than a conjunction repeated at each use.
-    const reasons = alertReasonsForStoredVerdict(parsed, outcome, judgeThresholdsFromEnv());
+    const reasons = alertReasonsForStoredVerdict(
+      parsed,
+      outcome,
+      judgeThresholdsFromEnv(),
+      capture,
+    );
     console.log(`[online-eval] report judged for cycle ${sessionId}/${turnId}: ${summary}`);
     if (reasons.length > 0) {
       await alert(
