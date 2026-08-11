@@ -45,6 +45,12 @@ export default defineSchema({
     // "The Alpha Illusion" (arXiv 2605.16895) protocol P4: language confidence is routinely
     // miscalibrated as trading probability, and the only way to know is to score forecasts.
     predictedConfidence: v.optional(v.number()),
+    // The last price actually OBSERVED while this position was still visible at the broker, and
+    // when. Written every cycle so a position that later vanishes (a manual sale, or a pending sell
+    // that finally filled) can be reconciled against something real. Distinct from `peakPrice`,
+    // which is a high-water MARK and overstates a position that fell before it disappeared.
+    lastPrice: v.optional(v.number()),
+    lastSeenAt: v.optional(v.number()),
     status: v.string(), // "placed" | "dry-run" | "skipped" | "closed"
     // Exit levels set at entry (fractions of entry price), read by the exit engine.
     stopLossPct: v.optional(v.number()),

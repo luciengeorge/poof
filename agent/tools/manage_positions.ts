@@ -50,6 +50,20 @@ export default defineTool({
       console.warn("[memory] updatePeak failed (non-fatal):", err);
     }
 
+    // Record the price we can SEE for every position, in one round trip. Unlike updatePeak above
+    // this is not filtered to new highs: a position that fell is exactly the one whose outcome is
+    // most worth recovering if it later vanishes from the broker. Without this, reconciliation has
+    // nothing real to work from and books the trade `closed-unknown`, which silently starves
+    // attribution and calibration (3 of 7 closures on 2026-08-10).
+    try {
+      const entries = raw
+        .filter((m) => m.tradeId && Number.isFinite(m.currentPrice) && m.currentPrice > 0)
+        .map((m) => ({ tradeId: m.tradeId!, price: m.currentPrice }));
+      if (entries.length > 0) await memory.recordObservedPrices(entries);
+    } catch (err) {
+      console.warn("[memory] recordObservedPrices failed (non-fatal):", err);
+    }
+
     const signals = checkExits(managed, DEFAULT_EXITS, Date.now());
 
     const byTicker = new Map(managed.map((m) => [m.ticker, m]));
@@ -78,7 +92,7 @@ export default defineTool({
       await Promise.all(closeArgs.map((a) => memory.closeTrade(a)));
       // Reconcile: BUYs whose position is no longer held were closed elsewhere.
       const orphans = orphanedOpenBuys(openBuys, positions);
-      const orphanArgs = buildOrphanCloseTradeArgs(orphans);
+      const orphanArgs = buildOrphanCloseTradeArgs(orphans, fxRate);
       await Promise.all(orphanArgs.map((a) => memory.closeTrade(a)));
     } catch (err) {
       console.warn("[memory] closeTrade reconciliation failed (non-fatal):", err);

@@ -225,6 +225,34 @@ export const recordOrderIntent = mutation({
   },
 });
 
+/**
+ * Record the last OBSERVED price for a set of open positions, in ONE round trip.
+ *
+ * Batched deliberately: this runs inline in a live trading cycle, and one mutation per position
+ * would add a round trip per holding. Unlike `updatePeak` it records EVERY position, not only those
+ * making a new high, because a position that fell is precisely the one whose outcome is most worth
+ * recovering if it later vanishes.
+ */
+export const recordObservedPrices = mutation({
+  args: {
+    token: v.string(),
+    entries: v.array(v.object({ tradeId: v.id("trades"), price: v.number() })),
+  },
+  handler: async (ctx, args) => {
+    assertSecret(args.token);
+    const now = Date.now();
+    let written = 0;
+    for (const e of args.entries) {
+      if (!Number.isFinite(e.price) || e.price <= 0) continue;
+      const trade = await ctx.db.get("trades", e.tradeId);
+      if (!trade) continue;
+      await ctx.db.patch("trades", e.tradeId, { lastPrice: e.price, lastSeenAt: now });
+      written += 1;
+    }
+    return { written };
+  },
+});
+
 // --- durable structured memory (replaces the free-form lessons note) ---
 //
 // The write path is deliberately narrow: atomic edits only, each with a reason, and the SAME

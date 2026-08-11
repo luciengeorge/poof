@@ -82,9 +82,14 @@ const BUCKETS: { label: string; min: number; max: number }[] = [
 const mean = (xs: readonly number[]): number => xs.reduce((a, b) => a + b, 0) / xs.length;
 
 export function calibrationFrom(trades: readonly ScoredTradeLike[]): CalibrationResult {
+  // `closed-estimated` is EXCLUDED here, and that differs from attribution.ts on purpose. This
+  // module scores a FORECAST, so it needs an outcome that actually happened at a known price; an
+  // outcome reconstructed from the last observed price would make the Brier score look precise
+  // while resting on a proxy. Attribution can tolerate that because it only claims correlation.
   const withConfidence = trades.filter(
     (t) =>
       typeof t.predictedConfidence === "number" &&
+      t.status !== "closed-estimated" &&
       (t.status.startsWith("closed") || t.pnl !== undefined),
   );
   const scored = withConfidence.filter((t) => typeof t.pnl === "number");

@@ -153,6 +153,61 @@ test("buildOrphanCloseTradeArgs: closes an orphaned open BUY with zero pnl and s
     createdAt: 0,
     thesis: "t",
   };
-  const args = buildOrphanCloseTradeArgs([orphan]);
+  // No observed price on this row, so it still books unknown: the honest fallback is preserved.
+  const args = buildOrphanCloseTradeArgs([orphan], 0.75);
   assert.deepEqual(args, [{ tradeId: "trade_2", pnl: 0, status: "closed-unknown" }]);
+});
+
+// --- orphan reconciliation: recover a REAL observed outcome instead of discarding it ---
+//
+// On 2026-08-10, three of seven closures (OXY, LNG, CRM) were booked `closed-unknown` with pnl 0
+// because the positions had already left the broker. That starves the learning loop by design:
+// attribution excludes unknown outcomes and calibration cannot score them, so a third of closures
+// taught nothing. The fix is NOT to estimate from today's price, which would inject a fabricated
+// number into the very measurements being fed. It is to record the price we ACTUALLY observed while
+// the position was still visible, and reconcile from that.
+
+const orphan = (over: Record<string, unknown> = {}) => ({
+  _id: "t1",
+  ticker: "OXY_US_EQ",
+  createdAt: 1_785_000_000_000,
+  thesis: "energy catalyst",
+  price: 50,
+  quantity: 2,
+  ...over,
+});
+
+test("an orphan with a LAST OBSERVED price closes with a real P&L, not a placeholder", () => {
+  // Observed at 55 having entered at 50, 2 shares, fx 0.75 -> (55-50)*2*0.75 = 7.50
+  const args = buildOrphanCloseTradeArgs([orphan({ lastPrice: 55, lastSeenAt: 1 })], 0.75);
+  assert.equal(args.length, 1);
+  assert.equal(args[0]?.status, "closed-estimated");
+  assert.ok(Math.abs((args[0]?.pnl ?? 0) - 7.5) < 1e-9);
+  assert.equal(args[0]?.exitPrice, 55);
+});
+
+test("a LOSS is recovered just as faithfully as a gain", () => {
+  const args = buildOrphanCloseTradeArgs([orphan({ lastPrice: 40, lastSeenAt: 1 })], 0.75);
+  assert.ok((args[0]?.pnl ?? 0) < 0, "a position last seen below entry closed at a loss");
+});
+
+test("REGRESSION: with NO observed price it stays closed-unknown rather than inventing one", () => {
+  // The honest fallback. A fabricated outcome entering attribution is worse than a missing one,
+  // because a missing outcome is excluded by design while a wrong one is believed.
+  const args = buildOrphanCloseTradeArgs([orphan()], 0.75);
+  assert.equal(args[0]?.status, "closed-unknown");
+  assert.equal(args[0]?.pnl, 0);
+  assert.equal(args[0]?.exitPrice, undefined);
+});
+
+test("a missing quantity or entry price also falls back rather than computing nonsense", () => {
+  for (const broken of [{ lastPrice: 55, quantity: undefined }, { lastPrice: 55, price: undefined }]) {
+    const args = buildOrphanCloseTradeArgs([orphan(broken)], 0.75);
+    assert.equal(args[0]?.status, "closed-unknown", JSON.stringify(broken));
+  }
+});
+
+test("a non-finite fx rate cannot produce a NaN P&L", () => {
+  const args = buildOrphanCloseTradeArgs([orphan({ lastPrice: 55, lastSeenAt: 1 })], Number.NaN);
+  assert.equal(args[0]?.status, "closed-unknown");
 });

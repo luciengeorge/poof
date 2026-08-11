@@ -145,6 +145,10 @@ export function attributeFailures(
 ): AttributionResult {
   const min = opts.minOccurrences ?? MIN_PATTERN_OCCURRENCES;
   const closed = trades.filter((t) => t.closedAt !== undefined || t.status.startsWith("closed"));
+  // `closed-estimated` outcomes ARE counted here, deliberately. They are reconciled from a price
+  // actually observed while the position was visible, not invented, and this module's own output is
+  // explicitly correlational over a small sample. Excluding them would discard about a third of the
+  // record. `closed-unknown` still has no pnl at all and is excluded by the filter below.
   const withOutcome = closed.filter((t) => typeof t.pnl === "number");
   const unknownOutcomes = closed.length - withOutcome.length;
   const losers = withOutcome.filter((t) => (t.pnl ?? 0) < 0);

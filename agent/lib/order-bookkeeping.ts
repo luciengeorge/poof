@@ -42,7 +42,7 @@ export interface CloseTradeArgs {
   tradeId: string;
   pnl: number;
   exitPrice?: number;
-  status?: "closed" | "closed-unknown";
+  status?: "closed" | "closed-unknown" | "closed-estimated";
 }
 
 /**
@@ -65,10 +65,47 @@ export function buildCloseTradeArgs(
 }
 
 /**
- * Map orphaned open BUYs (position closed elsewhere, e.g. manually) into closeTrade args.
- * Booked as "closed-unknown" (not "closed") so realizedStats doesn't count these as
- * break-even trades: the pnl:0 here is a placeholder, not a real result.
+ * Map orphaned open BUYs (position closed elsewhere, or a pending sell that finally filled) into
+ * closeTrade args.
+ *
+ * WHY THIS RECOVERS A P&L NOW. On 2026-08-10 three of seven closures were booked `closed-unknown`
+ * with pnl 0, and that starves the learning loop by construction: `attributeFailures` excludes
+ * unknown outcomes and `calibrationFrom` cannot score them, so a third of the record taught nothing.
+ *
+ * WHAT IT DELIBERATELY DOES NOT DO. It does not estimate from the CURRENT market price. The position
+ * left the broker at an unknown moment, so today's price is a guess, and a guessed outcome entering
+ * attribution as though it were real is worse than a missing one: a missing outcome is excluded by
+ * design, a wrong one is believed. Instead it uses `lastPrice`, the price actually OBSERVED while
+ * the position was still visible, recorded every cycle for exactly this purpose.
+ *
+ * The result is booked `closed-estimated`, a third status distinct from both `closed` (a real exit
+ * we executed and priced) and `closed-unknown` (no outcome at all), so every downstream consumer
+ * decides for itself whether an observed-but-not-executed outcome counts. See attribution.ts and
+ * calibration.ts, which answer that question differently and on purpose.
  */
-export function buildOrphanCloseTradeArgs(orphans: OpenBuyTrade[]): CloseTradeArgs[] {
-  return orphans.map((o) => ({ tradeId: o._id, pnl: 0, status: "closed-unknown" }));
+export function buildOrphanCloseTradeArgs(
+  orphans: OpenBuyTrade[],
+  fxRate: number,
+): CloseTradeArgs[] {
+  return orphans.map((o) => {
+    const { lastPrice, price, quantity } = o;
+    const usable =
+      typeof lastPrice === "number" &&
+      typeof price === "number" &&
+      typeof quantity === "number" &&
+      Number.isFinite(lastPrice) &&
+      Number.isFinite(price) &&
+      Number.isFinite(quantity) &&
+      Number.isFinite(fxRate);
+    if (!usable) {
+      // No observation to reconcile against: stay honestly unknown.
+      return { tradeId: o._id, pnl: 0, status: "closed-unknown" as const };
+    }
+    return {
+      tradeId: o._id,
+      pnl: (lastPrice - price) * quantity * fxRate,
+      exitPrice: lastPrice,
+      status: "closed-estimated" as const,
+    };
+  });
 }

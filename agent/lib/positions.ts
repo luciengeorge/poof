@@ -41,6 +41,17 @@ export interface OpenBuyTrade {
   trailingStopPct?: number;
   maxHoldDays?: number;
   peakPrice?: number;
+  /** Entry share price in the instrument's own currency, and shares held. */
+  price?: number;
+  quantity?: number;
+  /**
+   * The last price actually OBSERVED while the position was still visible at the broker, and when.
+   * Recorded every cycle so a position that later vanishes can be reconciled against something
+   * real rather than discarded as unknown. Distinct from `peakPrice`, which is a high-water MARK
+   * and therefore overstates a position that fell before it disappeared.
+   */
+  lastPrice?: number;
+  lastSeenAt?: number;
 }
 
 export interface ManagedPosition extends OpenPosition {
