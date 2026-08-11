@@ -236,7 +236,7 @@ export class Memory {
     tradeId: string;
     pnl: number;
     exitPrice?: number;
-    status?: "closed" | "closed-unknown";
+    status?: "closed" | "closed-unknown" | "closed-estimated";
   }): Promise<unknown> {
     return this.mutation("closeTrade", { ...args });
   }
@@ -259,6 +259,10 @@ export class Memory {
     return this.query("getLessons", { env });
   }
   // --- durable structured memory (supersedes the free-form lessons note above) ---
+  /** One round trip for all positions: see the mutation for why it is batched. */
+  recordObservedPrices(entries: { tradeId: string; price: number }[]): Promise<unknown> {
+    return this.mutation("recordObservedPrices", { entries });
+  }
   listAgentMemory(env: Env): Promise<StoredMemoryRow[]> {
     return this.query("listAgentMemory", { env }) as Promise<StoredMemoryRow[]>;
   }
