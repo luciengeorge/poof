@@ -144,3 +144,29 @@ export function contextAlreadyMerged(
   if (callId === undefined || callId === "") return false;
   return (contextCallIds ?? []).includes(callId);
 }
+
+/**
+ * Merge a report-like message into what the cycle has already published.
+ *
+ * THE THIRD INSTANCE OF ONE BUG. Orders, exits and quotes all had to move from overwrite to merge;
+ * `reportText` was left as last-write-wins on the assumption, written into the hook's own comment,
+ * that "the last message that quotes money is the report". That held until the agent was told to
+ * prefer post-trade figures it could only obtain AFTER writing the report, so it began posting a
+ * short correction afterwards. The correction quotes money, so it replaced the report, and the
+ * judge graded a 300-character fragment and scored completeness 1-2 on reports that were complete.
+ *
+ * Appending is also simply more faithful: the reader saw BOTH messages, so the grader should too.
+ * Idempotent on content, so a re-delivered message cannot duplicate itself.
+ */
+export function mergeReportText(
+  existing: string | undefined,
+  incoming: string,
+  /** Required: the storage cap lives with the mutation, so there is ONE source of truth for it. */
+  cap: number,
+): string {
+  const next = incoming.trim();
+  if (next.length === 0) return existing ?? "";
+  if (existing === undefined || existing.trim().length === 0) return next.slice(0, cap);
+  if (existing.includes(next)) return existing; // re-delivery, not a second message
+  return `${existing}\n\n${next}`.slice(0, cap);
+}

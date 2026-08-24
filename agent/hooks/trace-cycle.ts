@@ -53,8 +53,8 @@ import { tradingEnv } from "../lib/risk-runtime.ts";
  *    record_cycle, so grading them would alert falsely on every conversation.
  *  - `action.result`: the ordered tool/subagent sequence, plus the cycle's own ground truth from
  *    results it already produced: the pre-trade GBP figures and held positions from
- *    review_performance, the POST-TRADE equity and cash from record_cycle (which runs last and
- *    refetches), the orders from submit_orders, the exits from manage_positions, the quoted prices
+ *    review_performance, the POST-TRADE equity and cash from record_cycle (which runs
+ *    BEFORE the report and refetches, so the report can quote it first time), the orders from submit_orders, the exits from manage_positions, the quoted prices
  *    from get_prices, and the advisory external holdings from review_external_holdings.
  *  - `message.completed`: the outbound report text, which is where the stated numbers live.
  *  - `turn.completed`: the terminal boundary where everything is graded and alerted once.
@@ -264,9 +264,14 @@ export default defineHook({
       }
     },
 
-    // Keep the latest report candidate. The report is not necessarily the turn's final message
-    // (record_cycle and update_lessons run after it), so this deliberately does not filter on
-    // finishReason; it keeps the last message that quotes money, which is the report.
+    // Keep EVERY money-quoting message of the cycle, appended in order.
+    //
+    // This used to keep only the LAST one, on the stated assumption that "the last message that
+    // quotes money is the report". That assumption broke the moment the agent was told to prefer
+    // post-trade figures it could only get after writing the report: it began posting a short
+    // correction afterwards, the correction quotes money, and it REPLACED the report. The judge
+    // then graded a 300-character fragment and scored completeness 1-2 on complete reports.
+    // Appending is also the more faithful record, since the reader saw both messages.
     async "message.completed"(event, ctx) {
       try {
         const traceKey = key(ctx.session.id, event.data?.turnId);
