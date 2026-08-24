@@ -5,6 +5,7 @@
  * Pure + unit-tested. Dates are YYYY-MM-DD (UTC-naive day comparison is fine here).
  */
 import type { EarningsEvent } from "./data.ts";
+import { DEFAULT_EXITS } from "./exits.ts";
 
 export interface NextEarnings {
   date: string;
@@ -43,12 +44,19 @@ export function nextEarnings(
  * Would a position opened today be held THROUGH this earnings print?
  * True when earnings land within the hold window: `maxHoldDays` if set, else
  * `defaultWindowDays` (a position with no explicit horizon is assumed held that long).
+ *
+ * The final fallback READS `DEFAULT_EXITS.defaultMaxHoldDays` rather than repeating the number.
+ * It used to be a literal 10 written independently of the exit engine, which meant raising the
+ * default hold to 20 would have left this guard looking only 10 days ahead: a position could then
+ * be held straight through a print that was never flagged, which is exactly the uncontrolled gap
+ * risk this function exists to prevent. Two constants that must agree should not be two constants.
  */
 export function heldThroughEarnings(
   next: NextEarnings | null,
   opts: { maxHoldDays?: number; defaultWindowDays?: number } = {},
 ): boolean {
   if (!next) return false;
-  const window = opts.maxHoldDays ?? opts.defaultWindowDays ?? 10;
+  const window =
+    opts.maxHoldDays ?? opts.defaultWindowDays ?? DEFAULT_EXITS.defaultMaxHoldDays;
   return next.daysUntil >= 0 && next.daysUntil <= window;
 }

@@ -1,10 +1,21 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { nextEarnings, heldThroughEarnings } from "./earnings.ts";
+import { DEFAULT_EXITS } from "./exits.ts";
 import type { EarningsEvent } from "./data.ts";
 
 function ev(date: string, over: Partial<EarningsEvent> = {}): EarningsEvent {
   return { symbol: "NKE", date, hour: "amc", epsEstimate: 1.0, ...over };
+}
+
+/** Fixed reference day, so the window tests never depend on when they are run. */
+const TODAY = "2026-06-25";
+
+/** The ISO date `n` days after TODAY. */
+function dayOffset(n: number): string {
+  return new Date(Date.parse(`${TODAY}T00:00:00Z`) + n * 86_400_000)
+    .toISOString()
+    .slice(0, 10);
 }
 
 test("nextEarnings: picks the soonest upcoming date, computes daysUntil", () => {
@@ -45,4 +56,21 @@ test("heldThroughEarnings: respects a shorter maxHoldDays (exit before print)", 
 
 test("heldThroughEarnings: null next -> false", () => {
   assert.equal(heldThroughEarnings(null), false);
+});
+
+test("heldThroughEarnings: the default window TRACKS the exit engine's max hold", () => {
+  // The guard and the clock are one decision, not two. This used to be a literal 10 in earnings.ts
+  // written independently of DEFAULT_EXITS, so raising the hold to 20 would have left the guard
+  // looking 10 days ahead and a position could be held straight through an unflagged print.
+  const hold = DEFAULT_EXITS.defaultMaxHoldDays;
+  const inside = nextEarnings([ev(dayOffset(hold - 1))], TODAY);
+  const outside = nextEarnings([ev(dayOffset(hold + 1))], TODAY);
+  assert.equal(heldThroughEarnings(inside), true, "a print inside the hold window must be flagged");
+  assert.equal(heldThroughEarnings(outside), false, "a print the clock exits before must not be");
+});
+
+test("heldThroughEarnings: a print at 15 days is now inside the window", () => {
+  // Pins the actual behaviour change of raising the hold 10 -> 20. At the old default this was
+  // false, and a position opened today would have sat through the print with no guard fired.
+  assert.equal(heldThroughEarnings(nextEarnings([ev(dayOffset(15))], TODAY)), true);
 });

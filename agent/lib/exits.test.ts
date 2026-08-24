@@ -25,7 +25,10 @@ test("effectiveLevels: uses defaults when unset, clamps out-of-bounds", () => {
   assert.deepEqual(effectiveLevels(pos(), DEFAULT_EXITS), {
     stopLossPct: 0.1,
     takeProfitPct: DEFAULT_EXITS.defaultTakeProfitPct,
-    maxHoldDays: 10,
+    // Deliberately the LITERAL production value, not DEFAULT_EXITS.defaultMaxHoldDays, which
+    // would make this tautological. This is the clock a live account trades on: it should not be
+    // possible to change it without a test saying so out loud.
+    maxHoldDays: 20,
     trailingStopPct: DEFAULT_EXITS.defaultTrailingStopPct,
   });
   const clamped = effectiveLevels(
