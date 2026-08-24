@@ -8,6 +8,7 @@ import {
   contextAlreadyMerged,
   decideAppend,
   mergeEventRows,
+  mergeReportText,
   mergeQuoteMap,
   MAX_TOOL_SEQUENCE,
   MAX_TRACE_EVENT_ROWS,
@@ -277,4 +278,40 @@ test("an absent or empty callId always merges: losing real orders is the worse f
   // fabrication, which is worse than counting one order twice.
   assert.equal(contextAlreadyMerged(["call_0"], undefined), false);
   assert.equal(contextAlreadyMerged(["call_0"], ""), false);
+});
+
+// --- mergeReportText: a correction must not replace the report it corrects ---
+
+const CAP = 8000;
+
+test("REGRESSION: a short correction APPENDS to the report instead of replacing it", () => {
+  // The live failure. The agent posted a full report, then a post-trade correction quoting money;
+  // last-write-wins kept only the correction, so the judge graded a fragment and scored
+  // completeness 1-2 on reports that actually said everything.
+  const report = "## Trading cycle summary\nThe account is worth GBP 256.69. Bought HD and HII.";
+  const correction = "**Correction:** the post-cycle figure is GBP 256.24.";
+  const merged = mergeReportText(report, correction, CAP);
+  assert.ok(merged.includes("Bought HD and HII"), "the report survives");
+  assert.ok(merged.includes("Correction"), "and the correction is kept too");
+});
+
+test("the first message is kept as-is", () => {
+  assert.equal(mergeReportText(undefined, "GBP 100 report", CAP), "GBP 100 report");
+  assert.equal(mergeReportText("", "GBP 100 report", CAP), "GBP 100 report");
+});
+
+test("a re-delivered identical message does not duplicate itself", () => {
+  const once = mergeReportText(undefined, "GBP 100 report", CAP);
+  assert.equal(mergeReportText(once, "GBP 100 report", CAP), once);
+});
+
+test("an empty message never blanks what was already published", () => {
+  assert.equal(mergeReportText("GBP 100 report", "   ", CAP), "GBP 100 report");
+});
+
+test("the cap keeps the REPORT and truncates the tail, never the reverse", () => {
+  const report = "R".repeat(40);
+  const merged = mergeReportText(report, "later correction", 45);
+  assert.ok(merged.startsWith("R".repeat(40)), "the substantive report is never the part dropped");
+  assert.equal(merged.length, 45);
 });

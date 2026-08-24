@@ -7,6 +7,7 @@ import {
   decideAppend,
   mergeEventRows,
   mergeQuoteMap,
+  mergeReportText,
   MAX_TOOL_SEQUENCE,
 } from "./traceAppend";
 import {
@@ -898,7 +899,9 @@ export const saveCycleTraceContext = mutation({
       patch.quotesTruncated = merged.truncated || existing.quotesTruncated === true;
     }
     if (rest.reportText !== undefined) {
-      patch.reportText = rest.reportText.slice(0, MAX_REPORT_TEXT);
+      // APPENDS. A cycle can publish more than one money-quoting message, and the later, shorter
+      // one used to overwrite the report it was correcting. See mergeReportText.
+      patch.reportText = mergeReportText(existing.reportText, rest.reportText, MAX_REPORT_TEXT);
     }
     // Record the contribution only when something accumulating was actually merged, so a snapshot
     // save does not burn the callId and block a later, fuller delivery of the same call.
