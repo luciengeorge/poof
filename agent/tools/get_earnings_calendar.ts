@@ -3,12 +3,15 @@ import { z } from "zod";
 import { finnhubFromEnv } from "../lib/data.ts";
 import { nextEarnings, heldThroughEarnings } from "../lib/earnings.ts";
 import { etDateString } from "../lib/clock.ts";
+import { DEFAULT_EXITS } from "../lib/exits.ts";
 
 const DAY = 86_400_000;
 
 export default defineTool({
+  // The window is INTERPOLATED, not written out, because a number repeated in prose is a number
+  // that drifts: this text said "~10 days" while the exit engine's default was being raised.
   description:
-    "For each US ticker (plain symbol like get_prices, e.g. NKE, AAPL), return the NEXT scheduled earnings date, how many days away it is, and the session (bmo/amc). Use this on EVERY candidate in the Signal/Size step: holding a position THROUGH an earnings print is uncontrolled binary/gap risk a stop can't protect. `heldThroughInDefaultWindow` is true when earnings fall within ~10 days (the assumed hold window): if so, either set `maxHoldDays` to exit before the date, size it as a deliberate earnings play (small enough that a ~10-15% gap is acceptable), or drop it. Always pass the next earnings date into the thesis you send to red_team. Dates may be estimates; treat an unconfirmed date as if it could come sooner.",
+    `For each US ticker (plain symbol like get_prices, e.g. NKE, AAPL), return the NEXT scheduled earnings date, how many days away it is, and the session (bmo/amc). Use this on EVERY candidate in the Signal/Size step: holding a position THROUGH an earnings print is uncontrolled binary/gap risk a stop can't protect. \`heldThroughInDefaultWindow\` is true when earnings fall within ${DEFAULT_EXITS.defaultMaxHoldDays} days (the assumed hold window): if so, either set \`maxHoldDays\` to exit before the date, size it as a deliberate earnings play (small enough that a ~10-15% gap is acceptable), or drop it. Always pass the next earnings date into the thesis you send to red_team. Dates may be estimates; treat an unconfirmed date as if it could come sooner.`,
   inputSchema: z.object({
     symbols: z.array(z.string().min(1)).min(1).max(20),
   }),

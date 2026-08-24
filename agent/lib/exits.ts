@@ -30,7 +30,17 @@ export interface ExitDefaults {
 export const DEFAULT_EXITS: ExitDefaults = {
   defaultStopLossPct: 0.1,
   defaultTakeProfitPct: 0.4,
-  defaultMaxHoldDays: 10,
+  // 20, not 10. A parameter sweep across four non-overlapping windows showed 10 was the WORST
+  // value on the whole curve, with 15-30 a broad flat plateau above it and 15-20 costing no extra
+  // drawdown at all. The mechanism matters more than the ~2pp: at a 10-day clock the time stop
+  // closed 36 of 36 positions, so the trailing stop (documented as the primary exit for winners,
+  // with take-profit loosened to 0.4 expressly so it would not front-run the trail) NEVER got to
+  // run. The clock was not a backstop, it was the entire exit strategy. Widening it hands the
+  // designed ladder back its job. Note this bound is still real: unlimited hold tripled drawdown.
+  //
+  // COUPLED to earnings.ts: the binary-event guard assumes this same window, so the two move
+  // together or a position gets held through a print the guard never flagged.
+  defaultMaxHoldDays: 20,
   minStopLossPct: 0.03,
   maxStopLossPct: 0.25,
   minTakeProfitPct: 0.05,
