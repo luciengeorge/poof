@@ -1,3 +1,4 @@
+import { outcomeKind } from "./positions.ts";
 /**
  * CALIBRATION: does the confidence the agent claimed at entry match what actually happened?
  *
@@ -86,13 +87,18 @@ export function calibrationFrom(trades: readonly ScoredTradeLike[]): Calibration
   // module scores a FORECAST, so it needs an outcome that actually happened at a known price; an
   // outcome reconstructed from the last observed price would make the Brier score look precise
   // while resting on a proxy. Attribution can tolerate that because it only claims correlation.
+  // REAL outcomes only, decided by status. Two exclusions with different reasons:
+  // `estimated` because scoring a forecast needs a price that actually happened, not a proxy; and
+  // `unknown` because its `pnl: 0` is a placeholder, so a presence check would score a forecast
+  // against a fabricated break-even and quietly call it a loss.
+  // Every CLOSED trade that carried a forecast, whatever became of it. Kept wide on purpose so
+  // `unknownOutcomes` below stays a meaningful count rather than silently collapsing to zero: an
+  // unscoreable forecast is information, and hiding it would repeat the very failure this module
+  // was built to expose.
   const withConfidence = trades.filter(
-    (t) =>
-      typeof t.predictedConfidence === "number" &&
-      t.status !== "closed-estimated" &&
-      (t.status.startsWith("closed") || t.pnl !== undefined),
+    (t) => typeof t.predictedConfidence === "number" && t.status.startsWith("closed"),
   );
-  const scored = withConfidence.filter((t) => typeof t.pnl === "number");
+  const scored = withConfidence.filter((t) => outcomeKind(t) === "real");
   const unknownOutcomes = withConfidence.length - scored.length;
 
   if (scored.length === 0) {

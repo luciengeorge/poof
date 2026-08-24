@@ -55,6 +55,8 @@ export interface MemoryRow {
   confidence: number;
   createdAt: number;
   lastConfirmedAt: number;
+  /** When this rule's wording was last changed. Drives the churn guard below. */
+  lastModifiedAt?: number;
   /** Explicit expiry, when one was set. Observations get one by default. */
   expiresAt?: number;
 }
@@ -74,6 +76,22 @@ export const CLASS_CAPS: Record<MemoryClass, number> = {
 
 /** SHARP proposes at most 3 atomic edits per round. More than that is a rewrite in disguise. */
 export const MAX_EDITS_PER_CYCLE = 3;
+
+/**
+ * How long a rule is left alone after its wording changes.
+ *
+ * WHY. Across four consecutive live cycles the agent restated ONE rule: "added a rule to consider
+ * partial de-risking" -> "tightened the rule" -> "strengthened the rule to review three days
+ * before" -> "strengthened the rule to begin executable partial reductions". The gate admitted
+ * every one and no new outcome occurred between them. The atomic-edit constraint held (there was
+ * no full rewrite) yet credit assignment is defeated all the same, because a belief that is
+ * continually reworded is never actually tested.
+ *
+ * A rule needing three rewrites in three days has a problem no wording will fix, so the edit is
+ * refused and the agent is pointed at the two honest alternatives: leave it and let outcomes judge
+ * it, or RETIRE it, which stays allowed precisely so a genuinely wrong rule can still go.
+ */
+export const MODIFY_COOLDOWN_MS = 3 * 24 * 60 * 60 * 1000;
 
 /** How long an unreconfirmed observation stands before it expires. */
 export const OBSERVATION_TTL_MS = 14 * 24 * 60 * 60 * 1000;
@@ -116,7 +134,8 @@ export type PolicyRule =
   | "duplicate"
   | "computed-stat"
   | "unknown-target"
-  | "duplicate-id";
+  | "duplicate-id"
+  | "recently-modified";
 
 export interface Decision {
   edit: Edit;
@@ -270,6 +289,16 @@ export function admitEdits(
       );
     }
     if (edit.op === "modify") {
+      const changedAt = target.lastModifiedAt;
+      if (changedAt !== undefined && now - changedAt < MODIFY_COOLDOWN_MS) {
+        const days = Math.max(1, Math.ceil((MODIFY_COOLDOWN_MS - (now - changedAt)) / 86_400_000));
+        return refuse(
+          "recently-modified",
+          `${edit.id} was reworded ${Math.floor((now - changedAt) / 86_400_000)} day(s) ago. ` +
+            `Leave it alone for ${days} more day(s) and let outcomes judge it, or RETIRE it if it ` +
+            "is genuinely wrong. Restating a rule is not evidence that it works.",
+        );
+      }
       const merged = `${edit.condition ?? target.condition} ${edit.action ?? target.action}`;
       if (looksLikeComputedStat(merged)) {
         return refuse(

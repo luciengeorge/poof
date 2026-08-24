@@ -184,3 +184,37 @@ test("attribution is pure and does not mutate its input", () => {
   attributeFailures(trades);
   assert.deepEqual(JSON.parse(JSON.stringify(trades)), copy);
 });
+
+// --- the placeholder-zero trap: an unknown outcome must never look known ---
+
+test("REGRESSION: closed-unknown rows are NOT counted as known outcomes", () => {
+  // Reconciliation writes `pnl: 0` as a PLACEHOLDER on closed-unknown. Filtering on "is pnl a
+  // number" therefore counted 5 outcome-less trades as known, which is why this module and
+  // realizedStats reported figures that did not add up in the weekly scorecard.
+  const unknowns = Array.from({ length: 5 }, (_, i) =>
+    trade({ ticker: `U${i}`, status: "closed-unknown", pnl: 0 }),
+  );
+  const result = attributeFailures(unknowns);
+  assert.equal(result.closedTrades, 0, "no outcomes at all, despite every row having a number");
+  assert.deepEqual(result.patterns, []);
+});
+
+test("a placeholder zero is not counted as a loss either", () => {
+  const mixed = [
+    ...Array.from({ length: 3 }, (_, i) =>
+      trade({ ticker: `U${i}`, status: "closed-unknown", pnl: 0 }),
+    ),
+    trade({ ticker: "REAL", status: "closed", pnl: -4 }),
+  ];
+  const result = attributeFailures(mixed);
+  assert.equal(result.closedTrades, 1);
+  assert.equal(result.losingTrades, 1);
+});
+
+test("closed-estimated IS counted: it is an observation, not a placeholder", () => {
+  const est = Array.from({ length: 3 }, (_, i) =>
+    trade({ ticker: `E${i}`, status: "closed-estimated", pnl: -3, strategyTag: "momentum" }),
+  );
+  const found = attributeFailures(est).patterns.find((p) => p.key === "momentum");
+  assert.ok(found, "a reconciled outcome is real evidence for a correlational module");
+});
