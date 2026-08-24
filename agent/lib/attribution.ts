@@ -1,3 +1,4 @@
+import { outcomeKind } from "./positions.ts";
 /**
  * FAILURE ATTRIBUTION: which recurring patterns actually cost money, over the whole closed record.
  *
@@ -145,11 +146,17 @@ export function attributeFailures(
 ): AttributionResult {
   const min = opts.minOccurrences ?? MIN_PATTERN_OCCURRENCES;
   const closed = trades.filter((t) => t.closedAt !== undefined || t.status.startsWith("closed"));
-  // `closed-estimated` outcomes ARE counted here, deliberately. They are reconciled from a price
-  // actually observed while the position was visible, not invented, and this module's own output is
-  // explicitly correlational over a small sample. Excluding them would discard about a third of the
-  // record. `closed-unknown` still has no pnl at all and is excluded by the filter below.
-  const withOutcome = closed.filter((t) => typeof t.pnl === "number");
+  // Decided by STATUS, never by whether a number is present. `closed-unknown` rows carry
+  // `pnl: 0` as a PLACEHOLDER, so a presence check counted them as known outcomes and made this
+  // module disagree with realizedStats in the weekly scorecard.
+  //
+  // `estimated` IS counted, deliberately: it is reconciled from a price actually observed while the
+  // position was visible, not invented, and this module only ever claims correlation. `unknown` is
+  // not, because there is no outcome at all.
+  const withOutcome = closed.filter((t) => {
+    const kind = outcomeKind(t);
+    return kind === "real" || kind === "estimated";
+  });
   const unknownOutcomes = closed.length - withOutcome.length;
   const losers = withOutcome.filter((t) => (t.pnl ?? 0) < 0);
 

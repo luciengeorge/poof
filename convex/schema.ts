@@ -94,6 +94,8 @@ export default defineSchema({
     confidence: v.number(),
     createdAt: v.number(),
     lastConfirmedAt: v.number(),
+    /** When the wording last changed. Drives the churn cooldown in memoryPolicy.ts. */
+    lastModifiedAt: v.optional(v.number()),
     expiresAt: v.optional(v.number()),
     /** Which cycle proposed it, for attribution back to the outcome that motivated it. */
     sourceCycle: v.optional(v.string()),

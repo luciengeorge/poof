@@ -27,6 +27,7 @@ function row(over: Partial<MemoryRow> = {}): MemoryRow {
     createdAt: over.createdAt ?? NOW - DAY,
     lastConfirmedAt: over.lastConfirmedAt ?? NOW - DAY,
     ...(over.expiresAt !== undefined ? { expiresAt: over.expiresAt } : {}),
+    ...(over.lastModifiedAt !== undefined ? { lastModifiedAt: over.lastModifiedAt } : {}),
   };
 }
 
@@ -42,6 +43,11 @@ const add = (over: Partial<Extract<Edit, { op: "add" }>> = {}): Edit => ({
   reason: "the ORCL sizing attempt failed on minimum quantity",
   ...over,
 });
+
+/** The refusal detail, for asserting that a rejection explains itself. */
+function invariantDetail(decisions: ReturnType<typeof admitEdits>, index = 0): string {
+  return decisions[index]?.detail ?? "";
+}
 
 /** Which policy rule rejected this edit, or "admitted". */
 function verdict(decisions: ReturnType<typeof admitEdits>, index = 0): string {
@@ -248,4 +254,48 @@ test("an added memory needs a stable semantic id, and cannot reuse one", () => {
     "duplicate-id",
   );
   assert.equal(verdict(admitEdits([], [add({ id: "  " })], NOW)), "duplicate-id");
+});
+
+// --- the churn guard: restating a rule is not evidence that it works ---
+
+test("REGRESSION: a rule reworded days ago cannot be reworded again", () => {
+  // The live failure: ONE rule restated across four consecutive cycles ("added" -> "tightened" ->
+  // "strengthened" -> "strengthened"), every version admitted, no new outcome between them.
+  const churned = [row({ id: "derisk_early", lastModifiedAt: NOW - 24 * 60 * 60 * 1000 })];
+  const decisions = admitEdits(
+    churned,
+    [{ op: "modify", id: "derisk_early", action: "reworded again", reason: "strengthening it" }],
+    NOW,
+  );
+  assert.equal(verdict(decisions), "recently-modified");
+  assert.match(invariantDetail(decisions), /RETIRE it|let outcomes judge/);
+});
+
+test("RETIRING a recently reworded rule is still allowed: a wrong rule must be removable", () => {
+  const churned = [row({ id: "derisk_early", lastModifiedAt: NOW - 24 * 60 * 60 * 1000 })];
+  const decisions = admitEdits(
+    churned,
+    [{ op: "retire", id: "derisk_early", reason: "it misfired on three separate cycles" }],
+    NOW,
+  );
+  assert.equal(verdict(decisions), "admitted");
+});
+
+test("once the cooldown has passed the rule can be changed again", () => {
+  const settled = [row({ id: "derisk_early", lastModifiedAt: NOW - OBSERVATION_TTL_MS })];
+  const decisions = admitEdits(
+    settled,
+    [{ op: "modify", id: "derisk_early", action: "a genuinely new formulation", reason: "3 new losses" }],
+    NOW,
+  );
+  assert.equal(verdict(decisions), "admitted");
+});
+
+test("a rule that has never been reworded is not blocked", () => {
+  const decisions = admitEdits(
+    [row({ id: "fresh" })],
+    [{ op: "modify", id: "fresh", action: "first refinement", reason: "new evidence" }],
+    NOW,
+  );
+  assert.equal(verdict(decisions), "admitted");
 });

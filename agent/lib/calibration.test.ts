@@ -122,3 +122,26 @@ test("calibration is pure and does not mutate its input", () => {
   calibrationFrom(trades);
   assert.deepEqual(JSON.parse(JSON.stringify(trades)), copy);
 });
+
+// --- the placeholder-zero trap, on the scoring side ---
+
+test("REGRESSION: a closed-unknown placeholder never scores a forecast", () => {
+  // Its pnl 0 is a placeholder. Scoring it would mark a confident call WRONG on no evidence.
+  const rows = Array.from({ length: 12 }, () => ({
+    status: "closed-unknown",
+    predictedConfidence: 0.8,
+    pnl: 0,
+  }));
+  const result = calibrationFrom(rows);
+  assert.equal(result.scored, 0);
+  assert.equal(result.verdict, "no-data");
+});
+
+test("closed-estimated is excluded too: a forecast needs a price that actually happened", () => {
+  const rows = Array.from({ length: 12 }, () => ({
+    status: "closed-estimated",
+    predictedConfidence: 0.8,
+    pnl: 5,
+  }));
+  assert.equal(calibrationFrom(rows).scored, 0);
+});

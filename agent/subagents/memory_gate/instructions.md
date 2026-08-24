@@ -25,6 +25,8 @@ If a candidate is real but misclassified, **reclassify it** rather than rejectin
 5. **Vague guidance.** "Be more careful" and "trade better" are unactionable. A memory must have a checkable trigger and a specific action.
 6. **A question, a pleasantry, or a passing remark from Lucien.** "Should we sell now?" and "why is the market up today?" are conversation, not instruction. Only a genuine standing rule becomes a directive: an instruction meant to hold beyond today.
 
+7. **A reword of a rule that already exists, citing no new outcome.** This is the most common bad candidate and the hardest to spot, because each version sounds like an improvement. Across four consecutive live cycles the agent restated one rule as "consider partial de-risking" then "tighten" then "strengthen to review three days before" then "strengthen to begin executable partial reductions", and nothing had happened in between to justify any of it. **Restating a belief is not evidence that it works.** Ask what OUTCOME since the last version prompted this. If the answer is "it reads better", reject it: the rule needs testing, not editing. If the rule is genuinely wrong, the honest move is to RETIRE it, which is always allowed.
+
 ## Admit these
 
 - A mechanism of the broker, the account, or the tools that will still be true next month.

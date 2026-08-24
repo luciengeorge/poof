@@ -300,6 +300,7 @@ function toMemoryRows(docs: readonly Doc<"agentMemory">[]): MemoryRow[] {
     confidence: d.confidence,
     createdAt: d.createdAt,
     lastConfirmedAt: d.lastConfirmedAt,
+    ...(d.lastModifiedAt !== undefined ? { lastModifiedAt: d.lastModifiedAt } : {}),
     ...(d.expiresAt !== undefined ? { expiresAt: d.expiresAt } : {}),
   }));
 }
@@ -376,6 +377,9 @@ export const applyMemoryEdits = mutation({
           ...(edit.confidence !== undefined ? { confidence: edit.confidence } : {}),
           // An edited rule counts as reconfirmed: someone just looked at it deliberately.
           lastConfirmedAt: now,
+          // Stamped so the churn cooldown can refuse a rule that is being restated rather than
+          // tested. See MODIFY_COOLDOWN_MS.
+          lastModifiedAt: now,
         });
         applied.push(`modify:${edit.id}`);
         continue;

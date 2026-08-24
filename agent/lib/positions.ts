@@ -98,20 +98,53 @@ export interface RealizedStats {
   winRatePct: number;
   totalPnl: number;
   closedUnknown: number;
+  /** Reconciled from an observed price rather than an executed exit. Never silently dropped. */
+  closedEstimated: number;
+}
+
+/**
+ * Does this trade have an outcome, and how solid is it? ONE definition, shared by every consumer.
+ *
+ * WHY THIS EXISTS. Three modules each decided this differently and therefore disagreed in public:
+ * `realizedStats` required `status === "closed"` exactly, so a `closed-estimated` trade silently
+ * vanished from every count; `attributeFailures` asked only whether `pnl` was a number, which is
+ * TRUE for a `closed-unknown` row because reconciliation writes `pnl: 0` as a PLACEHOLDER; and
+ * `calibrationFrom` excluded estimated but not unknown. The weekly scorecard then reported figures
+ * that did not add up, and the agent said so itself.
+ *
+ * The trap is that **a placeholder zero is indistinguishable from a real zero**, so the outcome
+ * must be decided by STATUS and never by whether a number happens to be present.
+ */
+export type OutcomeKind =
+  /** Exited by us, at a price we executed and recorded. */
+  | "real"
+  /** Reconciled from the last price actually OBSERVED before the position left the broker. */
+  | "estimated"
+  /** Closed with no outcome at all. Its `pnl: 0` is a placeholder, NOT a result. */
+  | "unknown"
+  /** Not closed. */
+  | "open";
+
+export function outcomeKind(t: { status?: string; pnl?: number }): OutcomeKind {
+  if (t.status === "closed-unknown") return "unknown";
+  const hasPnl = typeof t.pnl === "number" && Number.isFinite(t.pnl);
+  if (t.status === "closed" && hasPnl) return "real";
+  if (t.status === "closed-estimated" && hasPnl) return "estimated";
+  return "open";
 }
 
 export function realizedStats(
   closedTrades: { pnl?: number; status?: string }[],
 ): RealizedStats {
-  const closed = closedTrades.filter(
-    (t) => t.status === "closed" && typeof t.pnl === "number",
-  );
+  // "Actually banked" stays strictly to exits WE executed and priced. Estimated outcomes are real
+  // observations but were not banked by us, so they are reported separately rather than folded in
+  // or, as before, dropped from every count without trace.
+  const closed = closedTrades.filter((t) => outcomeKind(t) === "real");
   const wins = closed.filter((t) => (t.pnl as number) > 0).length;
   const losses = closed.filter((t) => (t.pnl as number) < 0).length;
   const totalPnl = closed.reduce((s, t) => s + (t.pnl as number), 0);
-  const closedUnknown = closedTrades.filter(
-    (t) => t.status === "closed-unknown",
-  ).length;
+  const closedUnknown = closedTrades.filter((t) => outcomeKind(t) === "unknown").length;
+  const closedEstimated = closedTrades.filter((t) => outcomeKind(t) === "estimated").length;
   return {
     closedCount: closed.length,
     wins,
@@ -119,6 +152,7 @@ export function realizedStats(
     winRatePct: closed.length ? (wins / closed.length) * 100 : 0,
     totalPnl,
     closedUnknown,
+    closedEstimated,
   };
 }
 
