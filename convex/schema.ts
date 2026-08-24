@@ -192,6 +192,10 @@ export default defineSchema({
     // accumulating collection, while a later delivery of the SAME call carrying fuller output must
     // still be captured. Skipping the whole save on a duplicate append lost real orders.
     contextCallIds: v.optional(v.array(v.string())),
+    // Tools whose output could not be parsed, so their ground truth is missing for a KNOWN reason.
+    // A thrown trading tool used to be invisible here: its absence looked identical to "the tool
+    // ran and did nothing", which is how a Finnhub failure was reported as "red_team never ran".
+    captureFailures: v.optional(v.array(v.string())),
     // The recording cap was hit, so tools beyond it are missing. Set loudly rather than
     // silently, because `checkInvariants` then downgrades absence-based conclusions to
     // "not-applicable": a cap must never turn an unknown into a reported violation.
