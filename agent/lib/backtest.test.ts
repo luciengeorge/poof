@@ -194,3 +194,32 @@ test("mismatched trading calendars do not manufacture a phantom drawdown", () =>
   assert.ok(Math.abs(gapDay.equity - 10_000) < 1e-9, "no dip on the missing-bar date");
   assert.ok(result.maxDrawdown < 1e-9, `expected ~0 drawdown, got ${result.maxDrawdown}`);
 });
+
+test("the trailing stop fires on a pullback from a peak set on an EARLIER bar", () => {
+  // Regression: the harness rebuilt each position from scratch every day and never carried a
+  // high-water mark, so `peak` collapsed to `max(entryPrice, currentPrice)`. When a position was
+  // up, that made the trigger `currentPrice <= currentPrice * 0.92` (never true); when it was
+  // down, the +5% activation threshold was unreachable. The result was ZERO trailing-stop exits
+  // in every backtest ever run, including the maxHoldDays sweep. This series can only exit via
+  // the trail: it never reaches the -10% stop nor the +40% take-profit.
+  const series: Candle[] = [
+    bar("2024-01-01", 100, 100),
+    bar("2024-01-02", 100, 100), // entry fills here at the open
+    bar("2024-01-03", 100, 110), // +10%: past the +5% activation
+    bar("2024-01-04", 110, 120), // peak 120 -> trail stop 110.4
+    bar("2024-01-05", 120, 105), // 8%+ off the peak, still +5% vs entry
+    bar("2024-01-06", 105, 105),
+  ];
+  const r = runBacktest(
+    { AAA: series },
+    [{ ticker: "AAA", date: "2024-01-01" }],
+    baseConfig(),
+  );
+
+  assert.equal(r.trades.length, 1);
+  const t = r.trades[0];
+  assert.equal(t.exitReason, "trailing-stop");
+  assert.equal(t.exitDate, "2024-01-05");
+  // Exited in profit: the point of a trail is to bank a winner, not to act as a second stop-loss.
+  assert.ok(t.exitPrice !== null && t.exitPrice > t.entryPrice);
+});

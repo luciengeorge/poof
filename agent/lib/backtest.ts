@@ -6,7 +6,9 @@
  * returns the same output.
  *
  * It REUSES the production pure modules rather than duplicating their logic:
- *   - exits.ts `checkExits` / `OpenPosition` / `DEFAULT_EXITS` decide stop-loss / take-profit / max-hold.
+ *   - exits.ts `checkExits` / `OpenPosition` / `DEFAULT_EXITS` decide stop-loss / trailing-stop /
+ *     take-profit / max-hold. The trailing stop needs a high-water mark carried across bars: see
+ *     `LivePosition.peakPrice`, whose absence silently disabled it entirely.
  *   - execution.ts `notionalToShares` sizes each entry.
  *   - benchmark.ts `computeAlpha` computes alpha vs buy-and-hold SPY.
  */
@@ -78,6 +80,20 @@ interface LivePosition {
   shares: number;
   openedAtMs: number;
   entryCost: number;
+  /**
+   * High-water mark, CARRIED ACROSS BARS. Without it the trailing stop cannot fire at all:
+   * `checkExits` computes `peak = max(peakPrice ?? entryPrice, currentPrice)`, so a position
+   * rebuilt fresh each day has `peak === currentPrice` whenever it is up, making the trigger
+   * `currentPrice <= currentPrice * (1 - trail)` and therefore never true; and when it is down,
+   * the +5% activation threshold is unreachable by definition. The harness silently produced
+   * ZERO trailing-stop exits across every window and parameter value, which made a sweep over
+   * `defaultMaxHoldDays` measure a system with its PRIMARY winner exit disabled.
+   *
+   * Ratcheted against the daily CLOSE, not the intraday high, because that mirrors production:
+   * `manage_positions` only ever sees the price at cycle time, so a peak set from a high the
+   * live agent never observed would make the backtest exit on information it cannot have.
+   */
+  peakPrice: number;
 }
 
 const dayMs = (date: string): number => Date.parse(date);
@@ -214,6 +230,7 @@ export function runBacktest(
         shares,
         openedAtMs: dayMs(date),
         entryCost: entryFee,
+        peakPrice: bar.open,
       });
     }
 
@@ -222,12 +239,16 @@ export function runBacktest(
     for (const pos of open.values()) {
       const bar = seriesIndex[pos.ticker]?.get(date);
       if (!bar) continue;
+      // Ratchet BEFORE evaluating, exactly as manage_positions does on each live cycle. A day
+      // with no bar leaves the mark untouched rather than resetting it.
+      pos.peakPrice = Math.max(pos.peakPrice, bar.close);
       positions.push({
         ticker: pos.ticker,
         entryPrice: pos.entryPrice,
         currentPrice: bar.close,
         marketValue: pos.shares * bar.close,
         openedAt: pos.openedAtMs,
+        peakPrice: pos.peakPrice,
         stopLossPct: undefined,
         takeProfitPct: undefined,
         maxHoldDays: undefined,
