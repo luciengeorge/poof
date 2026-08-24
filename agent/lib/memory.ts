@@ -155,6 +155,8 @@ export interface StoredCycleTrace extends CycleTraceKey {
   }[];
   externalAdvisoryHoldingsTruncated?: boolean;
   reportText?: string;
+  /** Tools whose output could not be parsed this cycle, so their ground truth is missing. */
+  captureFailures?: string[];
   reportPass?: boolean;
   reportFindings?: { rule: string; detail: string }[];
   /** LLM-as-judge verdict on report quality, written by the scheduled judge pass. */
@@ -389,7 +391,7 @@ export class Memory {
         | "externalAdvisoryHoldingsTruncated"
         | "reportText"
       >
-    > & { callId?: string },
+    > & { callId?: string; captureFailures?: string[] },
   ): Promise<unknown> {
     return this.mutation("saveCycleTraceContext", { ...key, ...context });
   }

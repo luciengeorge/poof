@@ -827,6 +827,7 @@ export const saveCycleTraceContext = mutation({
     ),
     externalAdvisoryHoldingsTruncated: v.optional(v.boolean()),
     reportText: v.optional(v.string()),
+    captureFailures: v.optional(v.array(v.string())),
     /** The action result this context came from. Makes the ACCUMULATING merges idempotent. */
     callId: v.optional(v.string()),
   },
@@ -897,6 +898,12 @@ export const saveCycleTraceContext = mutation({
       // Sticky: once a quote has been dropped, the map stays INCOMPLETE for this cycle however
       // many later batches fit.
       patch.quotesTruncated = merged.truncated || existing.quotesTruncated === true;
+    }
+    if (rest.captureFailures !== undefined) {
+      // Appended and deduped: several tools can fail in one cycle, and a re-delivery must not
+      // list the same tool twice.
+      const seen = new Set([...(existing.captureFailures ?? []), ...rest.captureFailures]);
+      patch.captureFailures = [...seen].slice(0, 20);
     }
     if (rest.reportText !== undefined) {
       // APPENDS. A cycle can publish more than one money-quoting message, and the later, shorter

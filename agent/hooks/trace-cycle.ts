@@ -94,7 +94,12 @@ function observerMemory(): Memory {
  * does. The top-level keys are logged (never the values, which contain positions and prices) so the
  * shape mismatch is diagnosable from the log alone.
  */
-function warnUnparseable(key: CycleTraceKey, toolName: string, output: unknown): void {
+async function warnUnparseable(
+  memory: Memory,
+  key: CycleTraceKey,
+  toolName: string,
+  output: unknown,
+): Promise<void> {
   const shape =
     typeof output === "object" && output !== null
       ? `object with keys [${Object.keys(output as object).join(", ")}]`
@@ -103,6 +108,15 @@ function warnUnparseable(key: CycleTraceKey, toolName: string, output: unknown):
     `[online-eval] cycle ${key.sessionId}/${key.turnId}: could NOT parse ${toolName} output, so ` +
       `its ground truth is MISSING from the trace and the judge will see nothing for it. Got ${shape}.`,
   );
+  // RECORDED, not merely logged. A thrown trading tool was previously invisible in the trace: its
+  // absence looked exactly like "the tool ran and did nothing", which is how a Finnhub failure got
+  // reported as "red_team never ran" on a live-money account. Historical logs were not retrievable
+  // when that was chased, so the diagnosis has to survive in the data.
+  try {
+    await memory.saveCycleTraceContext(key, { captureFailures: [`${toolName} (${shape})`] });
+  } catch {
+    // Non-fatal: the log line above is the fallback.
+  }
 }
 
 /**
@@ -216,7 +230,7 @@ export default defineHook({
               callId,
             });
           } else {
-            warnUnparseable(traceKey, name, output);
+            await warnUnparseable(memory, traceKey, name, output);
           }
         } else if (name === "manage_positions") {
           const captured = exitsFrom(output);
@@ -228,7 +242,7 @@ export default defineHook({
               callId,
             });
           } else {
-            warnUnparseable(traceKey, name, output);
+            await warnUnparseable(memory, traceKey, name, output);
           }
         } else if (name === "get_prices") {
           // Merged server-side across the cycle's several calls, so an early quote the report
@@ -299,6 +313,15 @@ export default defineHook({
         // The recorded orders are passed too: `no-duplicate-orders` is a property of the orders,
         // not of how many submit_orders calls produced them. Without them it would report
         // not-applicable on every cycle, which is a guard that never runs.
+        // A guard that went strict because a tool ERRORED must say so, or the alert blames the
+        // wrong thing: "red_team never ran" reads as a safety incident when the real event was a
+        // quote-provider failure that left the orders unparseable.
+        const captureNote =
+          trace.captureFailures && trace.captureFailures.length > 0
+            ? ` NOTE: ground truth is missing because these tools produced unparseable output: ` +
+              `${trace.captureFailures.join(", ")}. A guard that could not see orders stays STRICT ` +
+              "by design, so this may be a tool failure rather than a discipline failure."
+            : "";
         const invariants = checkInvariants(trace.toolSequence, {
           truncated,
           orders: trace.orders,
@@ -355,6 +378,7 @@ export default defineHook({
             `🚨 poof ONLINE EVAL: ${violations.length} cycle invariant(s) violated ` +
               `(session ${traceKey.sessionId}): ` +
               violations.map((r) => `${r.name} (${r.detail ?? "no detail"})`).join("; ") +
+              captureNote +
               `. Tool sequence: ${trace.toolSequence.join(" -> ")}`,
           );
         }
