@@ -157,6 +157,8 @@ export interface StoredCycleTrace extends CycleTraceKey {
   reportText?: string;
   /** Tools whose output could not be parsed this cycle, so their ground truth is missing. */
   captureFailures?: string[];
+  /** Broker-total reconciliation alerts from account-reading tools, deduplicated per cycle. */
+  accountValueAlerts?: string[];
   reportPass?: boolean;
   reportFindings?: { rule: string; detail: string }[];
   /** LLM-as-judge verdict on report quality, written by the scheduled judge pass. */
@@ -390,6 +392,7 @@ export class Memory {
         | "externalAdvisoryHoldings"
         | "externalAdvisoryHoldingsTruncated"
         | "reportText"
+        | "accountValueAlerts"
       >
     > & { callId?: string; captureFailures?: string[] },
   ): Promise<unknown> {

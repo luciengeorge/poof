@@ -25,9 +25,10 @@ export default defineTool({
     return {
       accountValueGbp: snap.equity,
       cashGbp: snap.cash,
-      deployedGbp: snap.equity - snap.cash,
+      deployedGbp: snap.accountValueReconciliation.deployedValueGbp,
       positions: snap.positions,
       fx: { rate: fx.rate, source: fx.source, fallbackUsed: fx.source === "fallback" },
+      accountValueReconciliation: snap.accountValueReconciliation,
     };
   },
 });

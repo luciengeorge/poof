@@ -198,6 +198,10 @@ export default defineSchema({
     // A thrown trading tool used to be invisible here: its absence looked identical to "the tool
     // ran and did nothing", which is how a Finnhub failure was reported as "red_team never ran".
     captureFailures: v.optional(v.array(v.string())),
+    // Reconciliation warnings from account-reading tools. Observer only: one completed-cycle
+    // alert tells a human when the FX-valued portfolio disagrees with the broker total or when
+    // that authoritative total is unusable.
+    accountValueAlerts: v.optional(v.array(v.string())),
     // The recording cap was hit, so tools beyond it are missing. Set loudly rather than
     // silently, because `checkInvariants` then downgrades absence-based conclusions to
     // "not-applicable": a cap must never turn an unknown into a reported violation.

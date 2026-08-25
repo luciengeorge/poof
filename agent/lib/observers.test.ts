@@ -317,6 +317,14 @@ test("REGRESSION: the expanded ground truth is captured by the HOOK, not by a tr
   }
 });
 
+test("REGRESSION: account-value reconciliation uses the established completed-cycle alert path", () => {
+  const hook = readFileSync(new URL("../hooks/trace-cycle.ts", import.meta.url), "utf8");
+  assert.match(hook, /accountValueAlertFrom\(output\)/);
+  assert.match(hook, /accountValueAlerts: \[accountValueAlert\]/);
+  assert.match(hook, /poof ACCOUNT VALUE RECONCILIATION/);
+  assert.match(hook, /await alert\(/);
+});
+
 test("REGRESSION: record_cycle reports the SAME figures it wrote, and still swallows failures", () => {
   // It runs last and refetches, so its equity and free cash are the only post-trade snapshot in
   // the cycle. Two properties must hold: the returned figures are the very ones written to the
@@ -324,11 +332,13 @@ test("REGRESSION: record_cycle reports the SAME figures it wrote, and still swal
   // memory failure still returns {recorded:false} rather than failing the cycle. Structural,
   // because the tool itself needs live credentials to run.
   const source = readFileSync(new URL("../tools/record_cycle.ts", import.meta.url), "utf8");
-  assert.match(source, /const equity = accountValueGbp\(/);
+  assert.match(source, /const accountValueReconciliation = reconcileAccountValueGbp\(/);
+  assert.match(source, /const equity = accountValueReconciliation\.accountValueGbp/);
   assert.match(source, /const freeCash = cash\.free/);
   assert.match(source, /recordCycle\(\{[\s\S]*?\bequity,[\s\S]*?\bfreeCash,/);
   assert.match(source, /accountValueGbp: equity/);
   assert.match(source, /cashGbp: freeCash/);
+  assert.match(source, /accountValueReconciliation,/);
   assert.match(source, /catch[\s\S]*?recorded: false/);
 });
 

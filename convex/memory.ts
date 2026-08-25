@@ -832,6 +832,7 @@ export const saveCycleTraceContext = mutation({
     externalAdvisoryHoldingsTruncated: v.optional(v.boolean()),
     reportText: v.optional(v.string()),
     captureFailures: v.optional(v.array(v.string())),
+    accountValueAlerts: v.optional(v.array(v.string())),
     /** The action result this context came from. Makes the ACCUMULATING merges idempotent. */
     callId: v.optional(v.string()),
   },
@@ -908,6 +909,12 @@ export const saveCycleTraceContext = mutation({
       // list the same tool twice.
       const seen = new Set([...(existing.captureFailures ?? []), ...rest.captureFailures]);
       patch.captureFailures = [...seen].slice(0, 20);
+    }
+    if (rest.accountValueAlerts !== undefined) {
+      // Appended and deduped so every account-reading tool can report the same finding without
+      // producing several identical completed-cycle alerts.
+      const seen = new Set([...(existing.accountValueAlerts ?? []), ...rest.accountValueAlerts]);
+      patch.accountValueAlerts = [...seen].slice(0, 20);
     }
     if (rest.reportText !== undefined) {
       // APPENDS. A cycle can publish more than one money-quoting message, and the later, shorter

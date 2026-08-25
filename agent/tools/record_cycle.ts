@@ -2,7 +2,7 @@ import { defineTool } from "eve/tools";
 import { z } from "zod";
 import { t212FromEnv } from "../lib/t212.ts";
 import { fxForCycle } from "../lib/fx.ts";
-import { accountValueGbp } from "../lib/execution.ts";
+import { reconcileAccountValueGbp } from "../lib/execution.ts";
 import { memoryFromEnv } from "../lib/memory.ts";
 import { tradingEnv } from "../lib/risk-runtime.ts";
 
@@ -35,7 +35,8 @@ export default defineTool({
         client.getCash(),
         client.getPortfolio(),
       ]);
-      const equity = accountValueGbp(cash, positions, fx.rate);
+      const accountValueReconciliation = reconcileAccountValueGbp(cash, positions, fx.rate);
+      const equity = accountValueReconciliation.accountValueGbp;
       const freeCash = cash.free;
       await memoryFromEnv().recordCycle({
         env: tradingEnv(),
@@ -46,8 +47,8 @@ export default defineTool({
         candidates,
         watchlist,
       });
-      // Surface an FX fallback so a human notices: the recorded equity used a hardcoded rate
-      // because the live source was unreachable, so the value may have drifted.
+      // Surface reconciliation status so the observer can alert if the broker total was unusable
+      // or the FX-derived cross-check diverged. The recorded equity remains broker-authoritative.
       //
       // The equity and cash figures are RETURNED as well as written. This tool runs LAST and does
       // its own fresh broker fetch, so these are the only figures that describe the account AFTER
@@ -59,6 +60,7 @@ export default defineTool({
         fx: { rate: fx.rate, source: fx.source, fallbackUsed: fx.source === "fallback" },
         accountValueGbp: equity,
         cashGbp: freeCash,
+        accountValueReconciliation,
       };
     } catch (err) {
       console.warn("[memory] recordCycle failed (non-fatal):", err);

@@ -3,6 +3,7 @@ import { alert } from "../lib/alert.ts";
 import {
   actionResultCallId,
   actionResultName,
+  accountValueAlertFrom,
   exitsFrom,
   externalGbpValuesFrom,
   externalHoldingsFrom,
@@ -187,6 +188,12 @@ export default defineHook({
         // ACCURATE reports. Each collection is bounded and flags its own truncation, so an
         // incomplete list is never read as proof that a real event did not happen.
         const output = (result as { output?: unknown } | undefined)?.output;
+        const accountValueAlert = accountValueAlertFrom(output);
+        if (accountValueAlert) {
+          await memory.saveCycleTraceContext(traceKey, {
+            accountValueAlerts: [accountValueAlert],
+          });
+        }
         if (name === "review_performance") {
           // PRE-TRADE: this tool runs early. `accountValueGbp` here is what the deterministic
           // report check grades against, since the report is told to quote it verbatim.
@@ -386,6 +393,12 @@ export default defineHook({
           await alert(
             `🚨 poof ONLINE EVAL: the report does not match the computed numbers ` +
               `(session ${traceKey.sessionId}): ${summarizeFindings(report.findings)}`,
+          );
+        }
+        if (trace.accountValueAlerts && trace.accountValueAlerts.length > 0) {
+          await alert(
+            `🚨 poof ACCOUNT VALUE RECONCILIATION (session ${traceKey.sessionId}): ` +
+              trace.accountValueAlerts.join("; "),
           );
         }
         if (report === null && trace.toolSequence.length > 0) {

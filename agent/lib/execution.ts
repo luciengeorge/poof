@@ -76,20 +76,89 @@ export function deployedValueGbp(positions: T212Position[], fxRate: number): num
 }
 
 /**
- * The single authoritative GBP account value used everywhere (risk gate, sizing, reports):
- *   accountValueGbp = cash.free (already GBP) + Σ(position value converted at the live fx).
+ * Reconciliation only alerts when both limits are exceeded: tune these together if broker
+ * rounding or account size warrants it. The absolute floor prevents noise on small accounts.
+ */
+export const ACCOUNT_VALUE_DIVERGENCE_RELATIVE_THRESHOLD = 0.02;
+export const ACCOUNT_VALUE_DIVERGENCE_ABSOLUTE_GBP_FLOOR = 1;
+
+export interface AccountValueAlert {
+  code: "broker-total-unusable" | "computed-total-divergence";
+  message: string;
+}
+
+export interface AccountValueReconciliation {
+  /** Broker total when usable, otherwise the FX-derived fallback. */
+  accountValueGbp: number;
+  /** Kept for reconciliation and observability. Never used as the authoritative total. */
+  computedAccountValueGbp: number;
+  /** Broker total minus free cash when authoritative, preserving the account identity. */
+  deployedValueGbp: number;
+  source: "broker-total" | "computed-fallback";
+  alert: AccountValueAlert | null;
+}
+
+/**
+ * Reconcile the broker account total with the independently FX-valued portfolio.
  *
- * This is the ONE equity formula, chosen deliberately. Trading 212's `cash.total` is not
- * used: it depends on T212's own internal FX conversion, which we cannot verify offline or
- * unit-test, whereas this explicit formula is provably correct and reproduces the real
- * account value from a `cash.free` + `/equity/portfolio` read at the known live rate.
+ * Trading 212's `cash.total` is the authoritative account value. The computed value is retained
+ * solely as a cross-check. If the broker total is absent or unusable, use the computed value but
+ * return a loud alert so this fallback can never silently become normal behaviour.
+ */
+export function reconcileAccountValueGbp(
+  cash: CashBalance,
+  positions: T212Position[],
+  fxRate: number,
+): AccountValueReconciliation {
+  const computedAccountValueGbp = cash.free + deployedValueGbp(positions, fxRate);
+  const brokerTotalUsable = Number.isFinite(cash.total) && cash.total > 0;
+  if (!brokerTotalUsable) {
+    return {
+      accountValueGbp: computedAccountValueGbp,
+      computedAccountValueGbp,
+      deployedValueGbp: computedAccountValueGbp - cash.free,
+      source: "computed-fallback",
+      alert: {
+        code: "broker-total-unusable",
+        message:
+          "Trading 212 account total was missing, non-finite, or not positive; " +
+          `using FX-derived fallback GBP ${computedAccountValueGbp.toFixed(2)}.`,
+      },
+    };
+  }
+
+  const absoluteDifferenceGbp = Math.abs(computedAccountValueGbp - cash.total);
+  const relativeDifference = absoluteDifferenceGbp / cash.total;
+  const diverged =
+    absoluteDifferenceGbp > ACCOUNT_VALUE_DIVERGENCE_ABSOLUTE_GBP_FLOOR &&
+    relativeDifference > ACCOUNT_VALUE_DIVERGENCE_RELATIVE_THRESHOLD;
+  return {
+    accountValueGbp: cash.total,
+    computedAccountValueGbp,
+    deployedValueGbp: cash.total - cash.free,
+    source: "broker-total",
+    alert: diverged
+      ? {
+          code: "computed-total-divergence",
+          message:
+            `Trading 212 total GBP ${cash.total.toFixed(2)} differs from FX-derived total GBP ` +
+            `${computedAccountValueGbp.toFixed(2)} by GBP ${absoluteDifferenceGbp.toFixed(2)} ` +
+            `(${(relativeDifference * 100).toFixed(2)}%).`,
+        }
+      : null,
+  };
+}
+
+/**
+ * The single authoritative GBP account value used everywhere (risk gate, sizing, reports):
+ * Trading 212's `cash.total` wins when usable. The FX-derived total remains a cross-check.
  */
 export function accountValueGbp(
   cash: CashBalance,
   positions: T212Position[],
   fxRate: number,
 ): number {
-  return cash.free + deployedValueGbp(positions, fxRate);
+  return reconcileAccountValueGbp(cash, positions, fxRate).accountValueGbp;
 }
 
 /**
@@ -109,7 +178,7 @@ export function buildRiskSnapshot(args: {
   dayPnl: number;
   newPositionsToday: number;
   consecutiveLossDays: number;
-}): PortfolioSnapshot {
+}): PortfolioSnapshot & { accountValueReconciliation: AccountValueReconciliation } {
   const bad =
     !Number.isFinite(args.cash.free) ||
     !Number.isFinite(args.fxRate) ||
@@ -121,7 +190,12 @@ export function buildRiskSnapshot(args: {
     ticker: p.ticker,
     value: p.quantity * p.currentPrice * args.fxRate,
   }));
-  const equity = accountValueGbp(args.cash, args.positions, args.fxRate);
+  const accountValueReconciliation = reconcileAccountValueGbp(
+    args.cash,
+    args.positions,
+    args.fxRate,
+  );
+  const equity = accountValueReconciliation.accountValueGbp;
   if (!Number.isFinite(equity)) {
     throw new Error("non-finite account data from broker; refusing to gate orders (fail-closed)");
   }
@@ -133,5 +207,6 @@ export function buildRiskSnapshot(args: {
     positions,
     newPositionsToday: args.newPositionsToday,
     consecutiveLossDays: args.consecutiveLossDays,
+    accountValueReconciliation,
   };
 }
