@@ -3,7 +3,7 @@ import { z } from "zod";
 import { t212FromEnv } from "../lib/t212.ts";
 import { finnhubFromEnv } from "../lib/data.ts";
 import { fxForCycle } from "../lib/fx.ts";
-import { accountValueGbp } from "../lib/execution.ts";
+import { reconcileAccountValueGbp } from "../lib/execution.ts";
 import { etDateString } from "../lib/clock.ts";
 import { memoryFromEnv } from "../lib/memory.ts";
 import { tradingEnv } from "../lib/risk-runtime.ts";
@@ -32,7 +32,8 @@ export default defineTool({
       client.getCash(),
       client.getPortfolio(),
     ]);
-    const equity = accountValueGbp(cash, positions, fxRate);
+    const accountValueReconciliation = reconcileAccountValueGbp(cash, positions, fxRate);
+    const equity = accountValueReconciliation.accountValueGbp;
 
     const memory = memoryFromEnv();
     const env = tradingEnv();
@@ -117,8 +118,9 @@ export default defineTool({
       // Authoritative GBP figures. Report these verbatim; never re-sum from stock prices.
       accountValueGbp: equity,
       cashGbp: cash.free,
-      deployedGbp: equity - cash.free,
+      deployedGbp: accountValueReconciliation.deployedValueGbp,
       fx: { rate: fxRate, source: fx.source, fallbackUsed: fx.source === "fallback" },
+      accountValueReconciliation,
       openPositions: managed,
       realized,
       realizedByTag,

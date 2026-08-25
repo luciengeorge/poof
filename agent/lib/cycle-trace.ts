@@ -138,6 +138,28 @@ function finiteOrNull(value: unknown): number | null {
 }
 
 /**
+ * A reconciliation alert emitted by any account-reading tool, or null when the tool output has
+ * no valid alert. This is parsed in the observer only, never fed back into trading decisions.
+ */
+export function accountValueAlertFrom(output: unknown): string | null {
+  if (typeof output !== "object" || output === null) return null;
+  const reconciliation = (output as { accountValueReconciliation?: unknown })
+    .accountValueReconciliation;
+  if (typeof reconciliation !== "object" || reconciliation === null) return null;
+  const alert = (reconciliation as { alert?: unknown }).alert;
+  if (typeof alert !== "object" || alert === null) return null;
+  const { code, message } = alert as { code?: unknown; message?: unknown };
+  if (
+    (code !== "broker-total-unusable" && code !== "computed-total-divergence") ||
+    typeof message !== "string" ||
+    message.length === 0
+  ) {
+    return null;
+  }
+  return `${code}: ${message}`;
+}
+
+/**
  * The cycle's authoritative GBP figures, read from a `review_performance` tool result. Returns
  * null unless a usable `accountValueGbp` is present: that figure is the whole basis of the
  * report check, and guessing one would be worse than not checking.

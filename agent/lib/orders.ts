@@ -1,7 +1,7 @@
 import { validateOrders, DEFAULT_LIMITS, type RiskLimits } from "./risk.ts";
 import {
   buildRiskSnapshot,
-  accountValueGbp,
+  reconcileAccountValueGbp,
   notionalToShares,
   roundQuantity,
   parseQuantityPrecision,
@@ -117,6 +117,7 @@ export interface PlacedResult {
 export interface ExecutionResult {
   placed: PlacedResult[];
   rejected: { proposal: Proposal; reason: string }[];
+  accountValueReconciliation?: import("./execution.ts").AccountValueReconciliation;
 }
 
 export interface ExecuteOpts {
@@ -173,9 +174,10 @@ export async function evaluateAndExecute(
     client.getPendingOrders(),
   ]);
 
-  // Equity (account ccy) via the single authoritative formula: free cash + Σ position value
-  // (instrument ccy → account ccy at the live fx).
-  const currentEquity = accountValueGbp(cash, positions, fxRate);
+  // Trading 212's total is authoritative for equity. The FX-derived value is retained only as a
+  // reconciliation check and returned so the observer can alert without touching the risk gate.
+  const accountValueReconciliation = reconcileAccountValueGbp(cash, positions, fxRate);
+  const currentEquity = accountValueReconciliation.accountValueGbp;
   const riskState = await resolveRiskState(currentEquity);
 
   const snapshot = buildRiskSnapshot({ cash, positions, fxRate, ...riskState });
@@ -189,6 +191,7 @@ export async function evaluateAndExecute(
       proposal: r.order as Proposal,
       reason: r.reason,
     })),
+    accountValueReconciliation,
   };
 
   for (const order of accepted) {

@@ -5,6 +5,7 @@ import {
   buildRiskSnapshot,
   accountValueGbp,
   deployedValueGbp,
+  reconcileAccountValueGbp,
   roundQuantity,
   parseQuantityPrecision,
   t212TickerToFinnhubSymbol,
@@ -59,23 +60,73 @@ test("notionalToShares rejects non-positive price or fx", () => {
   assert.throws(() => notionalToShares(100, 50, 0), /positive/);
 });
 
-// --- accountValueGbp: the real bug's data point ---
+// --- account value reconciliation ---
 
-test("accountValueGbp reproduces the true GBP account value on the live data point", () => {
-  // Real cycle: cash.free = 142.37 GBP, holdings = 140.79 USD, true USD->GBP = 0.7514.
-  // True account value = 248.16 GBP. The bug reported ~282 (LLM hand-summed raw USD onto
-  // GBP cash) and the static-fx path recorded 253.60 (0.79 rate). Prove we get 248.16.
-  const value = accountValueGbp(
-    cash({ free: 142.37 }),
-    [pos({ quantity: 1, currentPrice: 140.79 })],
-    0.7514,
+test("broker total is authoritative even when the FX rate is wrong", () => {
+  const brokerCash = cash({ total: 247.99, free: 150.38 });
+  const positions = [pos({ quantity: 1, currentPrice: 132.9746835443038 })];
+
+  assert.equal(accountValueGbp(brokerCash, positions, 0.73358), 247.99);
+  assert.equal(accountValueGbp(brokerCash, positions, 0.79), 247.99);
+});
+
+test("deployed value is broker total minus free cash", () => {
+  const reconciliation = reconcileAccountValueGbp(
+    cash({ total: 247.99, free: 150.38 }),
+    [pos({ quantity: 1, currentPrice: 132.9746835443038 })],
+    0.73358,
   );
-  assert.ok(
-    Math.abs(value - 248.16) < 0.01,
-    `expected ~248.16, got ${value}`,
+  assert.equal(reconciliation.deployedValueGbp, 247.99 - 150.38);
+});
+
+test("divergence beyond both tolerances produces an alert", () => {
+  const reconciliation = reconcileAccountValueGbp(
+    cash({ total: 100, free: 50 }),
+    [pos({ quantity: 1, currentPrice: 60 })],
+    1,
   );
-  assert.ok(Math.abs(value - 253.6) > 1, "must NOT be the static-0.79 value 253.60");
-  assert.ok(Math.abs(value - 282) > 1, "must NOT be the hand-summed report value ~282");
+  assert.equal(reconciliation.accountValueGbp, 100);
+  assert.equal(reconciliation.alert?.code, "computed-total-divergence");
+  assert.match(reconciliation.alert?.message ?? "", /GBP 10\.00/);
+});
+
+test("divergence inside either threshold does not produce an alert", () => {
+  for (const { total, free, currentPrice } of [
+    { total: 100, free: 50, currentPrice: 51.999 },
+    { total: 10, free: 5, currentPrice: 5.999 },
+  ]) {
+    const reconciliation = reconcileAccountValueGbp(
+      cash({ total, free }),
+      [pos({ quantity: 1, currentPrice })],
+      1,
+    );
+    assert.equal(reconciliation.alert, null);
+  }
+});
+
+test("an unusable broker total falls back and reports the source failure", () => {
+  for (const total of [undefined, Number.NaN, 0, -1]) {
+    const reconciliation = reconcileAccountValueGbp(
+      cash({ total, free: 20 }),
+      [pos({ quantity: 1, currentPrice: 50 })],
+      0.8,
+    );
+    assert.equal(reconciliation.accountValueGbp, 60);
+    assert.equal(reconciliation.source, "computed-fallback");
+    assert.equal(reconciliation.alert?.code, "broker-total-unusable");
+  }
+});
+
+test("historical stale-FX case reports the broker total and raises an alert", () => {
+  const reconciliation = reconcileAccountValueGbp(
+    cash({ total: 247.99, free: 150.38 }),
+    [pos({ quantity: 1, currentPrice: 132.9746835443038 })],
+    0.79,
+  );
+  assert.equal(reconciliation.accountValueGbp, 247.99);
+  assert.equal(reconciliation.computedAccountValueGbp, 255.43);
+  assert.equal(reconciliation.alert?.code, "computed-total-divergence");
+  assert.match(reconciliation.alert?.message ?? "", /GBP 7\.44/);
 });
 
 test("deployedValueGbp converts USD holdings to GBP at the given fx", () => {
@@ -90,7 +141,7 @@ test("deployedValueGbp converts USD holdings to GBP at the given fx", () => {
 
 test("buildRiskSnapshot maps cash + positions into a risk snapshot (account ccy)", () => {
   const snap = buildRiskSnapshot({
-    cash: cash({ free: 20 }),
+    cash: cash({ total: 60, free: 20 }),
     positions: [pos({ ticker: "X", quantity: 1, currentPrice: 50 })],
     fxRate: 0.8, // position value = 1 * 50 * 0.8 = 40
     peakEquity: 0,
@@ -101,6 +152,7 @@ test("buildRiskSnapshot maps cash + positions into a risk snapshot (account ccy)
   assert.equal(snap.cash, 20);
   assert.equal(snap.positions[0].value, 40);
   assert.equal(snap.equity, 60); // 20 free + 40 deployed
+  assert.equal(snap.accountValueReconciliation.source, "broker-total");
   assert.equal(snap.peakEquity, 60); // max(0, 60)
   assert.equal(snap.dayPnl, -1);
   assert.equal(snap.newPositionsToday, 1);
@@ -140,7 +192,7 @@ test("buildRiskSnapshot throws on non-finite position currentPrice (fail-closed)
 
 test("buildRiskSnapshot returns the same values as today for a normal finite snapshot", () => {
   const snap = buildRiskSnapshot({
-    cash: cash({ free: 20 }),
+    cash: cash({ total: 60, free: 20 }),
     positions: [pos({ ticker: "X", quantity: 1, currentPrice: 50 })],
     fxRate: 0.8,
     peakEquity: 0,

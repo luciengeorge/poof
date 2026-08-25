@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   actionResultCallId,
   actionResultName,
+  accountValueAlertFrom,
   exitsFrom,
   externalGbpValuesFrom,
   externalHoldingsFrom,
@@ -135,6 +136,31 @@ test("the offline and online paths agree on the same cycle", () => {
 });
 
 // --- ground truth from review_performance ---
+
+test("extracts a broker-total reconciliation alert for the completed-cycle observer", () => {
+  assert.equal(
+    accountValueAlertFrom({
+      accountValueReconciliation: {
+        alert: {
+          code: "computed-total-divergence",
+          message: "Trading 212 total differs from the FX-derived total.",
+        },
+      },
+    }),
+    "computed-total-divergence: Trading 212 total differs from the FX-derived total.",
+  );
+});
+
+test("does not turn malformed reconciliation output into an alert", () => {
+  for (const output of [
+    {},
+    { accountValueReconciliation: { alert: null } },
+    { accountValueReconciliation: { alert: { code: "unknown", message: "no" } } },
+    { accountValueReconciliation: { alert: { code: "broker-total-unusable", message: "" } } },
+  ]) {
+    assert.equal(accountValueAlertFrom(output), null);
+  }
+});
 
 test("reads the authoritative GBP figures from a review_performance result", () => {
   assert.deepEqual(
