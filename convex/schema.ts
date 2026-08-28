@@ -20,8 +20,16 @@ export default defineSchema({
     env: v.string(),
     equity: v.number(),
     freeCash: v.number(),
-    fxRate: v.number(),
-    fxSource: v.union(v.literal("env"), v.literal("live"), v.literal("fallback")),
+    // OPTIONAL because `cycles` already holds rows written before these fields existed, and
+    // Convex validates the schema against EVERY existing document at deploy time. Adding them as
+    // required failed the production deploy outright:
+    //   "Document ... in table cycles does not match the schema: missing the required field fxRate".
+    // Note this is NOT caught by `tsc -p convex/tsconfig.json`, which is a type-level check with no
+    // knowledge of stored data. Any new field on a populated table must start optional.
+    fxRate: v.optional(v.number()),
+    fxSource: v.optional(
+      v.union(v.literal("env"), v.literal("live"), v.literal("fallback")),
+    ),
     decision: v.string(), // "trade" | "no-trade"
     rationale: v.string(),
     candidates: v.optional(v.any()),
