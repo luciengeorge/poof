@@ -32,7 +32,7 @@ export default defineTool({
       client.getCash(),
       client.getPortfolio(),
     ]);
-    const accountValueReconciliation = reconcileAccountValueGbp(cash, positions, fxRate);
+    const accountValueReconciliation = reconcileAccountValueGbp(cash, positions, fx);
     const equity = accountValueReconciliation.accountValueGbp;
 
     const memory = memoryFromEnv();

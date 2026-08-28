@@ -10,6 +10,8 @@ import { validateOrders, DEFAULT_LIMITS } from "./risk.ts";
 import { evaluateAndExecute, type OrderExecClient, type Proposal } from "./orders.ts";
 import type { CashBalance, T212Order, T212Position } from "./t212.ts";
 
+const FX = { rate: 1, source: "live" } as const;
+
 // --- OBSERVER REGRESSION TESTS ---
 //
 // INTENT (do not "fix" this by wiring them together): the online evals exist to WATCH the
@@ -100,7 +102,7 @@ test("REGRESSION: a failing invariant does not change the risk gate's verdict", 
   const snapshot = buildRiskSnapshot({
     cash: cash({ free: 248.16 }),
     positions: [],
-    fxRate: 1,
+    fx: FX,
     peakEquity: 248.16,
     dayPnl: 0,
     newPositionsToday: 0,
@@ -160,7 +162,7 @@ test("REGRESSION: no failing observer blocks or resizes an order", async () => {
     ];
     const result = await evaluateAndExecute(proposals, {
       client,
-      fxRate: 1,
+      fx: FX,
       dryRun: false,
       resolveRiskState: async () => ({
         peakEquity: 0,
@@ -335,7 +337,8 @@ test("REGRESSION: record_cycle reports the SAME figures it wrote, and still swal
   assert.match(source, /const accountValueReconciliation = reconcileAccountValueGbp\(/);
   assert.match(source, /const equity = accountValueReconciliation\.accountValueGbp/);
   assert.match(source, /const freeCash = cash\.free/);
-  assert.match(source, /recordCycle\(\{[\s\S]*?\bequity,[\s\S]*?\bfreeCash,/);
+  assert.match(source, /cycleRecordWithFx\(\{[\s\S]*?\bequity,[\s\S]*?\bfreeCash,/);
+  assert.match(source, /cycleRecordWithFx\([\s\S]*?\bfx,/);
   assert.match(source, /accountValueGbp: equity/);
   assert.match(source, /cashGbp: freeCash/);
   assert.match(source, /accountValueReconciliation,/);

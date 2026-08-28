@@ -3,6 +3,7 @@ import { z } from "zod";
 import { t212FromEnv } from "../lib/t212.ts";
 import { fxForCycle } from "../lib/fx.ts";
 import { reconcileAccountValueGbp } from "../lib/execution.ts";
+import { cycleRecordWithFx } from "../lib/cycle-record.ts";
 import { memoryFromEnv } from "../lib/memory.ts";
 import { tradingEnv } from "../lib/risk-runtime.ts";
 
@@ -35,10 +36,10 @@ export default defineTool({
         client.getCash(),
         client.getPortfolio(),
       ]);
-      const accountValueReconciliation = reconcileAccountValueGbp(cash, positions, fx.rate);
+      const accountValueReconciliation = reconcileAccountValueGbp(cash, positions, fx);
       const equity = accountValueReconciliation.accountValueGbp;
       const freeCash = cash.free;
-      await memoryFromEnv().recordCycle({
+      await memoryFromEnv().recordCycle(cycleRecordWithFx({
         env: tradingEnv(),
         equity,
         freeCash,
@@ -46,7 +47,8 @@ export default defineTool({
         rationale,
         candidates,
         watchlist,
-      });
+        fx,
+      }));
       // Surface reconciliation status so the observer can alert if the broker total was unusable
       // or the FX-derived cross-check diverged. The recorded equity remains broker-authoritative.
       //

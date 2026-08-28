@@ -14,6 +14,9 @@ import { validateOrders, DEFAULT_LIMITS } from "./risk.ts";
 import { evaluateAndExecute, type OrderExecClient, type Proposal } from "./orders.ts";
 import type { CashBalance, T212Position, T212Order } from "./t212.ts";
 
+const LIVE_FX = { rate: 0.75094, source: "live" } as const;
+const UNITY_FX = { rate: 1, source: "live" } as const;
+
 // The real external holding this feature exists for: SHOP held in a separate (non-T212)
 // brokerage account. Numbers are the live ones at the time the feature was built, so a
 // regression in the maths shows up as a wrong figure a human would recognize.
@@ -175,7 +178,7 @@ test("REGRESSION: external holdings do NOT affect accountValueGbp / the risk sna
   const brokerInputs = {
     cash: cash({ free: 148 }),
     positions: [pos({ ticker: "NKE_US_EQ", quantity: 2, currentPrice: 66.6 })],
-    fxRate: 0.75094,
+    fx: LIVE_FX,
     peakEquity: 0,
     dayPnl: 0,
     newPositionsToday: 0,
@@ -331,7 +334,7 @@ test("blocked external BUY is skipped with the reason while the rest of the batc
 
   const result = await evaluateAndExecute(allowed, {
     client,
-    fxRate: 1,
+    fx: UNITY_FX,
     dryRun: false,
     resolveRiskState: async () => ({
       peakEquity: 0,
@@ -374,7 +377,7 @@ test("REGRESSION: the risk gate sizes off the T212 account, not the external hol
   const snap = buildRiskSnapshot({
     cash: cash({ free: 248 }),
     positions: [],
-    fxRate: 0.75094,
+    fx: LIVE_FX,
     peakEquity: 248,
     dayPnl: 0,
     newPositionsToday: 0,

@@ -146,6 +146,8 @@ export const recordCycle = mutation({
     env: v.string(),
     equity: v.number(),
     freeCash: v.number(),
+    fxRate: v.number(),
+    fxSource: v.union(v.literal("env"), v.literal("live"), v.literal("fallback")),
     decision: v.string(),
     rationale: v.string(),
     candidates: v.optional(v.any()),
