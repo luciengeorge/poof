@@ -1,17 +1,17 @@
 import { ConvexHttpClient } from "convex/browser";
 import { anyApi } from "convex/server";
 
+// Pure day-selection logic lives in agent/lib so the test suite covers it. It is the part
+// that was wrong, so it is the part that needs pinning.
+import {
+  heartbeatUtcDay,
+  lastExpectedCycleDay,
+} from "../agent/lib/cron-watchdog.ts";
+
 // Dead-man's-switch for the "cycle" cron. Vercel Hobby purges runtime logs in ~1h, so a
 // cron that never fires leaves no trace. This runs on a schedule outside Vercel (GitHub
 // Actions) and alerts to Slack if today's heartbeat never showed up in Convex.
 
-function todayUtc() {
-  return new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-}
-
-function firedAtUtcDate(firedAt) {
-  return new Date(firedAt).toISOString().slice(0, 10);
-}
 
 async function postSlackAlert(webhookUrl, text) {
   try {
@@ -45,25 +45,32 @@ async function main() {
       schedule: "cycle",
     });
 
-    const today = todayUtc();
-    const firedToday = run?.firedAt != null && firedAtUtcDate(run.firedAt) === today;
+    // The day whose window has CLOSED, not "today". A delayed run must not ask about a cycle
+    // that is not due yet.
+    const expectedDay = lastExpectedCycleDay(new Date());
+    if (expectedDay === null) {
+      console.log("[cron-watchdog] no weekday window has closed yet; nothing to check");
+      return;
+    }
 
-    if (!firedToday) {
+    const fired = run?.firedAt != null && heartbeatUtcDay(run.firedAt) === expectedDay;
+
+    if (!fired) {
       const lastSeen = run?.firedAt
         ? new Date(run.firedAt).toISOString()
         : "never";
       await postSlackAlert(
         slackWebhookUrl,
-        `:rotating_light: poof: today's trading cron (${today} UTC) has NOT fired. Last seen heartbeat: ${lastSeen}.`,
+        `:rotating_light: poof: the trading cron for ${expectedDay} UTC has NOT fired. Last seen heartbeat: ${lastSeen}. (checked at ${new Date().toISOString()})`,
       );
       console.error(
-        `[cron-watchdog] no cycle heartbeat for ${today} UTC (last seen: ${lastSeen})`,
+        `[cron-watchdog] no cycle heartbeat for ${expectedDay} UTC (last seen: ${lastSeen})`,
       );
       process.exit(1);
       return;
     }
 
-    console.log(`[cron-watchdog] OK — cycle heartbeat found for ${today} UTC`);
+    console.log(`[cron-watchdog] OK: cycle heartbeat found for ${expectedDay} UTC`);
   } catch (err) {
     console.error("[cron-watchdog] check failed:", err);
     process.exit(1);
