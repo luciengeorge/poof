@@ -88,6 +88,7 @@ export default defineTool({
     const finnhub = finnhubFromEnv();
     const memory = memoryFromEnv();
     const env = tradingEnv();
+    const fx = await fxForCycle();
 
     // PRE-GATE GUARD: never BUY a name the user holds in the external advisory account.
     // The instructions say so too, but prompts are not a control, so it is enforced here in
@@ -121,7 +122,7 @@ export default defineTool({
 
     const result = await evaluateAndExecute(allowed, {
       client,
-      fxRate: (await fxForCycle()).rate,
+      fx,
       dryRun: isDryRun(),
       resolveRiskState,
       resolvePrice: async (ticker) => {

@@ -19,7 +19,7 @@ export default defineTool({
     const snap = buildRiskSnapshot({
       cash,
       positions,
-      fxRate: fx.rate,
+      fx,
       ...loadRiskState(),
     });
     return {

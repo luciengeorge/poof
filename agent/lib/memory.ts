@@ -2,6 +2,7 @@ import { ConvexHttpClient } from "convex/browser";
 import type { Edit, MemoryRow } from "../../convex/memoryPolicy.ts";
 import { anyApi, type FunctionReference } from "convex/server";
 import { timeoutFetch } from "./fetch-timeout.ts";
+import type { FxSource } from "./fx.ts";
 
 /** Minimal Convex client surface the memory layer needs (injectable for tests). */
 export interface ConvexLike {
@@ -49,6 +50,8 @@ export interface CycleRecord {
   env: Env;
   equity: number;
   freeCash: number;
+  fxRate: number;
+  fxSource: FxSource;
   decision: string;
   rationale: string;
   candidates?: unknown;

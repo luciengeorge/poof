@@ -23,7 +23,8 @@ export default defineTool({
   inputSchema: z.object({}),
   async execute() {
     const client = t212FromEnv();
-    const fxRate = (await fxForCycle()).rate;
+    const fx = await fxForCycle();
+    const fxRate = fx.rate;
     const dryRun = isDryRun();
     const positions = await client.getPortfolio();
 
@@ -79,7 +80,7 @@ export default defineTool({
       proposals.length > 0
         ? await evaluateAndExecute(proposals, {
             client,
-            fxRate,
+            fx,
             dryRun,
             resolveRiskState,
             limits: resolveLimits(),

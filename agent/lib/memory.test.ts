@@ -52,6 +52,8 @@ test("recordCycle and saveRiskState are mutations; getRiskState/recallRecent are
     env: "demo",
     equity: 50,
     freeCash: 50,
+    fxRate: 0.75094,
+    fxSource: "live",
     decision: "no-trade",
     rationale: "stale catalysts",
   });
@@ -91,6 +93,8 @@ test("every Memory method includes the token in its args", async () => {
     env: "demo",
     equity: 50,
     freeCash: 50,
+    fxRate: 0.75094,
+    fxSource: "live",
     decision: "no-trade",
     rationale: "stale catalysts",
   });

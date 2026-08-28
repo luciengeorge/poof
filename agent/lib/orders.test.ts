@@ -48,6 +48,7 @@ const noState = {
   newPositionsToday: 0,
   consecutiveLossDays: 0,
 };
+const FX = { rate: 1, source: "live" } as const;
 
 function buy(notional: number, price = 100): Proposal {
   return { ticker: "AAPL_US_EQ", side: "BUY", notional, price, thesis: "t" };
@@ -57,7 +58,7 @@ test("dry-run: accepted proposal is reported but not sent to T212", async () => 
   const { client, placed } = fakeClient();
   const res = await evaluateAndExecute([buy(500)], {
     client,
-    fxRate: 1,
+    fx: FX,
     dryRun: true,
     resolveRiskState: async () => noState,
     resolvePrice: async () => 100,
@@ -72,7 +73,7 @@ test("live: accepted proposal is sent with signed share quantity", async () => {
   const { client, placed } = fakeClient();
   const res = await evaluateAndExecute([buy(500)], {
     client,
-    fxRate: 1,
+    fx: FX,
     dryRun: false,
     resolveRiskState: async () => noState,
     resolvePrice: async () => 100,
@@ -99,7 +100,7 @@ test("live SELL sends a negative quantity", async () => {
   });
   const res = await evaluateAndExecute(
     [{ ticker: "AAPL_US_EQ", side: "SELL", notional: 300, price: 100, thesis: "t" }],
-    { client, fxRate: 1, dryRun: false, resolveRiskState: async () => noState },
+    { client, fx: FX, dryRun: false, resolveRiskState: async () => noState },
   );
   assert.equal(res.placed.length, 1);
   assert.equal(placed[0].quantity, -3);
@@ -109,7 +110,7 @@ test("risk gate rejects an oversize trade (not placed)", async () => {
   const { client, placed } = fakeClient(); // equity 10000 => max trade 3000 (30%)
   const res = await evaluateAndExecute([buy(3500)], {
     client,
-    fxRate: 1,
+    fx: FX,
     dryRun: false,
     resolveRiskState: async () => noState,
   });
@@ -124,7 +125,7 @@ test("precision: retries at the broker's allowed decimals and places", async () 
   // £1000 / $7 = 142.857142… shares (6dp) → first attempt rejected → retry at 2dp.
   const res = await evaluateAndExecute([buy(1000, 7)], {
     client,
-    fxRate: 1,
+    fx: FX,
     dryRun: false,
     resolveRiskState: async () => noState,
     resolvePrice: async () => 7,
@@ -140,7 +141,7 @@ test("precision: skips (not blind-fires) when qty rounds to 0 at whole-shares-on
   const { client, placed } = fakeClient({ precisionCap: 0 });
   const res = await evaluateAndExecute([buy(300, 1000)], {
     client,
-    fxRate: 1,
+    fx: FX,
     dryRun: false,
     resolveRiskState: async () => noState,
     resolvePrice: async () => 1000,
@@ -156,7 +157,7 @@ test("reconciliation: skips a ticker that already has a pending order", async ()
   });
   const res = await evaluateAndExecute([buy(500)], {
     client,
-    fxRate: 1,
+    fx: FX,
     dryRun: false,
     resolveRiskState: async () => noState,
   });
@@ -169,7 +170,7 @@ test("halt: a tripped daily-loss state rejects everything", async () => {
   const { client, placed } = fakeClient();
   const res = await evaluateAndExecute([buy(500)], {
     client,
-    fxRate: 1,
+    fx: FX,
     dryRun: false,
     resolveRiskState: async () => ({ ...noState, dayPnl: -500 }), // -5% of 10000 > 4% cap
     resolvePrice: async () => 100,
@@ -184,7 +185,7 @@ test("BUY is sized from the server price, not the model's price", async () => {
   // Model says $100, server says $102 (within 5% tolerance) -> size from $102.
   const res = await evaluateAndExecute([buy(510, 100)], {
     client,
-    fxRate: 1,
+    fx: FX,
     dryRun: false,
     resolveRiskState: async () => noState,
     resolvePrice: async () => 102,
@@ -200,7 +201,7 @@ test("BUY rejected when model price deviates >5% from server price", async () =>
   // Model says $80, server says $100 -> 20% deviation, well past the 5% tolerance.
   const res = await evaluateAndExecute([buy(500, 80)], {
     client,
-    fxRate: 1,
+    fx: FX,
     dryRun: false,
     resolveRiskState: async () => noState,
     resolvePrice: async () => 100,
@@ -216,7 +217,7 @@ test("order intent: first real placement records an intent marker, keyed by ET-d
   const recorded: string[] = [];
   const res = await evaluateAndExecute([buy(500)], {
     client,
-    fxRate: 1,
+    fx: FX,
     dryRun: false,
     resolveRiskState: async () => noState,
     resolvePrice: async () => 100,
@@ -235,7 +236,7 @@ test("order intent: a second run with the same intent key already recorded skips
   const recorded: string[] = [];
   const res = await evaluateAndExecute([buy(500)], {
     client,
-    fxRate: 1,
+    fx: FX,
     dryRun: false,
     resolveRiskState: async () => noState,
     resolvePrice: async () => 100,
@@ -255,7 +256,7 @@ test("order intent: dry-run never records an intent marker", async () => {
   const recorded: string[] = [];
   const res = await evaluateAndExecute([buy(500)], {
     client,
-    fxRate: 1,
+    fx: FX,
     dryRun: true,
     resolveRiskState: async () => noState,
     resolvePrice: async () => 100,
@@ -273,7 +274,7 @@ test("BUY rejected fail-closed when resolvePrice throws", async () => {
   const { client, placed } = fakeClient();
   const res = await evaluateAndExecute([buy(500)], {
     client,
-    fxRate: 1,
+    fx: FX,
     dryRun: false,
     resolveRiskState: async () => noState,
     resolvePrice: async () => {
@@ -299,7 +300,7 @@ test("T212 per-order rejection: skipped with the rejection reason, not thrown", 
   };
   const res = await evaluateAndExecute([buy(500)], {
     client: rejecting,
-    fxRate: 1,
+    fx: FX,
     dryRun: false,
     resolveRiskState: async () => noState,
     resolvePrice: async () => 100,
@@ -328,7 +329,7 @@ test("T212 per-order rejection: one bad order doesn't abort the rest of the batc
     [buy(500), { ticker: "MSFT_US_EQ", side: "BUY", notional: 500, price: 100, thesis: "t" }],
     {
       client: mixed,
-      fxRate: 1,
+      fx: FX,
       dryRun: false,
       resolveRiskState: async () => noState,
       resolvePrice: async () => 100,
@@ -353,7 +354,7 @@ test("non-T212 / 5xx errors still throw: infra failures aren't swallowed as skip
   await assert.rejects(
     evaluateAndExecute([buy(500)], {
       client: failing,
-      fxRate: 1,
+      fx: FX,
       dryRun: false,
       resolveRiskState: async () => noState,
       resolvePrice: async () => 100,
@@ -377,7 +378,7 @@ test("the top-of-cycle risk gate reads force-fresh cash and positions", async ()
   };
   await evaluateAndExecute([buy(500)], {
     client,
-    fxRate: 1,
+    fx: FX,
     dryRun: true,
     resolveRiskState: async () => noState,
     resolvePrice: async () => 100,

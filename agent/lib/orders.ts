@@ -10,6 +10,7 @@ import {
 import { T212Error, type CashBalance, type T212Position, type T212Order } from "./t212.ts";
 import type { RiskState } from "./state.ts";
 import { etDateString } from "./clock.ts";
+import type { FxResolution } from "./fx.ts";
 
 /**
  * If `err` is a T212 rejection of THIS specific order (min-position, insufficient funds,
@@ -122,7 +123,7 @@ export interface ExecutionResult {
 
 export interface ExecuteOpts {
   client: OrderExecClient;
-  fxRate: number;
+  fx: FxResolution;
   dryRun: boolean;
   /**
    * Resolve the cross-cycle risk state given the freshly-computed current equity.
@@ -161,8 +162,9 @@ export async function evaluateAndExecute(
   proposals: Proposal[],
   opts: ExecuteOpts,
 ): Promise<ExecutionResult> {
-  const { client, fxRate, dryRun, resolveRiskState, resolvePrice, hasOrderIntent, recordOrderIntent } =
+  const { client, fx, dryRun, resolveRiskState, resolvePrice, hasOrderIntent, recordOrderIntent } =
     opts;
+  const fxRate = fx.rate;
   const limits = opts.limits ?? DEFAULT_LIMITS;
 
   // Force-fresh: this snapshot feeds the risk gate, and manage_positions may have already
@@ -176,11 +178,11 @@ export async function evaluateAndExecute(
 
   // Trading 212's total is authoritative for equity. The FX-derived value is retained only as a
   // reconciliation check and returned so the observer can alert without touching the risk gate.
-  const accountValueReconciliation = reconcileAccountValueGbp(cash, positions, fxRate);
+  const accountValueReconciliation = reconcileAccountValueGbp(cash, positions, fx);
   const currentEquity = accountValueReconciliation.accountValueGbp;
   const riskState = await resolveRiskState(currentEquity);
 
-  const snapshot = buildRiskSnapshot({ cash, positions, fxRate, ...riskState });
+  const snapshot = buildRiskSnapshot({ cash, positions, fx, ...riskState });
   // Pass full proposals through; validateOrders only reads ticker/side/notional/price,
   // but keeping the original objects means thesis/redTeamVerdict ride along to the result.
   const { accepted, rejected } = validateOrders(proposals, snapshot, limits);

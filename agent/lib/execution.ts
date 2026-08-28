@@ -1,5 +1,6 @@
 import type { PortfolioSnapshot, Position } from "./risk.ts";
 import type { CashBalance, T212Position } from "./t212.ts";
+import type { FxResolution } from "./fx.ts";
 
 /**
  * Convert a target notional in the ACCOUNT currency (e.g. GBP) into a signed share
@@ -108,9 +109,10 @@ export interface AccountValueReconciliation {
 export function reconcileAccountValueGbp(
   cash: CashBalance,
   positions: T212Position[],
-  fxRate: number,
+  fx: FxResolution,
 ): AccountValueReconciliation {
-  const computedAccountValueGbp = cash.free + deployedValueGbp(positions, fxRate);
+  const fxDerivedHoldingsGbp = deployedValueGbp(positions, fx.rate);
+  const computedAccountValueGbp = cash.free + fxDerivedHoldingsGbp;
   const brokerTotalUsable = Number.isFinite(cash.total) && cash.total > 0;
   if (!brokerTotalUsable) {
     return {
@@ -121,7 +123,7 @@ export function reconcileAccountValueGbp(
       alert: {
         code: "broker-total-unusable",
         message:
-          "Trading 212 account total was missing, non-finite, or not positive; " +
+          `Trading 212 account total was unusable (received ${formatBrokerTotal(cash.total)}); ` +
           `using FX-derived fallback GBP ${computedAccountValueGbp.toFixed(2)}.`,
       },
     };
@@ -143,10 +145,18 @@ export function reconcileAccountValueGbp(
           message:
             `Trading 212 total GBP ${cash.total.toFixed(2)} differs from FX-derived total GBP ` +
             `${computedAccountValueGbp.toFixed(2)} by GBP ${absoluteDifferenceGbp.toFixed(2)} ` +
-            `(${(relativeDifference * 100).toFixed(2)}%).`,
+            `(${(relativeDifference * 100).toFixed(2)}%). FX USD->GBP ${fx.rate.toFixed(6)} ` +
+            `(source: ${fx.source}); free cash GBP ${cash.free.toFixed(2)}; ` +
+            `broker-derived holdings GBP ${(cash.total - cash.free).toFixed(2)}; ` +
+            `FX-derived holdings GBP ${fxDerivedHoldingsGbp.toFixed(2)}; ` +
+            `open positions ${positions.length}.`,
         }
       : null,
   };
+}
+
+function formatBrokerTotal(total: number): string {
+  return Number.isFinite(total) ? `GBP ${total.toFixed(2)}` : String(total);
 }
 
 /**
@@ -156,9 +166,9 @@ export function reconcileAccountValueGbp(
 export function accountValueGbp(
   cash: CashBalance,
   positions: T212Position[],
-  fxRate: number,
+  fx: FxResolution,
 ): number {
-  return reconcileAccountValueGbp(cash, positions, fxRate).accountValueGbp;
+  return reconcileAccountValueGbp(cash, positions, fx).accountValueGbp;
 }
 
 /**
@@ -173,7 +183,7 @@ export function accountValueGbp(
 export function buildRiskSnapshot(args: {
   cash: CashBalance;
   positions: T212Position[];
-  fxRate: number;
+  fx: FxResolution;
   peakEquity: number;
   dayPnl: number;
   newPositionsToday: number;
@@ -181,20 +191,16 @@ export function buildRiskSnapshot(args: {
 }): PortfolioSnapshot & { accountValueReconciliation: AccountValueReconciliation } {
   const bad =
     !Number.isFinite(args.cash.free) ||
-    !Number.isFinite(args.fxRate) ||
+    !Number.isFinite(args.fx.rate) ||
     args.positions.some((p) => !Number.isFinite(p.quantity) || !Number.isFinite(p.currentPrice));
   if (bad) {
     throw new Error("non-finite account data from broker; refusing to gate orders (fail-closed)");
   }
   const positions: Position[] = args.positions.map((p) => ({
     ticker: p.ticker,
-    value: p.quantity * p.currentPrice * args.fxRate,
+    value: p.quantity * p.currentPrice * args.fx.rate,
   }));
-  const accountValueReconciliation = reconcileAccountValueGbp(
-    args.cash,
-    args.positions,
-    args.fxRate,
-  );
+  const accountValueReconciliation = reconcileAccountValueGbp(args.cash, args.positions, args.fx);
   const equity = accountValueReconciliation.accountValueGbp;
   if (!Number.isFinite(equity)) {
     throw new Error("non-finite account data from broker; refusing to gate orders (fail-closed)");
