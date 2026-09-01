@@ -79,7 +79,8 @@ export interface ReportScore {
  */
 export type JudgeVerdict =
   | { status: "judged"; score: ReportScore }
-  | { status: "unjudged"; warning: string };
+  | { status: "unjudged"; warning: string }
+  | { status: "unjudgeable"; warning: string };
 
 export interface JudgeThresholds {
   /** Alert when `overall` is strictly below this. */
@@ -231,6 +232,16 @@ export interface JudgeGroundTruth {
   /** What this ground truth can and cannot adjudicate, in plain sentences for the judge. */
   coverage: string[];
 }
+
+/**
+ * Result of loading the facts for one judge pass.
+ *
+ * `unjudgeable` is deliberately separate from a low score. A missing trace means the judge has
+ * no evidence at all, so assigning grounding=3 would falsely describe the report as deficient.
+ */
+export type JudgeGroundTruthResult =
+  | { status: "available"; groundTruth: JudgeGroundTruth }
+  | { status: "unjudgeable"; reason: string };
 
 function categoryLines(
   noun: string,
@@ -427,6 +438,23 @@ export function judgeGroundTruth(trace: JudgeTrace): JudgeGroundTruth {
       : {}),
     coverage,
   };
+}
+
+/** Turn a stored trace lookup into the judge tool's explicit availability result. */
+export function judgeGroundTruthResult(trace: JudgeTrace | null): JudgeGroundTruthResult {
+  if (trace === null) {
+    return {
+      status: "unjudgeable",
+      reason:
+        "ground truth is unavailable for this cycle id, so this report is UNJUDGEABLE and must not receive a score",
+    };
+  }
+  return { status: "available", groundTruth: judgeGroundTruth(trace) };
+}
+
+/** Build the non-score verdict used when the judge tool could not load a trace. */
+export function unjudgeableVerdict(reason: string): JudgeVerdict {
+  return { status: "unjudgeable", warning: reason };
 }
 
 /** A short, bounded description of an unusable value, for the warning text. */
@@ -631,7 +659,7 @@ export function alertReasonsForStoredVerdict(
 
 /** One-line summary for a log line or a Slack alert. */
 export function summarizeJudgeVerdict(verdict: JudgeVerdict): string {
-  if (verdict.status !== "judged") return `unjudged (${verdict.warning})`;
+  if (verdict.status !== "judged") return `${verdict.status} (${verdict.warning})`;
   const { score } = verdict;
   return JUDGE_DIMENSIONS.map((dimension) => `${dimension}=${score[dimension]}`).join(" ");
 }

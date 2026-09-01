@@ -1,17 +1,16 @@
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 import { memoryFromEnv } from "../lib/memory.ts";
-import { judgeGroundTruth } from "../lib/report-judge.ts";
 import { tradingEnv } from "../lib/risk-runtime.ts";
 
 /**
  * ONLINE EVALS, step 1 of the weekly report-quality judge pass.
  *
  * Hands the caller the cycles that still need grading, each with the report text it published
- * and the ground truth the code computed for that cycle. Both were stored on the trace row by
- * agent/hooks/trace-cycle.ts at the time, so nothing here re-reads the broker: observing cannot
- * perturb what is observed, and a week-old cycle can still be graded against what was actually
- * true then.
+ * and the immutable trace id the judge uses to load its own ground truth. Both were stored on the
+ * trace row by agent/hooks/trace-cycle.ts at the time, so nothing here re-reads the broker:
+ * observing cannot perturb what is observed, and a week-old cycle can still be graded against
+ * what was actually true then.
  *
  * IDEMPOTENCE: a row that already carries `judgedAt` is skipped, so a re-run of the weekly
  * schedule does not spend another model call on a cycle that has already been judged.
@@ -27,10 +26,10 @@ const DEFAULT_LIMIT = 10;
 export default defineTool({
   description:
     "ONLINE EVALS: list completed production trading cycles whose report has NOT yet been " +
-    "graded for quality, each with the report text and the ground-truth tool outputs it was " +
-    "written from. Used by the weekly judge pass: pass each entry to the report_judge subagent, " +
-    "then record the verdict with save_report_score. Already-judged cycles are skipped, so this " +
-    "is safe to call twice. Read-only, observe-only: nothing here affects trading.",
+    "graded for quality, each with the report text and immutable cycle id. Used by the weekly " +
+    "judge pass: pass each entry to report_judge, which loads its own ground truth by id, then " +
+    "record the verdict with save_report_score. Already-judged cycles are skipped, so this is " +
+    "safe to call twice. Read-only, observe-only: nothing here affects trading.",
   inputSchema: z.object({
     limit: z
       .number()
@@ -66,17 +65,11 @@ export default defineTool({
       .sort((a, b) => (a.completedAt ?? 0) - (b.completedAt ?? 0))
       .slice(0, limit ?? DEFAULT_LIMIT)
       .map((trace) => ({
+        cycleId: trace._id,
         sessionId: trace.sessionId,
         turnId: trace.turnId,
         completedAt: trace.completedAt,
         reportText: trace.reportText,
-        // The ONLY source of truth the judge may use: what the code observed for that cycle, never
-        // anything re-derived now. Assembled by a pure, tested function (agent/lib/report-judge.ts)
-        // rather than inline here, because WHICH SNAPSHOT each figure is decides whether a correct
-        // report looks like a lie: cash is preferred POST-TRADE, and the `coverage` notes say what
-        // the ground truth can and cannot adjudicate. The bare `externalGbpValues` allow-list is
-        // deliberately NOT included; the judge gets the labelled holdings instead.
-        groundTruth: judgeGroundTruth(trace),
       }));
 
     return { env, cycles, notJudgeable, scanned: traces.length };

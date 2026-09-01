@@ -191,6 +191,8 @@ export interface SaveReportScoreResult {
 
 export interface StoredReportScore {
   status: string; // "judged" | "unjudged"
+  /** True only when the judge could not load ground truth for the requested cycle id. */
+  unjudgeable?: boolean;
   grounding?: number;
   consistency?: number;
   calibration?: number;
@@ -430,6 +432,16 @@ export class Memory {
   }
   async getCycleTrace(key: CycleTraceKey): Promise<StoredCycleTrace | null> {
     return ((await this.query("getCycleTrace", { ...key })) ??
+      null) as StoredCycleTrace | null;
+  }
+  /**
+   * Load one stored cycle trace by its immutable Convex document id.
+   *
+   * The report judge uses this rather than receiving a serialized truth object through model
+   * text. It is still secret-gated by the same Memory client as every other trace read.
+   */
+  async getCycleTraceById(cycleId: string): Promise<StoredCycleTrace | null> {
+    return ((await this.query("getCycleTraceById", { cycleId })) ??
       null) as StoredCycleTrace | null;
   }
   async recentCycleTraces(env: Env, limit?: number): Promise<StoredCycleTrace[]> {

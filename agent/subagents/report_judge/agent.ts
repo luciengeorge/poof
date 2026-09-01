@@ -2,8 +2,8 @@ import { defineAgent } from "eve";
 
 export default defineAgent({
   description:
-    "LLM-as-judge for report QUALITY. Given ONE already-published cycle report plus the tool " +
-    "outputs it was written from, grades it 1-5 on grounding, consistency, calibration and " +
+    "LLM-as-judge for report QUALITY. Given ONE already-published cycle report plus its cycle " +
+    "id, loads the stored tool outputs itself and grades it 1-5 on grounding, consistency, calibration and " +
     "completeness and returns structured scores only. It GRADES, it never rewrites: it cannot " +
     "produce a corrected report, and it cannot change, delay, or block anything. Called from " +
     "the weekly scorecard schedule over stored cycle traces, never during a live trading cycle.",

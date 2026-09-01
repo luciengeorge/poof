@@ -8,6 +8,7 @@ import {
   judgeThresholdsFromEnv,
   parseJudgeVerdict,
   summarizeJudgeVerdict,
+  unjudgeableVerdict,
 } from "../lib/report-judge.ts";
 import { tradingEnv } from "../lib/risk-runtime.ts";
 
@@ -35,6 +36,9 @@ export default defineTool({
     "retry a malformed one: an unusable verdict is deliberately recorded as 'unjudged' with a " +
     "warning, which is the correct outcome. To record a cycle that cannot be graded at all " +
     "(for example one with no stored report text), omit `verdict` and give `unjudgedReason`. " +
+    "When report_judge could not load ground truth for its cycle id, omit `verdict` and give " +
+    "`unjudgeableReason` instead. That is recorded and reported as UNJUDGEABLE, never as a low " +
+    "score. " +
     "A cycle is judged at most once; calling twice is a no-op. Observe-only: no effect on trading.",
   inputSchema: z.object({
     sessionId: z.string().min(1),
@@ -50,12 +54,21 @@ export default defineTool({
       .string()
       .optional()
       .describe("why this cycle could not be graded, when no verdict is supplied"),
+    unjudgeableReason: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        "why no ground truth could be loaded for the cycle id; stored as UNJUDGEABLE with no score",
+      ),
   }),
-  async execute({ sessionId, turnId, verdict, unjudgedReason }) {
+  async execute({ sessionId, turnId, verdict, unjudgedReason, unjudgeableReason }) {
     const parsed =
-      verdict === undefined && unjudgedReason !== undefined
-        ? ({ status: "unjudged", warning: unjudgedReason } as const)
-        : parseJudgeVerdict(verdict);
+      unjudgeableReason !== undefined
+        ? unjudgeableVerdict(unjudgeableReason)
+        : verdict === undefined && unjudgedReason !== undefined
+          ? ({ status: "unjudged", warning: unjudgedReason } as const)
+          : parseJudgeVerdict(verdict);
     const summary = summarizeJudgeVerdict(parsed);
 
     const key = { env: tradingEnv(), sessionId, turnId };
@@ -63,7 +76,12 @@ export default defineTool({
       key,
       parsed.status === "judged"
         ? { status: "judged", ...parsed.score }
-        : { status: "unjudged", findings: [], warning: parsed.warning },
+        : {
+            status: "unjudged",
+            findings: [],
+            warning: parsed.warning,
+            ...(parsed.status === "unjudgeable" ? { unjudgeable: true } : {}),
+          },
     );
     const { outcome } = result;
     if (outcome !== "stored") {

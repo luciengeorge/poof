@@ -46,6 +46,8 @@ export const TREND_DELTA = 0.5;
 /** A stored judge verdict, as it comes back from the cycleTraces row. */
 export interface StoredReportScore {
   status: string; // "judged" | "unjudged"
+  /** The judge's ground-truth fetch found no trace row for the requested id. */
+  unjudgeable?: boolean;
   grounding?: number;
   consistency?: number;
   calibration?: number;
@@ -109,6 +111,7 @@ export interface TruncatedEntry extends CycleRef {
 
 export interface UnjudgedEntry extends CycleRef {
   warning: string;
+  unjudgeable: boolean;
 }
 
 export interface LowGroundingEntry extends CycleRef {
@@ -276,6 +279,7 @@ function aggregateReportQuality(
     unjudged.push({
       ...ref(trace),
       warning: score.warning ?? "the judge returned no usable verdict",
+      unjudgeable: score.unjudgeable === true,
     });
   }
 
@@ -512,8 +516,11 @@ export function formatEvalHealth(health: EvalHealth): string[] {
   }
   for (const entry of quality.unjudged) {
     lines.push(
-      `- UNJUDGED cycle ${cycleLabel(entry)}: ${entry.warning}. Recorded as unjudged, not as ` +
-        "a passing score.",
+      entry.unjudgeable
+        ? `- UNJUDGEABLE cycle ${cycleLabel(entry)}: ${entry.warning}. This is missing ` +
+            "ground truth, not a report-quality score."
+        : `- UNJUDGED cycle ${cycleLabel(entry)}: ${entry.warning}. Recorded as unjudged, not ` +
+            "as a passing score.",
     );
   }
   for (const entry of quality.lowGrounding) {
