@@ -3,7 +3,7 @@ import { z } from "zod";
 import { t212FromEnv } from "../lib/t212.ts";
 import { finnhubFromEnv } from "../lib/data.ts";
 import { fxForCycle } from "../lib/fx.ts";
-import { reconcileAccountValueGbp } from "../lib/execution.ts";
+import { brokerSnapshotWithFx, reconcileAccountValueGbp } from "../lib/execution.ts";
 import { etDateString } from "../lib/clock.ts";
 import { memoryFromEnv } from "../lib/memory.ts";
 import { tradingEnv } from "../lib/risk-runtime.ts";
@@ -26,13 +26,11 @@ export default defineTool({
   inputSchema: z.object({}),
   async execute() {
     const client = t212FromEnv();
-    const fx = await fxForCycle();
+    const [account, fx] = await Promise.all([client.getBrokerSnapshot(), fxForCycle()]);
+    const brokerSnapshot = brokerSnapshotWithFx(account, fx);
     const fxRate = fx.rate;
-    const [cash, positions] = await Promise.all([
-      client.getCash(),
-      client.getPortfolio(),
-    ]);
-    const accountValueReconciliation = reconcileAccountValueGbp(cash, positions, fx);
+    const { cash, positions } = brokerSnapshot;
+    const accountValueReconciliation = reconcileAccountValueGbp(brokerSnapshot);
     const equity = accountValueReconciliation.accountValueGbp;
 
     const memory = memoryFromEnv();
@@ -119,6 +117,7 @@ export default defineTool({
       accountValueGbp: equity,
       cashGbp: cash.free,
       deployedGbp: accountValueReconciliation.deployedValueGbp,
+      snapshotTakenAt: brokerSnapshot.takenAt,
       fx: { rate: fxRate, source: fx.source, fallbackUsed: fx.source === "fallback" },
       accountValueReconciliation,
       openPositions: managed,

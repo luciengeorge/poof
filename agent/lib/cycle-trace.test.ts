@@ -162,6 +162,20 @@ test("does not turn malformed reconciliation output into an alert", () => {
   }
 });
 
+test("extracts a not-atomic snapshot warning without calling it a divergence", () => {
+  assert.equal(
+    accountValueAlertFrom({
+      accountValueReconciliation: {
+        alert: {
+          code: "snapshot-not-atomic",
+          message: "Trading 212 snapshot was not atomic. Snapshot taken at 2026-09-02T12:00:00.000Z.",
+        },
+      },
+    }),
+    "snapshot-not-atomic: Trading 212 snapshot was not atomic. Snapshot taken at 2026-09-02T12:00:00.000Z.",
+  );
+});
+
 test("reads the authoritative GBP figures from a review_performance result", () => {
   assert.deepEqual(
     truthFrom({ accountValueGbp: 248.16, cashGbp: 12.4, deployedGbp: 235.76, openPositions: [] }),

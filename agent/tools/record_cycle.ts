@@ -2,7 +2,7 @@ import { defineTool } from "eve/tools";
 import { z } from "zod";
 import { t212FromEnv } from "../lib/t212.ts";
 import { fxForCycle } from "../lib/fx.ts";
-import { reconcileAccountValueGbp } from "../lib/execution.ts";
+import { brokerSnapshotWithFx, reconcileAccountValueGbp } from "../lib/execution.ts";
 import { cycleRecordWithFx } from "../lib/cycle-record.ts";
 import { memoryFromEnv } from "../lib/memory.ts";
 import { tradingEnv } from "../lib/risk-runtime.ts";
@@ -31,14 +31,14 @@ export default defineTool({
   async execute({ decision, rationale, candidates, watchlist }) {
     try {
       const client = t212FromEnv();
-      const fx = await fxForCycle();
-      const [cash, positions] = await Promise.all([
-        client.getCash(),
-        client.getPortfolio(),
+      const [account, fx] = await Promise.all([
+        client.getBrokerSnapshot({ fresh: true }),
+        fxForCycle(),
       ]);
-      const accountValueReconciliation = reconcileAccountValueGbp(cash, positions, fx);
+      const brokerSnapshot = brokerSnapshotWithFx(account, fx);
+      const accountValueReconciliation = reconcileAccountValueGbp(brokerSnapshot);
       const equity = accountValueReconciliation.accountValueGbp;
-      const freeCash = cash.free;
+      const freeCash = brokerSnapshot.cash.free;
       await memoryFromEnv().recordCycle(cycleRecordWithFx({
         env: tradingEnv(),
         equity,
@@ -62,6 +62,7 @@ export default defineTool({
         fx: { rate: fx.rate, source: fx.source, fallbackUsed: fx.source === "fallback" },
         accountValueGbp: equity,
         cashGbp: freeCash,
+        snapshotTakenAt: brokerSnapshot.takenAt,
         accountValueReconciliation,
       };
     } catch (err) {

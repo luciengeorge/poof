@@ -1,7 +1,7 @@
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 import { t212FromEnv } from "../lib/t212.ts";
-import { buildRiskSnapshot } from "../lib/execution.ts";
+import { brokerSnapshotWithFx, buildRiskSnapshot } from "../lib/execution.ts";
 import { loadRiskState } from "../lib/state.ts";
 import { fxForCycle } from "../lib/fx.ts";
 
@@ -11,21 +11,17 @@ export default defineTool({
   inputSchema: z.object({}),
   async execute() {
     const client = t212FromEnv();
-    const [cash, positions] = await Promise.all([
-      client.getCash(),
-      client.getPortfolio(),
-    ]);
-    const fx = await fxForCycle();
+    const [account, fx] = await Promise.all([client.getBrokerSnapshot(), fxForCycle()]);
+    const brokerSnapshot = brokerSnapshotWithFx(account, fx);
     const snap = buildRiskSnapshot({
-      cash,
-      positions,
-      fx,
+      brokerSnapshot,
       ...loadRiskState(),
     });
     return {
       accountValueGbp: snap.equity,
       cashGbp: snap.cash,
       deployedGbp: snap.accountValueReconciliation.deployedValueGbp,
+      snapshotTakenAt: brokerSnapshot.takenAt,
       positions: snap.positions,
       fx: { rate: fx.rate, source: fx.source, fallbackUsed: fx.source === "fallback" },
       accountValueReconciliation: snap.accountValueReconciliation,

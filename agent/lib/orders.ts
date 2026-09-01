@@ -1,13 +1,14 @@
 import { validateOrders, DEFAULT_LIMITS, type RiskLimits } from "./risk.ts";
 import {
   buildRiskSnapshot,
+  brokerSnapshotWithFx,
   reconcileAccountValueGbp,
   notionalToShares,
   roundQuantity,
   parseQuantityPrecision,
   DEFAULT_QUANTITY_PRECISION,
 } from "./execution.ts";
-import { T212Error, type CashBalance, type T212Position, type T212Order } from "./t212.ts";
+import { T212Error, type BrokerAccountSnapshot, type T212Order } from "./t212.ts";
 import type { RiskState } from "./state.ts";
 import { etDateString } from "./clock.ts";
 import type { FxResolution } from "./fx.ts";
@@ -81,8 +82,7 @@ async function placeWithPrecision(
 
 /** The subset of T212Client the executor needs (T212Client satisfies it structurally). */
 export interface OrderExecClient {
-  getCash(opts?: { fresh?: boolean }): Promise<CashBalance>;
-  getPortfolio(opts?: { fresh?: boolean }): Promise<T212Position[]>;
+  getBrokerSnapshot(opts?: { fresh?: boolean }): Promise<BrokerAccountSnapshot>;
   getPendingOrders(): Promise<T212Order[]>;
   placeMarketOrder(input: {
     ticker: string;
@@ -170,19 +170,19 @@ export async function evaluateAndExecute(
   // Force-fresh: this snapshot feeds the risk gate, and manage_positions may have already
   // sold positions earlier in the same cycle. A cached pre-sell snapshot would size/validate
   // against stale cash/positions. getPendingOrders is uncached (never stale).
-  const [cash, positions, pending] = await Promise.all([
-    client.getCash({ fresh: true }),
-    client.getPortfolio({ fresh: true }),
+  const [account, pending] = await Promise.all([
+    client.getBrokerSnapshot({ fresh: true }),
     client.getPendingOrders(),
   ]);
+  const brokerSnapshot = brokerSnapshotWithFx(account, fx);
 
   // Trading 212's total is authoritative for equity. The FX-derived value is retained only as a
   // reconciliation check and returned so the observer can alert without touching the risk gate.
-  const accountValueReconciliation = reconcileAccountValueGbp(cash, positions, fx);
+  const accountValueReconciliation = reconcileAccountValueGbp(brokerSnapshot);
   const currentEquity = accountValueReconciliation.accountValueGbp;
   const riskState = await resolveRiskState(currentEquity);
 
-  const snapshot = buildRiskSnapshot({ cash, positions, fx, ...riskState });
+  const snapshot = buildRiskSnapshot({ brokerSnapshot, ...riskState });
   // Pass full proposals through; validateOrders only reads ticker/side/notional/price,
   // but keeping the original objects means thesis/redTeamVerdict ride along to the result.
   const { accepted, rejected } = validateOrders(proposals, snapshot, limits);

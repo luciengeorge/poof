@@ -20,11 +20,14 @@ function fakeClient(over: {
   const placed: { ticker: string; quantity: number }[] = [];
   const decimals = (n: number) => (String(Math.abs(n)).split(".")[1] ?? "").length;
   const client: OrderExecClient = {
-    async getCash() {
-      return cash(over.free ?? 10000);
-    },
-    async getPortfolio() {
-      return over.positions ?? [];
+    async getBrokerSnapshot() {
+      return {
+        cash: cash(over.free ?? 10000),
+        positions: over.positions ?? [],
+        takenAt: 0,
+        cashReadAt: 0,
+        positionsReadAt: 0,
+      };
     },
     async getPendingOrders() {
       return over.pending ?? [];
@@ -362,18 +365,14 @@ test("non-T212 / 5xx errors still throw: infra failures aren't swallowed as skip
   );
 });
 
-test("the top-of-cycle risk gate reads force-fresh cash and positions", async () => {
-  const seen: { cash: boolean; portfolio: boolean }[] = [];
+test("the top-of-cycle risk gate forces a fresh broker snapshot", async () => {
+  const seen: boolean[] = [];
   const { client: base } = fakeClient();
   const client: OrderExecClient = {
     ...base,
-    async getCash(opts) {
-      seen.push({ cash: opts?.fresh === true, portfolio: false });
-      return base.getCash();
-    },
-    async getPortfolio(opts) {
-      seen.push({ cash: false, portfolio: opts?.fresh === true });
-      return base.getPortfolio();
+    async getBrokerSnapshot(opts) {
+      seen.push(opts?.fresh === true);
+      return base.getBrokerSnapshot();
     },
   };
   await evaluateAndExecute([buy(500)], {
@@ -383,6 +382,5 @@ test("the top-of-cycle risk gate reads force-fresh cash and positions", async ()
     resolveRiskState: async () => noState,
     resolvePrice: async () => 100,
   });
-  assert.ok(seen.some((s) => s.cash));
-  assert.ok(seen.some((s) => s.portfolio));
+  assert.deepEqual(seen, [true]);
 });

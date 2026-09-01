@@ -36,6 +36,16 @@ export interface T212Position {
   pieQuantity: number;
 }
 
+/** Cash and positions read together for values that must be internally consistent. */
+export interface BrokerAccountSnapshot {
+  cash: CashBalance;
+  positions: T212Position[];
+  /** When both broker reads that make up this snapshot had completed. */
+  takenAt: number;
+  cashReadAt: number;
+  positionsReadAt: number;
+}
+
 export interface T212Order {
   id: number;
   ticker: string;
@@ -94,6 +104,7 @@ export class T212Client {
   private rateLimit: RateLimitInfo | null = null;
   private cashCache: CacheEntry<CashBalance> | null = null;
   private portfolioCache: CacheEntry<T212Position[]> | null = null;
+  private snapshotCache: CacheEntry<BrokerAccountSnapshot> | null = null;
 
   constructor(cfg: T212Config) {
     this.base = HOSTS[cfg.env];
@@ -157,6 +168,7 @@ export class T212Client {
     }
     const value = await this.request<CashBalance>("GET", "/equity/account/cash");
     this.cashCache = { value, expires: Date.now() + SNAPSHOT_CACHE_TTL_MS };
+    this.snapshotCache = null;
     return value;
   }
 
@@ -166,7 +178,40 @@ export class T212Client {
     }
     const value = await this.request<T212Position[]>("GET", "/equity/portfolio");
     this.portfolioCache = { value, expires: Date.now() + SNAPSHOT_CACHE_TTL_MS };
+    this.snapshotCache = null;
     return value;
+  }
+
+  /**
+   * Read cash and portfolio as one broker snapshot. Reconciliation must use this method instead
+   * of independently cached endpoint reads, which can otherwise straddle an order submission.
+   * `fresh: true` bypasses every cache and genuinely refetches both endpoint bodies.
+   */
+  async getBrokerSnapshot(opts?: { fresh?: boolean }): Promise<BrokerAccountSnapshot> {
+    if (!opts?.fresh && this.snapshotCache && this.snapshotCache.expires > Date.now()) {
+      return this.snapshotCache.value;
+    }
+    const readAt = async <T>(request: Promise<T>): Promise<{ value: T; readAt: number }> => ({
+      value: await request,
+      readAt: Date.now(),
+    });
+    const [cash, positions] = await Promise.all([
+      readAt(this.request<CashBalance>("GET", "/equity/account/cash")),
+      readAt(this.request<T212Position[]>("GET", "/equity/portfolio")),
+    ]);
+    const takenAt = Math.max(cash.readAt, positions.readAt);
+    const snapshot = {
+      cash: cash.value,
+      positions: positions.value,
+      takenAt,
+      cashReadAt: cash.readAt,
+      positionsReadAt: positions.readAt,
+    };
+    const expires = Date.now() + SNAPSHOT_CACHE_TTL_MS;
+    this.cashCache = { value: snapshot.cash, expires };
+    this.portfolioCache = { value: snapshot.positions, expires };
+    this.snapshotCache = { value: snapshot, expires };
+    return snapshot;
   }
 
   getPosition(ticker: string): Promise<T212Position> {
