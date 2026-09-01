@@ -189,6 +189,34 @@ test("cancelOrder DELETEs the order by id", async () => {
 
 // --- Task 4: getCash/getPortfolio TTL cache ---
 
+test("getBrokerSnapshot reads cash and positions together and caches the pair", async () => {
+  let free = 100;
+  const f = fakeFetch((url) => ({
+    body: url.endsWith("/cash") ? { total: free, free } : [],
+  }));
+  const client = new T212Client(cfg({ fetchImpl: f.fn }));
+  const first = await client.getBrokerSnapshot();
+  const second = await client.getBrokerSnapshot();
+  assert.equal(f.calls.length, 2);
+  assert.equal(first.cash.free, 100);
+  assert.deepEqual(first.positions, []);
+  assert.equal(second, first);
+  assert.ok(first.takenAt >= first.cashReadAt);
+  assert.ok(first.takenAt >= first.positionsReadAt);
+  assert.equal(
+    f.calls.filter((call) => call.url.endsWith("/equity/account/cash")).length,
+    1,
+  );
+  assert.equal(
+    f.calls.filter((call) => call.url.endsWith("/equity/portfolio")).length,
+    1,
+  );
+  free = 200;
+  const fresh = await client.getBrokerSnapshot({ fresh: true });
+  assert.equal(f.calls.length, 4);
+  assert.equal(fresh.cash.free, 200);
+});
+
 test("getCash caches within the TTL: two calls hit the network once", async () => {
   const f = fakeFetch(() => ({ body: { free: 100 } }));
   const client = new T212Client(cfg({ fetchImpl: f.fn }));

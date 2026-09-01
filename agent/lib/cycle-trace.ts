@@ -150,7 +150,9 @@ export function accountValueAlertFrom(output: unknown): string | null {
   if (typeof alert !== "object" || alert === null) return null;
   const { code, message } = alert as { code?: unknown; message?: unknown };
   if (
-    (code !== "broker-total-unusable" && code !== "computed-total-divergence") ||
+    (code !== "broker-total-unusable" &&
+      code !== "computed-total-divergence" &&
+      code !== "snapshot-not-atomic") ||
     typeof message !== "string" ||
     message.length === 0
   ) {

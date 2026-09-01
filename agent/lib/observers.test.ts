@@ -100,9 +100,14 @@ test("the observers really are failing in these tests (the guard cannot go vacuo
 
 test("REGRESSION: a failing invariant does not change the risk gate's verdict", () => {
   const snapshot = buildRiskSnapshot({
-    cash: cash({ free: 248.16 }),
-    positions: [],
-    fx: FX,
+    brokerSnapshot: {
+      cash: cash({ free: 248.16 }),
+      positions: [],
+      fx: FX,
+      takenAt: 0,
+      cashReadAt: 0,
+      positionsReadAt: 0,
+    },
     peakEquity: 248.16,
     dayPnl: 0,
     newPositionsToday: 0,
@@ -143,11 +148,14 @@ test("REGRESSION: no failing observer blocks or resizes an order", async () => {
   }> {
     const placedAtBroker: { ticker: string; quantity: number }[] = [];
     const client: OrderExecClient = {
-      async getCash() {
-        return cash({ total: 10_000, free: 10_000 });
-      },
-      async getPortfolio() {
-        return [] as T212Position[];
+      async getBrokerSnapshot() {
+        return {
+          cash: cash({ total: 10_000, free: 10_000 }),
+          positions: [] as T212Position[],
+          takenAt: 0,
+          cashReadAt: 0,
+          positionsReadAt: 0,
+        };
       },
       async getPendingOrders() {
         return [] as T212Order[];
@@ -335,14 +343,30 @@ test("REGRESSION: record_cycle reports the SAME figures it wrote, and still swal
   // because the tool itself needs live credentials to run.
   const source = readFileSync(new URL("../tools/record_cycle.ts", import.meta.url), "utf8");
   assert.match(source, /const accountValueReconciliation = reconcileAccountValueGbp\(/);
+  assert.match(source, /getBrokerSnapshot\(\{ fresh: true \}\)/);
   assert.match(source, /const equity = accountValueReconciliation\.accountValueGbp/);
-  assert.match(source, /const freeCash = cash\.free/);
+  assert.match(source, /const freeCash = brokerSnapshot\.cash\.free/);
   assert.match(source, /cycleRecordWithFx\(\{[\s\S]*?\bequity,[\s\S]*?\bfreeCash,/);
   assert.match(source, /cycleRecordWithFx\([\s\S]*?\bfx,/);
   assert.match(source, /accountValueGbp: equity/);
   assert.match(source, /cashGbp: freeCash/);
   assert.match(source, /accountValueReconciliation,/);
   assert.match(source, /catch[\s\S]*?recorded: false/);
+});
+
+test("REGRESSION: account reports and reconciliation use one broker snapshot", () => {
+  const paths = [
+    "../tools/get_account.ts",
+    "../tools/review_performance.ts",
+    "../tools/record_cycle.ts",
+    "./orders.ts",
+  ];
+  for (const path of paths) {
+    const source = readFileSync(new URL(path, import.meta.url), "utf8");
+    assert.match(source, /getBrokerSnapshot\(/, `${path} must read a broker snapshot`);
+    assert.doesNotMatch(source, /\.getCash\(/, `${path} must not read cash separately`);
+    assert.doesNotMatch(source, /\.getPortfolio\(/, `${path} must not read positions separately`);
+  }
 });
 
 test("REGRESSION: the judge runs from a SCHEDULE, never inline in the trace hook", () => {

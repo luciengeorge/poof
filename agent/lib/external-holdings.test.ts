@@ -140,7 +140,7 @@ test("daysUntilEarnings returns null for a missing or unparseable date", () => {
 // ever leaked into accountValueGbp, position sizing would authorise trades ~32x too large
 // and the drawdown / daily-loss breakers would compute against the wrong base.
 //
-// buildRiskSnapshot therefore takes ONLY broker inputs (cash + T212 positions + fx). This
+// buildRiskSnapshot therefore takes ONLY one broker snapshot (cash + T212 positions + fx). This
 // test pins that: the snapshot and the gate's verdict are byte-identical whether or not an
 // external holding exists, because external holdings are simply not an input to this path.
 // A future refactor that threads them in will fail here, loudly and on purpose.
@@ -176,9 +176,14 @@ test("REGRESSION: external holdings do NOT affect accountValueGbp / the risk sna
   // The real Trading 212 account: about GBP 248 total. The external SHOP holding is about
   // GBP 7912, roughly 32x this account.
   const brokerInputs = {
-    cash: cash({ free: 148 }),
-    positions: [pos({ ticker: "NKE_US_EQ", quantity: 2, currentPrice: 66.6 })],
-    fx: LIVE_FX,
+    brokerSnapshot: {
+      cash: cash({ free: 148 }),
+      positions: [pos({ ticker: "NKE_US_EQ", quantity: 2, currentPrice: 66.6 })],
+      fx: LIVE_FX,
+      takenAt: 0,
+      cashReadAt: 0,
+      positionsReadAt: 0,
+    },
     peakEquity: 0,
     dayPnl: 0,
     newPositionsToday: 0,
@@ -301,19 +306,22 @@ test("blocked external BUY is skipped with the reason while the rest of the batc
   // the batch, so the sibling BUY still places.
   const placedAtBroker: { ticker: string; quantity: number }[] = [];
   const client: OrderExecClient = {
-    async getCash() {
+    async getBrokerSnapshot() {
       return {
-        total: 10000,
-        free: 10000,
-        blocked: 0,
-        invested: 0,
-        pieCash: 0,
-        result: 0,
-        ppl: 0,
+        cash: {
+          total: 10000,
+          free: 10000,
+          blocked: 0,
+          invested: 0,
+          pieCash: 0,
+          result: 0,
+          ppl: 0,
+        },
+        positions: [],
+        takenAt: 0,
+        cashReadAt: 0,
+        positionsReadAt: 0,
       };
-    },
-    async getPortfolio() {
-      return [];
     },
     async getPendingOrders() {
       return [];
@@ -375,9 +383,14 @@ test("blocked external BUY is skipped with the reason while the rest of the batc
 
 test("REGRESSION: the risk gate sizes off the T212 account, not the external holding", () => {
   const snap = buildRiskSnapshot({
-    cash: cash({ free: 248 }),
-    positions: [],
-    fx: LIVE_FX,
+    brokerSnapshot: {
+      cash: cash({ free: 248 }),
+      positions: [],
+      fx: LIVE_FX,
+      takenAt: 0,
+      cashReadAt: 0,
+      positionsReadAt: 0,
+    },
     peakEquity: 248,
     dayPnl: 0,
     newPositionsToday: 0,

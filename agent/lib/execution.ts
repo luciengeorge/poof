@@ -1,5 +1,5 @@
 import type { PortfolioSnapshot, Position } from "./risk.ts";
-import type { CashBalance, T212Position } from "./t212.ts";
+import type { BrokerAccountSnapshot, T212Position } from "./t212.ts";
 import type { FxResolution } from "./fx.ts";
 
 /**
@@ -82,9 +82,23 @@ export function deployedValueGbp(positions: T212Position[], fxRate: number): num
  */
 export const ACCOUNT_VALUE_DIVERGENCE_RELATIVE_THRESHOLD = 0.02;
 export const ACCOUNT_VALUE_DIVERGENCE_ABSOLUTE_GBP_FLOOR = 1;
+export const ACCOUNT_SNAPSHOT_READ_SKEW_TOLERANCE_MS = 1_000;
+
+/** One broker read paired with the FX resolution used to value it. */
+export interface BrokerSnapshot extends BrokerAccountSnapshot {
+  fx: FxResolution;
+}
+
+/** Keep reconciliation inputs together so callers cannot mix two broker reads. */
+export function brokerSnapshotWithFx(
+  account: BrokerAccountSnapshot,
+  fx: FxResolution,
+): BrokerSnapshot {
+  return { ...account, fx };
+}
 
 export interface AccountValueAlert {
-  code: "broker-total-unusable" | "computed-total-divergence";
+  code: "broker-total-unusable" | "computed-total-divergence" | "snapshot-not-atomic";
   message: string;
 }
 
@@ -107,12 +121,33 @@ export interface AccountValueReconciliation {
  * return a loud alert so this fallback can never silently become normal behaviour.
  */
 export function reconcileAccountValueGbp(
-  cash: CashBalance,
-  positions: T212Position[],
-  fx: FxResolution,
+  snapshot: BrokerSnapshot,
 ): AccountValueReconciliation {
+  const { cash, positions, fx } = snapshot;
   const fxDerivedHoldingsGbp = deployedValueGbp(positions, fx.rate);
   const computedAccountValueGbp = cash.free + fxDerivedHoldingsGbp;
+  const readSkewMs = Math.abs(snapshot.cashReadAt - snapshot.positionsReadAt);
+  if (!Number.isFinite(readSkewMs) || readSkewMs > ACCOUNT_SNAPSHOT_READ_SKEW_TOLERANCE_MS) {
+    return {
+      accountValueGbp: Number.isFinite(cash.total) && cash.total > 0
+        ? cash.total
+        : computedAccountValueGbp,
+      computedAccountValueGbp,
+      deployedValueGbp:
+        Number.isFinite(cash.total) && cash.total > 0
+          ? cash.total - cash.free
+          : computedAccountValueGbp - cash.free,
+      source:
+        Number.isFinite(cash.total) && cash.total > 0 ? "broker-total" : "computed-fallback",
+      alert: {
+        code: "snapshot-not-atomic",
+        message:
+          `Trading 212 snapshot was not atomic: cash and positions reads differed by ${readSkewMs}ms ` +
+          `(maximum ${ACCOUNT_SNAPSHOT_READ_SKEW_TOLERANCE_MS}ms). Skipping total divergence ` +
+          `check. Snapshot taken at ${formatSnapshotTakenAt(snapshot.takenAt)}.`,
+      },
+    };
+  }
   const brokerTotalUsable = Number.isFinite(cash.total) && cash.total > 0;
   if (!brokerTotalUsable) {
     return {
@@ -124,7 +159,8 @@ export function reconcileAccountValueGbp(
         code: "broker-total-unusable",
         message:
           `Trading 212 account total was unusable (received ${formatBrokerTotal(cash.total)}); ` +
-          `using FX-derived fallback GBP ${computedAccountValueGbp.toFixed(2)}.`,
+          `using FX-derived fallback GBP ${computedAccountValueGbp.toFixed(2)}. Snapshot taken at ` +
+          `${formatSnapshotTakenAt(snapshot.takenAt)}.`,
       },
     };
   }
@@ -149,7 +185,8 @@ export function reconcileAccountValueGbp(
             `(source: ${fx.source}); free cash GBP ${cash.free.toFixed(2)}; ` +
             `broker-derived holdings GBP ${(cash.total - cash.free).toFixed(2)}; ` +
             `FX-derived holdings GBP ${fxDerivedHoldingsGbp.toFixed(2)}; ` +
-            `open positions ${positions.length}.`,
+            `open positions ${positions.length}; snapshot taken at ` +
+            `${formatSnapshotTakenAt(snapshot.takenAt)}.`,
         }
       : null,
   };
@@ -159,16 +196,16 @@ function formatBrokerTotal(total: number): string {
   return Number.isFinite(total) ? `GBP ${total.toFixed(2)}` : String(total);
 }
 
+function formatSnapshotTakenAt(takenAt: number): string {
+  return Number.isFinite(takenAt) ? new Date(takenAt).toISOString() : String(takenAt);
+}
+
 /**
  * The single authoritative GBP account value used everywhere (risk gate, sizing, reports):
  * Trading 212's `cash.total` wins when usable. The FX-derived total remains a cross-check.
  */
-export function accountValueGbp(
-  cash: CashBalance,
-  positions: T212Position[],
-  fx: FxResolution,
-): number {
-  return reconcileAccountValueGbp(cash, positions, fx).accountValueGbp;
+export function accountValueGbp(snapshot: BrokerSnapshot): number {
+  return reconcileAccountValueGbp(snapshot).accountValueGbp;
 }
 
 /**
@@ -181,36 +218,35 @@ export function accountValueGbp(
  * come from the cross-cycle state store (see lib/state).
  */
 export function buildRiskSnapshot(args: {
-  cash: CashBalance;
-  positions: T212Position[];
-  fx: FxResolution;
+  brokerSnapshot: BrokerSnapshot;
   peakEquity: number;
   dayPnl: number;
   newPositionsToday: number;
   consecutiveLossDays: number;
 }): PortfolioSnapshot & { accountValueReconciliation: AccountValueReconciliation } {
+  const { cash, positions, fx } = args.brokerSnapshot;
   const bad =
-    !Number.isFinite(args.cash.free) ||
-    !Number.isFinite(args.fx.rate) ||
-    args.positions.some((p) => !Number.isFinite(p.quantity) || !Number.isFinite(p.currentPrice));
+    !Number.isFinite(cash.free) ||
+    !Number.isFinite(fx.rate) ||
+    positions.some((p) => !Number.isFinite(p.quantity) || !Number.isFinite(p.currentPrice));
   if (bad) {
     throw new Error("non-finite account data from broker; refusing to gate orders (fail-closed)");
   }
-  const positions: Position[] = args.positions.map((p) => ({
+  const riskPositions: Position[] = positions.map((p) => ({
     ticker: p.ticker,
-    value: p.quantity * p.currentPrice * args.fx.rate,
+    value: p.quantity * p.currentPrice * fx.rate,
   }));
-  const accountValueReconciliation = reconcileAccountValueGbp(args.cash, args.positions, args.fx);
+  const accountValueReconciliation = reconcileAccountValueGbp(args.brokerSnapshot);
   const equity = accountValueReconciliation.accountValueGbp;
   if (!Number.isFinite(equity)) {
     throw new Error("non-finite account data from broker; refusing to gate orders (fail-closed)");
   }
   return {
     equity,
-    cash: args.cash.free,
+    cash: cash.free,
     peakEquity: Math.max(args.peakEquity, equity),
     dayPnl: args.dayPnl,
-    positions,
+    positions: riskPositions,
     newPositionsToday: args.newPositionsToday,
     consecutiveLossDays: args.consecutiveLossDays,
     accountValueReconciliation,
