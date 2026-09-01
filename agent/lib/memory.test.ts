@@ -235,6 +235,19 @@ test("cycle-trace reads are queries and degrade to null / [] when memory is empt
   assert.deepEqual(calls, []); // the stubbed query replaced the recorder, so nothing was pushed
 });
 
+test("getCycleTraceById uses the secret-gated trace lookup", async () => {
+  const { client, calls } = fakeClient();
+  const m = new Memory(client, TOKEN);
+
+  await m.getCycleTraceById("real-cycle-id");
+
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0], {
+    kind: "query",
+    args: { token: TOKEN, cycleId: "real-cycle-id" },
+  });
+});
+
 test("memoryFromEnv throws when CONVEX_URL is unset", () => {
   const prevUrl = process.env.CONVEX_URL;
   const prevSecret = process.env.CONVEX_APP_SECRET;

@@ -8,11 +8,13 @@ import {
   MAX_FINDING_CHARS,
   judgeAlertReasons,
   judgeGroundTruth,
+  judgeGroundTruthResult,
   judgeThresholdsFromEnv,
   parseJudgeVerdict,
   summarizeJudgeVerdict,
   type JudgeTrace,
   groundingIsActionable,
+  unjudgeableVerdict,
 } from "./report-judge.ts";
 import { checkReportNumbers, parseGbpFigures } from "./report-check.ts";
 
@@ -580,6 +582,21 @@ test("assembling the ground truth is pure and mutates no input", () => {
   const snapshot = JSON.stringify(input);
   assert.deepEqual(judgeGroundTruth(input), judgeGroundTruth(input));
   assert.equal(JSON.stringify(input), snapshot);
+});
+
+test("missing ground truth is UNJUDGEABLE, not a grounding score of 3", () => {
+  const result = judgeGroundTruthResult(null);
+  assert.equal(result.status, "unjudgeable");
+  if (result.status === "unjudgeable") {
+    assert.match(result.reason, /ground truth is unavailable/i);
+  }
+
+  const verdict = unjudgeableVerdict(
+    result.status === "unjudgeable" ? result.reason : "unexpected available ground truth",
+  );
+  assert.equal(verdict.status, "unjudgeable");
+  assert.equal("score" in verdict, false);
+  assert.notEqual(verdict.status, "judged");
 });
 
 // --- grounding alerts are gated on what was actually captured ---

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   checkReportNumbers,
   parseGbpFigures,
+  parseHoldingsCounts,
   type ReportTruth,
 } from "./report-check.ts";
 
@@ -75,6 +76,11 @@ test("does not invent a figure from a currency pair or a word starting with GBP"
 
 test("ignores a lone symbol with no number", () => {
   assert.deepEqual(parseGbpFigures("costs £ and pence"), []);
+});
+
+test("parses explicit numeric holdings counts", () => {
+  assert.deepEqual(parseHoldingsCounts("You hold 8 holdings across 9 positions."), [8, 9]);
+  assert.deepEqual(parseHoldingsCounts("No count is stated here."), []);
 });
 
 // --- rule 1: account-value-present (the GBP 282 bug) ---
@@ -217,4 +223,38 @@ test("an empty report is a finding, not a crash", () => {
 test("checkReportNumbers is pure: the same inputs give the same answer", () => {
   const report = "Worth £248.16.";
   assert.deepEqual(checkReportNumbers(report, TRUTH), checkReportNumbers(report, TRUTH));
+});
+
+// --- rule 3: stated holdings count must match the captured ticker list ---
+
+const NINE_TICKERS = ["MOD", "NDSN", "HII", "JPM", "AAP", "TRMB", "HD", "YETI", "AMD"];
+
+test("REGRESSION: 8 holdings against 9 ground-truth tickers is a violation", () => {
+  const result = checkReportNumbers("Account value £248.16. You have 8 holdings.", {
+    ...TRUTH,
+    positionTickers: NINE_TICKERS,
+  });
+
+  assert.equal(result.pass, false);
+  assert.deepEqual(rules(result.findings), ["holdings-count-matches-tickers"]);
+  assert.match(result.findings[0].detail, /8 holdings/);
+  assert.match(result.findings[0].detail, /9 position tickers/);
+});
+
+test("a holdings count matching the ground-truth ticker list is not a violation", () => {
+  const result = checkReportNumbers("Account value £248.16. You have 9 holdings.", {
+    ...TRUTH,
+    positionTickers: NINE_TICKERS,
+  });
+
+  assert.deepEqual(result, { pass: true, findings: [] });
+});
+
+test("a report that states no holdings count is not penalised", () => {
+  const result = checkReportNumbers("Account value £248.16. Positions remain unchanged.", {
+    ...TRUTH,
+    positionTickers: NINE_TICKERS,
+  });
+
+  assert.deepEqual(result, { pass: true, findings: [] });
 });

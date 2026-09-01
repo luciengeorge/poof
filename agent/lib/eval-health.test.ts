@@ -210,6 +210,26 @@ test("an unjudged cycle is called out and never counted as a good score", () => 
   assert.match(formatEvalHealth(health).join("\n"), /unjudged/i);
 });
 
+test("a missing ground-truth cycle is reported as UNJUDGEABLE, never as a score", () => {
+  const health = aggregateEvalHealth([
+    trace({
+      sessionId: "sMissing",
+      turnId: "tMissing",
+      judgedAt: T0,
+      reportScore: {
+        status: "unjudged",
+        unjudgeable: true,
+        warning: "ground truth is unavailable for this cycle id",
+      },
+    }),
+  ]);
+
+  assert.equal(health.reportQuality.judged, 0);
+  assert.equal(health.reportQuality.unjudged[0].unjudgeable, true);
+  assert.match(formatEvalHealth(health).join("\n"), /UNJUDGEABLE/);
+  assert.doesNotMatch(formatEvalHealth(health).join("\n"), /grounding [1-5]/i);
+});
+
 test("a cycle that was never judged at all is reported as not yet judged", () => {
   const health = aggregateEvalHealth(cycles(3));
   assert.equal(health.reportQuality.judged, 0);

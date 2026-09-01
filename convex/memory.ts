@@ -999,6 +999,7 @@ export const saveReportScore = mutation({
     sessionId: v.string(),
     turnId: v.string(),
     status: v.string(), // "judged" | "unjudged"
+    unjudgeable: v.optional(v.boolean()),
     grounding: v.optional(v.number()),
     consistency: v.optional(v.number()),
     calibration: v.optional(v.number()),
@@ -1012,6 +1013,9 @@ export const saveReportScore = mutation({
     const { env, sessionId, turnId, status } = args;
     if (status !== "judged" && status !== "unjudged") {
       throw new Error('status must be "judged" or "unjudged"');
+    }
+    if (status === "judged" && args.unjudgeable === true) {
+      throw new Error("a judged verdict cannot be marked unjudgeable");
     }
     const existing = await findTrace(ctx, env, sessionId, turnId);
     // The outcome is returned rather than just an id, because the caller must be able to tell
@@ -1055,6 +1059,7 @@ export const saveReportScore = mutation({
     await ctx.db.patch("cycleTraces", existing._id, {
       reportScore: {
         status,
+        ...(status === "unjudged" && args.unjudgeable === true ? { unjudgeable: true } : {}),
         // Scores are dropped entirely on an unjudged verdict, so no partial number can later be
         // mistaken for a grade.
         ...(status === "judged" ? dimensions : {}),
@@ -1080,6 +1085,20 @@ export const getCycleTrace = query({
   handler: async (ctx, args) => {
     assertSecret(args.token);
     return await findTrace(ctx, args.env, args.sessionId, args.turnId);
+  },
+});
+
+/**
+ * Read one trace by its Convex document id for the report_judge subagent.
+ *
+ * This remains public only because the app runtime uses ConvexHttpClient. The shared-secret
+ * check is therefore mandatory, just as it is for every other memory query.
+ */
+export const getCycleTraceById = query({
+  args: { token: v.string(), cycleId: v.id("cycleTraces") },
+  handler: async (ctx, args) => {
+    assertSecret(args.token);
+    return await ctx.db.get(args.cycleId);
   },
 });
 

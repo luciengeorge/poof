@@ -29,6 +29,13 @@ export interface ReportTruth {
    * the "Your other account" section, and the alert would be trained into noise.
    */
   externalGbpValues?: number[];
+  /**
+   * Captured position tickers. When present and complete, their length is the deterministic
+   * source for a holdings count stated in the report.
+   */
+  positionTickers?: string[];
+  /** A capped ticker list cannot prove a report's holdings count is wrong. */
+  positionsTruncated?: boolean;
 }
 
 export interface ReportFinding {
@@ -59,6 +66,19 @@ const SUFFIX_FORM = new RegExp(String.raw`(-?(?:${NUMBER}))\s*GBP\b`, "gi");
 
 /** "£248.16", "GBP 248.16", "GBP248", "-£12.50", "£-12.50", "**£1,234.56**". */
 const PREFIX_FORM = new RegExp(String.raw`(-?)\s*(?:£|GBP)\s*(-?)(${NUMBER})`, "gi");
+
+/** A plain numeric holdings count such as "8 holdings" or "9 positions". */
+const HOLDINGS_COUNT_FORM = /\b(\d+)\s+(?:holdings?|positions?|stocks?)\b/gi;
+
+/** Every explicit numeric holdings count in the report, in the order written. */
+export function parseHoldingsCounts(text: string): number[] {
+  const counts: number[] = [];
+  for (const match of text.matchAll(HOLDINGS_COUNT_FORM)) {
+    const count = Number(match[1]);
+    if (Number.isSafeInteger(count)) counts.push(count);
+  }
+  return counts;
+}
 
 /**
  * Every GBP figure in the text, in the order written.
@@ -96,11 +116,24 @@ export function checkReportNumbers(
   const findings: ReportFinding[] = [];
   const { accountValueGbp } = truth;
 
-  // Without a usable account value there is no ground truth to compare against, and inventing
-  // findings from it would alert on a broker/FX outage that is already surfaced elsewhere.
-  // The caller only runs this check once a positive value has been observed.
+  if (truth.positionTickers !== undefined && truth.positionsTruncated !== true) {
+    const actual = truth.positionTickers.length;
+    for (const stated of parseHoldingsCounts(reportText)) {
+      if (stated === actual) continue;
+      findings.push({
+        rule: "holdings-count-matches-tickers",
+        detail:
+          `the report states ${stated} holdings, but the ground truth lists ${actual} position ` +
+          `tickers: ${truth.positionTickers.join(", ")}`,
+      });
+    }
+  }
+
+  // Without a usable account value there is no money ground truth to compare against, and
+  // inventing money findings from it would alert on a broker/FX outage that is already surfaced
+  // elsewhere. The independent holdings-count check below can still use captured tickers.
   if (!Number.isFinite(accountValueGbp) || accountValueGbp <= 0) {
-    return { pass: true, findings: [] };
+    return { pass: findings.length === 0, findings };
   }
 
   const figures = parseGbpFigures(reportText);

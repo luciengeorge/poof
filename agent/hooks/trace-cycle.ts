@@ -345,11 +345,14 @@ export default defineHook({
         }
 
         // Only gradeable with both halves: the numbers the code computed and the text the agent
-        // wrote. A missing half is reported, not silently treated as a pass.
+        // wrote. A captured, complete ticker list also independently supports the deterministic
+        // holdings-count check even if the account-value capture is unavailable.
         const report =
-          trace.accountValueGbp !== undefined && trace.reportText !== undefined
+          trace.reportText !== undefined &&
+          (trace.accountValueGbp !== undefined ||
+            (trace.positionTickers !== undefined && trace.positionsTruncated !== true))
             ? checkReportNumbers(trace.reportText, {
-                accountValueGbp: trace.accountValueGbp,
+                accountValueGbp: trace.accountValueGbp ?? 0,
                 // Both stages are supplied: a report written after trading legitimately quotes the
                 // post-trade figure, and grading it against the pre-trade one produced a guaranteed
                 // false finding on every cycle that traded.
@@ -357,6 +360,8 @@ export default defineHook({
                 cashGbp: trace.cashGbp ?? 0,
                 deployedGbp: trace.deployedGbp ?? 0,
                 externalGbpValues: trace.externalGbpValues,
+                positionTickers: trace.positionTickers,
+                positionsTruncated: trace.positionsTruncated,
               })
             : null;
 

@@ -321,6 +321,8 @@ export default defineSchema({
     reportScore: v.optional(
       v.object({
         status: v.string(), // "judged" | "unjudged"
+        // Optional because populated rows were written before this availability marker existed.
+        unjudgeable: v.optional(v.boolean()),
         grounding: v.optional(v.number()),
         consistency: v.optional(v.number()),
         calibration: v.optional(v.number()),
