@@ -9,6 +9,7 @@ import { resolveRiskState, tradingEnv } from "../lib/risk-runtime.ts";
 import { finnhubFromEnv } from "../lib/data.ts";
 import { t212TickerToFinnhubSymbol } from "../lib/execution.ts";
 import { buildRecordTradeArgs } from "../lib/order-bookkeeping.ts";
+import { applyHoldFloor } from "../lib/hold-floor.ts";
 import { STRATEGY_TAGS } from "../lib/positions.ts";
 import {
   externalHoldingSymbols,
@@ -69,7 +70,16 @@ const proposalSchema = z.object({
     .number()
     .positive()
     .optional()
-    .describe("Exit the position after this many days regardless of price"),
+    .describe(
+      "Exit the position after this many days regardless of price. A backstop, not the plan: a value under 15 with no earningsDate is raised back to the default in code, because a reflexive 10-day clock closed 35 of 51 live positions before the trailing stop could run.",
+    ),
+  earningsDate: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional()
+    .describe(
+      "ISO date (YYYY-MM-DD) of the next earnings print when it falls inside the hold window. This is what permits a maxHoldDays under 15: the hold is kept, or pulled to the session before the print.",
+    ),
 });
 
 export default defineTool({
@@ -114,8 +124,13 @@ export default defineTool({
         err,
       );
     }
+    // Entry-time hold floor, in code: the exit engine honours a per-position maxHoldDays over
+    // the default, and the model had been stamping 10 on nearly every BUY. See hold-floor.ts.
+    const floored = applyHoldFloor(proposals);
+    for (const note of floored.notes) console.log(`[hold-floor] ${note}`);
+
     const { allowed, blocked } = partitionExternalHoldingBuys(
-      proposals,
+      floored.proposals,
       excludedSymbols,
       { blockAllBuys },
     );
@@ -162,6 +177,6 @@ export default defineTool({
       console.warn("[memory] recordTrade failed (non-fatal):", err);
     }
 
-    return result;
+    return { ...result, holdFloorNotes: floored.notes };
   },
 });

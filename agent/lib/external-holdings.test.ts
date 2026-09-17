@@ -11,6 +11,9 @@ import {
 } from "./external-holdings.ts";
 import { buildRiskSnapshot } from "./execution.ts";
 import { validateOrders, DEFAULT_LIMITS } from "./risk.ts";
+
+// See orders.test.ts: execution tests state their own sizing limits.
+const TEST_LIMITS = { ...DEFAULT_LIMITS, minTradePct: 0.02, maxConcurrentPositions: 10 };
 import { evaluateAndExecute, type OrderExecClient, type Proposal } from "./orders.ts";
 import type { CashBalance, T212Position, T212Order } from "./t212.ts";
 
@@ -344,6 +347,7 @@ test("blocked external BUY is skipped with the reason while the rest of the batc
     client,
     fx: UNITY_FX,
     dryRun: false,
+    limits: TEST_LIMITS,
     resolveRiskState: async () => ({
       peakEquity: 0,
       dayPnl: 0,

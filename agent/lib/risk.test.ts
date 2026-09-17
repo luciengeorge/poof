@@ -58,18 +58,21 @@ function buy(over: Partial<ProposedOrder> = {}): ProposedOrder {
 
 // --- Task 1: default limits ---
 
-test("DEFAULT_LIMITS encodes the full-deploy-keep-diversification policy", () => {
-  // Sizing opened up so the whole account can be deployed...
-  assert.equal(DEFAULT_LIMITS.maxDeployedPct, 1.0); // no idle-cash floor
+test("DEFAULT_LIMITS encodes the concentrate-and-deploy policy", () => {
+  // Literal production values on purpose: this is the sizing a live account trades on, and it
+  // should not be possible to change it without a test saying so out loud.
+  assert.equal(DEFAULT_LIMITS.maxDeployedPct, 0.9); // 10% free for FX and fees
   assert.equal(DEFAULT_LIMITS.maxTradePct, 0.3);
-  assert.equal(DEFAULT_LIMITS.maxNewPositionsPerDay, 6);
-  assert.equal(DEFAULT_LIMITS.maxPerNamePct, 0.3); // ...but no all-in on one name
-  assert.equal(DEFAULT_LIMITS.minTradePct, 0.02);
-  assert.equal(DEFAULT_LIMITS.maxConcurrentPositions, 10);
+  assert.equal(DEFAULT_LIMITS.maxNewPositionsPerDay, 4);
+  assert.equal(DEFAULT_LIMITS.maxPerNamePct, 0.3); // no all-in on one name
+  // A 10 GBP "probe" on a 250 GBP account is rejected, not placed: below this floor a correct
+  // pick cannot move the account, so the size defeats the signal.
+  assert.equal(DEFAULT_LIMITS.minTradePct, 0.15);
+  assert.equal(DEFAULT_LIMITS.maxConcurrentPositions, 4);
   assert.equal(DEFAULT_LIMITS.minPrice, 5);
-  // Ruin-prevention breakers stay tight.
-  assert.equal(DEFAULT_LIMITS.dailyLossHaltPct, 0.04);
-  assert.equal(DEFAULT_LIMITS.maxDrawdownPct, 0.1);
+  // Breakers loosened to fit 4 concentrated names, still ruin-prevention.
+  assert.equal(DEFAULT_LIMITS.dailyLossHaltPct, 0.06);
+  assert.equal(DEFAULT_LIMITS.maxDrawdownPct, 0.15);
   assert.equal(DEFAULT_LIMITS.maxConsecutiveLossDays, 2);
 });
 

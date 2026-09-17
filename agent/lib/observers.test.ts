@@ -172,6 +172,8 @@ test("REGRESSION: no failing observer blocks or resizes an order", async () => {
       client,
       fx: FX,
       dryRun: false,
+      // Execution test, not a sizing-policy test: state limits that admit the 5% fixture.
+      limits: { ...DEFAULT_LIMITS, minTradePct: 0.02, maxConcurrentPositions: 10 },
       resolveRiskState: async () => ({
         peakEquity: 0,
         dayPnl: 0,
