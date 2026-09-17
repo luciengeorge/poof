@@ -18,6 +18,43 @@ export interface ConvexLike {
 
 export type Env = "demo" | "live";
 
+export interface FunnelItemRecord {
+  day: string;
+  ticker: string;
+  headline: string;
+  summary: string;
+  source: string;
+  url: string;
+  publishedAt: number;
+  screenedAt: number;
+  model: string;
+  freshCatalyst: number;
+  pricedIn: number;
+  strategyTag: string;
+  strategyTagConfidence: number;
+  higherIn10d: number;
+  score: number;
+}
+
+export interface StoredFunnelItem extends FunnelItemRecord {
+  _id: string;
+  outcomeAt?: number;
+  outcomeUp?: boolean;
+  outcomePct?: number;
+}
+
+export interface FunnelChunkRow {
+  _id: string;
+  day: string;
+  chunk: number;
+  status: string;
+  startedAt: number;
+  finishedAt?: number;
+  tickers?: number;
+  items?: number;
+  note?: string;
+}
+
 export interface TradeRecord {
   env: Env;
   cycleId?: string;
@@ -321,6 +358,34 @@ export class Memory {
   }
   recordMessage(m: MessageRecord): Promise<unknown> {
     return this.mutation("recordMessage", { ...m });
+  }
+  claimFunnelChunk(day: string, chunks: number, now: number): Promise<{ chunk: number; id: string } | null> {
+    return this.mutation("claimFunnelChunk", { day, chunks, now }) as Promise<{ chunk: number; id: string } | null>;
+  }
+  finishFunnelChunk(input: {
+    id: string;
+    status: "done" | "failed";
+    finishedAt: number;
+    tickers: number;
+    items: number;
+    note?: string;
+  }): Promise<unknown> {
+    return this.mutation("finishFunnelChunk", { ...input });
+  }
+  upsertFunnelItems(items: FunnelItemRecord[]): Promise<{ inserted: number; skipped: number }> {
+    return this.mutation("upsertFunnelItems", { items }) as Promise<{ inserted: number; skipped: number }>;
+  }
+  topFunnelItems(day: string, limit: number): Promise<StoredFunnelItem[]> {
+    return this.query("topFunnelItems", { day, limit }) as Promise<StoredFunnelItem[]>;
+  }
+  funnelChunksForDay(day: string): Promise<FunnelChunkRow[]> {
+    return this.query("funnelChunksForDay", { day }) as Promise<FunnelChunkRow[]>;
+  }
+  funnelItemsAwaitingOutcome(screenedBefore: number, limit: number): Promise<StoredFunnelItem[]> {
+    return this.query("funnelItemsAwaitingOutcome", { screenedBefore, limit }) as Promise<StoredFunnelItem[]>;
+  }
+  recordFunnelOutcome(input: { id: string; outcomeAt: number; outcomeUp: boolean; outcomePct: number }): Promise<unknown> {
+    return this.mutation("recordFunnelOutcome", { ...input });
   }
   recordCronRun(r: CronRunRecord): Promise<unknown> {
     return this.mutation("recordCronRun", { ...r });
