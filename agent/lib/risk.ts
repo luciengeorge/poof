@@ -58,20 +58,25 @@ export interface RunningState {
   newPositionsToday: number;
 }
 
-// "Full deploy, keep diversification": no idle-cash floor and large per-trade size so the
-// whole account can be put to work, but a per-name cap stops it going all-in on one stock.
-// The daily-loss + drawdown circuit breakers below are ruin-prevention and stay tight.
+// "Concentrate, deploy, keep the breakers": seven weeks live showed the picks had positive
+// expectancy (+0.8% mean per closed trade) while the account went nowhere, because the median
+// order was 10 GBP on a 250 GBP account and cash drifted to 84%. A perfect signal is invisible at
+// that size. The floor is now 15% of equity so a "probe" is rejected rather than placed, the
+// position cap is 4 so the floor and the cap agree (4 x ~22% fills the 90% target), and 10% cash
+// stays free for FX and fees. The daily-loss and drawdown breakers loosen to fit concentration:
+// at 4 names a single -16% day on one 25% position is a -4% account day, which under the old 4%
+// halt stopped the whole system for one stock's bad print. They remain ruin-prevention.
 // Every field is overridable per-deployment via resolveLimits()/TRADING_* env vars.
 export const DEFAULT_LIMITS: RiskLimits = {
   maxPerNamePct: 0.3,
-  maxDeployedPct: 1.0,
-  maxNewPositionsPerDay: 6,
-  minTradePct: 0.02,
+  maxDeployedPct: 0.9,
+  maxNewPositionsPerDay: 4,
+  minTradePct: 0.15,
   maxTradePct: 0.3,
-  dailyLossHaltPct: 0.04,
-  maxConcurrentPositions: 10,
+  dailyLossHaltPct: 0.06,
+  maxConcurrentPositions: 4,
   minPrice: 5,
-  maxDrawdownPct: 0.1,
+  maxDrawdownPct: 0.15,
   maxConsecutiveLossDays: 2,
 };
 

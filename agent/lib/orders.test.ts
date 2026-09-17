@@ -3,6 +3,11 @@ import assert from "node:assert/strict";
 import { evaluateAndExecute, type OrderExecClient, type Proposal } from "./orders.ts";
 import { T212Error, type CashBalance, type T212Position, type T212Order } from "./t212.ts";
 import { etDateString } from "./clock.ts";
+import { DEFAULT_LIMITS } from "./risk.ts";
+
+// Order-mechanics tests size at 5% of a 10,000 equity. The live floor is a sizing POLICY
+// (pinned in risk.test.ts); these tests are about execution, so they state their own limits.
+const TEST_LIMITS = { ...DEFAULT_LIMITS, minTradePct: 0.02, maxConcurrentPositions: 10 };
 
 function cash(free: number): CashBalance {
   return { total: free, free, blocked: 0, invested: 0, pieCash: 0, result: 0, ppl: 0 };
@@ -63,6 +68,7 @@ test("dry-run: accepted proposal is reported but not sent to T212", async () => 
     client,
     fx: FX,
     dryRun: true,
+    limits: TEST_LIMITS,
     resolveRiskState: async () => noState,
     resolvePrice: async () => 100,
   });
@@ -78,6 +84,7 @@ test("live: accepted proposal is sent with signed share quantity", async () => {
     client,
     fx: FX,
     dryRun: false,
+    limits: TEST_LIMITS,
     resolveRiskState: async () => noState,
     resolvePrice: async () => 100,
   });
@@ -115,6 +122,7 @@ test("risk gate rejects an oversize trade (not placed)", async () => {
     client,
     fx: FX,
     dryRun: false,
+    limits: TEST_LIMITS,
     resolveRiskState: async () => noState,
   });
   assert.equal(res.placed.length, 0);
@@ -130,6 +138,7 @@ test("precision: retries at the broker's allowed decimals and places", async () 
     client,
     fx: FX,
     dryRun: false,
+    limits: TEST_LIMITS,
     resolveRiskState: async () => noState,
     resolvePrice: async () => 7,
   });
@@ -146,6 +155,7 @@ test("precision: skips (not blind-fires) when qty rounds to 0 at whole-shares-on
     client,
     fx: FX,
     dryRun: false,
+    limits: TEST_LIMITS,
     resolveRiskState: async () => noState,
     resolvePrice: async () => 1000,
   });
@@ -162,6 +172,7 @@ test("reconciliation: skips a ticker that already has a pending order", async ()
     client,
     fx: FX,
     dryRun: false,
+    limits: TEST_LIMITS,
     resolveRiskState: async () => noState,
   });
   assert.equal(res.placed.length, 1);
@@ -175,7 +186,8 @@ test("halt: a tripped daily-loss state rejects everything", async () => {
     client,
     fx: FX,
     dryRun: false,
-    resolveRiskState: async () => ({ ...noState, dayPnl: -500 }), // -5% of 10000 > 4% cap
+    limits: TEST_LIMITS,
+    resolveRiskState: async () => ({ ...noState, dayPnl: -700 }), // -7% of 10000 > 6% cap
     resolvePrice: async () => 100,
   });
   assert.equal(res.placed.length, 0);
@@ -190,6 +202,7 @@ test("BUY is sized from the server price, not the model's price", async () => {
     client,
     fx: FX,
     dryRun: false,
+    limits: TEST_LIMITS,
     resolveRiskState: async () => noState,
     resolvePrice: async () => 102,
   });
@@ -206,6 +219,7 @@ test("BUY rejected when model price deviates >5% from server price", async () =>
     client,
     fx: FX,
     dryRun: false,
+    limits: TEST_LIMITS,
     resolveRiskState: async () => noState,
     resolvePrice: async () => 100,
   });
@@ -222,6 +236,7 @@ test("order intent: first real placement records an intent marker, keyed by ET-d
     client,
     fx: FX,
     dryRun: false,
+    limits: TEST_LIMITS,
     resolveRiskState: async () => noState,
     resolvePrice: async () => 100,
     hasOrderIntent: async () => false,
@@ -241,6 +256,7 @@ test("order intent: a second run with the same intent key already recorded skips
     client,
     fx: FX,
     dryRun: false,
+    limits: TEST_LIMITS,
     resolveRiskState: async () => noState,
     resolvePrice: async () => 100,
     hasOrderIntent: async () => true,
@@ -261,6 +277,7 @@ test("order intent: dry-run never records an intent marker", async () => {
     client,
     fx: FX,
     dryRun: true,
+    limits: TEST_LIMITS,
     resolveRiskState: async () => noState,
     resolvePrice: async () => 100,
     hasOrderIntent: async () => false,
@@ -279,6 +296,7 @@ test("BUY rejected fail-closed when resolvePrice throws", async () => {
     client,
     fx: FX,
     dryRun: false,
+    limits: TEST_LIMITS,
     resolveRiskState: async () => noState,
     resolvePrice: async () => {
       throw new Error("quote fetch failed");
@@ -305,6 +323,7 @@ test("T212 per-order rejection: skipped with the rejection reason, not thrown", 
     client: rejecting,
     fx: FX,
     dryRun: false,
+    limits: TEST_LIMITS,
     resolveRiskState: async () => noState,
     resolvePrice: async () => 100,
   });
@@ -334,6 +353,7 @@ test("T212 per-order rejection: one bad order doesn't abort the rest of the batc
       client: mixed,
       fx: FX,
       dryRun: false,
+      limits: TEST_LIMITS,
       resolveRiskState: async () => noState,
       resolvePrice: async () => 100,
     },
@@ -359,6 +379,7 @@ test("non-T212 / 5xx errors still throw: infra failures aren't swallowed as skip
       client: failing,
       fx: FX,
       dryRun: false,
+      limits: TEST_LIMITS,
       resolveRiskState: async () => noState,
       resolvePrice: async () => 100,
     }),
@@ -379,6 +400,7 @@ test("the top-of-cycle risk gate forces a fresh broker snapshot", async () => {
     client,
     fx: FX,
     dryRun: true,
+    limits: TEST_LIMITS,
     resolveRiskState: async () => noState,
     resolvePrice: async () => 100,
   });

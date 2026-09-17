@@ -178,8 +178,8 @@ test("resolveRiskState haltState: daily-loss breach maps to daily", async () => 
   };
   const { memory, mutationCalls } = fakeMemory(stored);
 
-  // dayPnl = 9500 - 10000 = -500 <= -4% * 9500 (-380); drawdown = 5% is within limit.
-  await resolveRiskState(9500, memory);
+  // dayPnl = 9300 - 10000 = -700 <= -6% * 9300 (-558); drawdown = 7% is within the 15% limit.
+  await resolveRiskState(9300, memory);
 
   assert.equal(mutationCalls.length, 1);
   assert.equal(mutationCalls[0].haltState, "daily");

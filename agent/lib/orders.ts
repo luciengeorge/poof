@@ -105,6 +105,8 @@ export interface Proposal {
   takeProfitPct?: number;
   trailingStopPct?: number;
   maxHoldDays?: number;
+  /** ISO date of the next earnings print, when one falls inside the hold window. Justifies a short hold. */
+  earningsDate?: string;
 }
 
 export interface PlacedResult {
