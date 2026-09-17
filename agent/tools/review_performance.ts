@@ -3,7 +3,9 @@ import { z } from "zod";
 import { t212FromEnv } from "../lib/t212.ts";
 import { finnhubFromEnv } from "../lib/data.ts";
 import { fxForCycle } from "../lib/fx.ts";
-import { brokerSnapshotWithFx, reconcileAccountValueGbp } from "../lib/execution.ts";
+import { brokerSnapshotWithFx, reconcileAccountValueGbp, t212TickerToFinnhubSymbol } from "../lib/execution.ts";
+import { jevFromEnv } from "../lib/jev.ts";
+import { thesisBreakCheck, thesisBreakFlags } from "../lib/thesis-break.ts";
 import { etDateString } from "../lib/clock.ts";
 import { memoryFromEnv } from "../lib/memory.ts";
 import { tradingEnv } from "../lib/risk-runtime.ts";
@@ -60,7 +62,8 @@ export default defineTool({
       }[];
 
     const now = Date.now();
-    const managed = buildManagedPositions(positions, openBuys, fxRate).map((m) => {
+    const rawManaged = buildManagedPositions(positions, openBuys, fxRate);
+    const managed = rawManaged.map((m) => {
       const lv = effectiveLevels(m, DEFAULT_EXITS);
       return {
         ticker: m.ticker,
@@ -79,6 +82,30 @@ export default defineTool({
         maxHoldDays: lv.maxHoldDays,
       };
     });
+
+    // Thesis-break check, one Jev call per position with news since entry. Annotation only: the
+    // flag asks the agent to decide, it never sells. Best-effort per position, and byte-for-byte
+    // the old output when Jev is unconfigured.
+    const jev = jevFromEnv();
+    const annotated = await Promise.all(
+      managed.map(async (position, i) => {
+        const source = rawManaged[i];
+        if (!jev || !source?.openedAt || !source.thesis) return position;
+        try {
+          const symbol = t212TickerToFinnhubSymbol(source.ticker);
+          if (!symbol) return position;
+          const fromISO = new Date(source.openedAt).toISOString().slice(0, 10);
+          const toISO = new Date(now).toISOString().slice(0, 10);
+          const news = await finnhubFromEnv().getCompanyNews(symbol, fromISO, toISO);
+          const check = await thesisBreakCheck(jev, { ticker: source.ticker, thesis: source.thesis, openedAt: source.openedAt, news });
+          if (!check) return position;
+          return { ...position, thesisBreak: { risk: check.risk, headlinesConsidered: check.headlinesConsidered, topHeadline: check.topHeadline } };
+        } catch (err) {
+          console.warn(`[jev] thesis-break skipped for ${source.ticker}:`, err);
+          return position;
+        }
+      }),
+    );
 
     const realized = realizedStats(closedTrades);
     // Per-strategy-type realized stats, so decisions can bias toward tags with positive
@@ -120,7 +147,10 @@ export default defineTool({
       snapshotTakenAt: brokerSnapshot.takenAt,
       fx: { rate: fxRate, source: fx.source, fallbackUsed: fx.source === "fallback" },
       accountValueReconciliation,
-      openPositions: managed,
+      openPositions: annotated,
+      // Positions whose thesis Jev judges undermined by news since entry. A prompt to decide,
+      // not an order; the exit engine is untouched.
+      thesisBreakFlags: thesisBreakFlags(annotated),
       realized,
       realizedByTag,
       // WHERE the money actually went, across the whole closed record rather than this cycle.
