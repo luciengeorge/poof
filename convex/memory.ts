@@ -35,6 +35,8 @@ export const recordTrade = mutation({
     redTeamVerdict: v.optional(v.string()),
     strategyTag: v.optional(v.string()),
     predictedConfidence: v.optional(v.number()),
+    jevConfidence: v.optional(v.number()),
+    jevModel: v.optional(v.string()),
     status: v.string(),
     stopLossPct: v.optional(v.number()),
     takeProfitPct: v.optional(v.number()),

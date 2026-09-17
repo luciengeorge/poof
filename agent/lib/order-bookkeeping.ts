@@ -30,6 +30,9 @@ export function buildRecordTradeArgs(placed: PlacedResult[], env: Env): TradeRec
     strategyTag: p.proposal.strategyTag,
     // Carried through so calibration can score the claim against the realised outcome later.
     predictedConfidence: p.proposal.confidence,
+    ...(p.proposal.jevConfidence !== undefined
+      ? { jevConfidence: p.proposal.jevConfidence, jevModel: p.proposal.jevModel }
+      : {}),
     status: p.skipped ? "skipped" : p.dryRun ? "dry-run" : PLACED_STATUS,
     stopLossPct: p.proposal.stopLossPct,
     takeProfitPct: p.proposal.takeProfitPct,

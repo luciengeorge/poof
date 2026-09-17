@@ -132,6 +132,9 @@ export default defineTool({
       // number and a named verdict rather than an impression, because language confidence is
       // routinely miscalibrated as probability.
       calibration: calibrationFrom(closedTrades),
+      // The same scoring applied to Jev's shadow forecast. Two Brier scores side by side is the
+      // only honest basis for ever letting Jev's number influence a trade; until then it is data.
+      jevCalibration: calibrationFrom(closedTrades, "jevConfidence"),
       benchmark,
       spyPrice,
       alpha,

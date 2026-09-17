@@ -26,6 +26,8 @@ export interface ScoredTradeLike {
   status: string;
   /** What the agent claimed at entry, 0..1. Absent for trades opened before this was recorded. */
   predictedConfidence?: number;
+  /** Jev's shadow forecast of the same outcome, scored the same way so the two can be compared. */
+  jevConfidence?: number;
   /** Realised P&L in GBP. Absent means the outcome was never established. */
   pnl?: number;
 }
@@ -82,7 +84,13 @@ const BUCKETS: { label: string; min: number; max: number }[] = [
 
 const mean = (xs: readonly number[]): number => xs.reduce((a, b) => a + b, 0) / xs.length;
 
-export function calibrationFrom(trades: readonly ScoredTradeLike[]): CalibrationResult {
+/** Which forecaster to score. The agent's own claim by default; Jev's shadow when asked. */
+export type ForecastField = "predictedConfidence" | "jevConfidence";
+
+export function calibrationFrom(
+  trades: readonly ScoredTradeLike[],
+  field: ForecastField = "predictedConfidence",
+): CalibrationResult {
   // `closed-estimated` is EXCLUDED here, and that differs from attribution.ts on purpose. This
   // module scores a FORECAST, so it needs an outcome that actually happened at a known price; an
   // outcome reconstructed from the last observed price would make the Brier score look precise
@@ -96,7 +104,7 @@ export function calibrationFrom(trades: readonly ScoredTradeLike[]): Calibration
   // unscoreable forecast is information, and hiding it would repeat the very failure this module
   // was built to expose.
   const withConfidence = trades.filter(
-    (t) => typeof t.predictedConfidence === "number" && t.status.startsWith("closed"),
+    (t) => typeof t[field] === "number" && t.status.startsWith("closed"),
   );
   const scored = withConfidence.filter((t) => outcomeKind(t) === "real");
   const unknownOutcomes = withConfidence.length - scored.length;
@@ -114,7 +122,7 @@ export function calibrationFrom(trades: readonly ScoredTradeLike[]): Calibration
     };
   }
 
-  const predictions = scored.map((t) => t.predictedConfidence as number);
+  const predictions = scored.map((t) => t[field] as number);
   const outcomes = scored.map((t) => ((t.pnl as number) > 0 ? 1 : 0));
   const hitRate = mean(outcomes);
   const meanPredicted = mean(predictions);

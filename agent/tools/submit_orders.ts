@@ -10,6 +10,8 @@ import { finnhubFromEnv } from "../lib/data.ts";
 import { t212TickerToFinnhubSymbol } from "../lib/execution.ts";
 import { buildRecordTradeArgs } from "../lib/order-bookkeeping.ts";
 import { applyHoldFloor } from "../lib/hold-floor.ts";
+import { jevFromEnv } from "../lib/jev.ts";
+import { shadowConfidence } from "../lib/jev-shadow.ts";
 import { STRATEGY_TAGS } from "../lib/positions.ts";
 import {
   externalHoldingSymbols,
@@ -166,6 +168,22 @@ export default defineTool({
         dryRun: isDryRun(),
         skipped: EXTERNAL_HOLDING_SKIP_REASON,
       });
+    }
+
+    // SHADOW forecast: ask Jev the same question the agent answered with `confidence`, for every
+    // BUY that was actually placed, and record it beside the claim. It is scored by calibration.ts
+    // against the realised outcome and influences nothing. Best-effort and after the gate on
+    // purpose: an observer must not be able to delay or block an order.
+    const jev = jevFromEnv();
+    if (jev) {
+      await Promise.all(
+        result.placed
+          .filter((p) => p.proposal.side === "BUY" && !p.skipped)
+          .map(async (p) => {
+            const shadow = await shadowConfidence(jev, p.proposal);
+            if (shadow) Object.assign(p.proposal, shadow);
+          }),
+      );
     }
 
     // Record every placed/simulated trade to durable memory. Best-effort:

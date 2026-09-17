@@ -55,6 +55,11 @@ export default defineSchema({
     // "The Alpha Illusion" (arXiv 2605.16895) protocol P4: language confidence is routinely
     // miscalibrated as trading probability, and the only way to know is to score forecasts.
     predictedConfidence: v.optional(v.number()),
+    // Jev's SHADOW forecast of the same thing, 0..1, recorded beside the agent's claim and scored
+    // the same way. It influences nothing; it is measured. jevModel pins which version answered,
+    // because a calibration measured against a moving alias is not a measurement.
+    jevConfidence: v.optional(v.number()),
+    jevModel: v.optional(v.string()),
     // The last price actually OBSERVED while this position was still visible at the broker, and
     // when. Written every cycle so a position that later vanishes (a manual sale, or a pending sell
     // that finally filled) can be reconciled against something real. Distinct from `peakPrice`,
