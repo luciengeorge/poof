@@ -353,6 +353,51 @@ export default defineSchema({
   // holding can be many multiples of the Trading 212 account, so leaking it into
   // accountValueGbp would authorise wildly oversized orders and compute the drawdown /
   // daily-loss breakers against the wrong base. Read only by review_external_holdings.
+  /**
+   * The wide funnel: every headline in the universe, screened by Jev before the cycle.
+   *
+   * One row per (day, url). `score` is computed in code from the Jev signals (funnel-score.ts).
+   * `higherIn10d` is the shadow answer to the question the crowd is excited about, "will this
+   * stock be higher in ten trading days?", recorded so it can be scored, never acted on;
+   * `outcomeUp` and `outcomePct` are filled in later from real prices.
+   */
+  funnelItems: defineTable({
+    day: v.string(),
+    ticker: v.string(),
+    headline: v.string(),
+    summary: v.string(),
+    source: v.string(),
+    url: v.string(),
+    publishedAt: v.number(),
+    screenedAt: v.number(),
+    model: v.string(),
+    freshCatalyst: v.number(),
+    pricedIn: v.number(),
+    strategyTag: v.string(),
+    strategyTagConfidence: v.number(),
+    higherIn10d: v.number(),
+    score: v.number(),
+    // Outcome scoring for the directional shadow, filled once ten trading days have passed.
+    outcomeAt: v.optional(v.number()),
+    outcomeUp: v.optional(v.boolean()),
+    outcomePct: v.optional(v.number()),
+  })
+    .index("by_day_and_score", ["day", "score"])
+    .index("by_day_and_url", ["day", "url"])
+    .index("by_outcome_and_screened", ["outcomeAt", "screenedAt"]),
+
+  /** Which slice of the universe each funnel fire took, so four jittered crons cover it exactly once. */
+  funnelChunks: defineTable({
+    day: v.string(),
+    chunk: v.number(),
+    status: v.string(), // "started" | "done" | "failed"
+    startedAt: v.number(),
+    finishedAt: v.optional(v.number()),
+    tickers: v.optional(v.number()),
+    items: v.optional(v.number()),
+    note: v.optional(v.string()),
+  }).index("by_day", ["day"]),
+
   externalHoldings: defineTable({
     env: v.string(),
     ticker: v.string(),

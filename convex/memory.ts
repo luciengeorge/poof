@@ -1183,3 +1183,159 @@ export const recallRecent = query({
     return { cycles, trades, messages, riskState, benchmark, lessons };
   },
 });
+
+
+// --- wide funnel (Jev-screened universe news) ---
+
+/** Re-claim a chunk that started this long ago and never finished: the fire that took it died. */
+const FUNNEL_CHUNK_STALE_MS = 25 * 60 * 1_000;
+
+/**
+ * Hand out the next unclaimed chunk for the day, atomically.
+ *
+ * Four schedules fire for one day and Hobby jitters each by up to an hour, so their order is not
+ * knowable. Each fire simply takes the lowest chunk nobody has, and the day is covered exactly
+ * once whatever order they arrive in.
+ */
+export const claimFunnelChunk = mutation({
+  args: { token: v.string(), day: v.string(), chunks: v.number(), now: v.number() },
+  returns: v.union(v.null(), v.object({ chunk: v.number(), id: v.id("funnelChunks") })),
+  handler: async (ctx, args) => {
+    assertSecret(args.token);
+    const rows = await ctx.db
+      .query("funnelChunks")
+      .withIndex("by_day", (q) => q.eq("day", args.day))
+      .collect();
+    for (let chunk = 0; chunk < args.chunks; chunk += 1) {
+      const existing = rows.find((r) => r.chunk === chunk);
+      if (!existing) {
+        const id = await ctx.db.insert("funnelChunks", {
+          day: args.day,
+          chunk,
+          status: "started",
+          startedAt: args.now,
+        });
+        return { chunk, id };
+      }
+      const stale = existing.status === "started" && args.now - existing.startedAt > FUNNEL_CHUNK_STALE_MS;
+      if (existing.status === "failed" || stale) {
+        await ctx.db.patch(existing._id, { status: "started", startedAt: args.now, note: "re-claimed" });
+        return { chunk, id: existing._id };
+      }
+    }
+    return null;
+  },
+});
+
+export const finishFunnelChunk = mutation({
+  args: {
+    token: v.string(),
+    id: v.id("funnelChunks"),
+    status: v.union(v.literal("done"), v.literal("failed")),
+    finishedAt: v.number(),
+    tickers: v.number(),
+    items: v.number(),
+    note: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    assertSecret(args.token);
+    const { token, id, ...rest } = args;
+    await ctx.db.patch(id, rest);
+  },
+});
+
+const funnelItemArgs = {
+  day: v.string(),
+  ticker: v.string(),
+  headline: v.string(),
+  summary: v.string(),
+  source: v.string(),
+  url: v.string(),
+  publishedAt: v.number(),
+  screenedAt: v.number(),
+  model: v.string(),
+  freshCatalyst: v.number(),
+  pricedIn: v.number(),
+  strategyTag: v.string(),
+  strategyTagConfidence: v.number(),
+  higherIn10d: v.number(),
+  score: v.number(),
+};
+
+/** Insert screened items, skipping any (day, url) already stored so a re-claimed chunk cannot duplicate. */
+export const upsertFunnelItems = mutation({
+  args: { token: v.string(), items: v.array(v.object(funnelItemArgs)) },
+  returns: v.object({ inserted: v.number(), skipped: v.number() }),
+  handler: async (ctx, args) => {
+    assertSecret(args.token);
+    let inserted = 0;
+    let skipped = 0;
+    for (const item of args.items) {
+      const dupe = await ctx.db
+        .query("funnelItems")
+        .withIndex("by_day_and_url", (q) => q.eq("day", item.day).eq("url", item.url))
+        .first();
+      if (dupe) {
+        skipped += 1;
+        continue;
+      }
+      await ctx.db.insert("funnelItems", item);
+      inserted += 1;
+    }
+    return { inserted, skipped };
+  },
+});
+
+export const topFunnelItems = query({
+  args: { token: v.string(), day: v.string(), limit: v.number() },
+  handler: async (ctx, args) => {
+    assertSecret(args.token);
+    const limit = Math.min(Math.max(args.limit, 1), 50);
+    return await ctx.db
+      .query("funnelItems")
+      .withIndex("by_day_and_score", (q) => q.eq("day", args.day))
+      .order("desc")
+      .take(limit);
+  },
+});
+
+export const funnelChunksForDay = query({
+  args: { token: v.string(), day: v.string() },
+  handler: async (ctx, args) => {
+    assertSecret(args.token);
+    return await ctx.db
+      .query("funnelChunks")
+      .withIndex("by_day", (q) => q.eq("day", args.day))
+      .collect();
+  },
+});
+
+/** Items old enough to be scored and not yet scored. `outcomeAt` unset sorts first on the index. */
+export const funnelItemsAwaitingOutcome = query({
+  args: { token: v.string(), screenedBefore: v.number(), limit: v.number() },
+  handler: async (ctx, args) => {
+    assertSecret(args.token);
+    const limit = Math.min(Math.max(args.limit, 1), 100);
+    return await ctx.db
+      .query("funnelItems")
+      .withIndex("by_outcome_and_screened", (q) =>
+        q.eq("outcomeAt", undefined).lt("screenedAt", args.screenedBefore),
+      )
+      .take(limit);
+  },
+});
+
+export const recordFunnelOutcome = mutation({
+  args: {
+    token: v.string(),
+    id: v.id("funnelItems"),
+    outcomeAt: v.number(),
+    outcomeUp: v.boolean(),
+    outcomePct: v.number(),
+  },
+  handler: async (ctx, args) => {
+    assertSecret(args.token);
+    const { token, id, ...rest } = args;
+    await ctx.db.patch(id, rest);
+  },
+});
