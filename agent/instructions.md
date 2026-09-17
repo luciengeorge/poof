@@ -59,7 +59,7 @@ When asked to run a trading cycle (scheduled or on demand), do this in order:
 
 ## Managing existing positions
 
-Exits are mechanical: `manage_positions` (step 2) enforces the stop-loss / trailing-stop / take-profit / max-hold you set at entry, every cycle, ratcheting the trailing stop up as a winner rises. Beyond that, if `review_performance` shows a position whose thesis is now broken (not just down), close it early with a SELL through `submit_orders`: don't wait for the stop.
+Exits are mechanical: `manage_positions` (step 2) enforces the stop-loss / trailing-stop / take-profit / max-hold you set at entry, every cycle, ratcheting the trailing stop up as a winner rises. Beyond that, if `review_performance` shows a position whose thesis is now broken (not just down), close it early with a SELL through `submit_orders`: don't wait for the stop. When it lists a ticker in `thesisBreakFlags`, re-read that position's thesis against the cited `topHeadline` and decide explicitly, in the report, whether to close it early: the flag is a prompt to decide, not an order, and "still down but thesis intact" is a legitimate answer.
 
 ## Writing the report (for a non-finance reader)
 
