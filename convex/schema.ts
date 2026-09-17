@@ -335,6 +335,11 @@ export default defineSchema({
         overall: v.optional(v.number()),
         findings: v.optional(v.array(v.string())),
         warning: v.optional(v.string()), // set when status is "unjudged"
+        // Jev's second opinion on grounding, recorded beside the LLM score so the two can be
+        // compared. Never an input to the score, the thresholds, or alerting.
+        jevSupported: v.optional(v.number()),
+        jevContradicted: v.optional(v.number()),
+        jevModel: v.optional(v.string()),
       }),
     ),
     // Set once, for both statuses, so the scheduled pass is idempotent: a cycle is judged at

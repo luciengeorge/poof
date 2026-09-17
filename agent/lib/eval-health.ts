@@ -55,6 +55,10 @@ export interface StoredReportScore {
   overall?: number;
   findings?: string[];
   warning?: string;
+  /** Jev's second opinion on grounding, when it was recorded beside the LLM score. */
+  jevSupported?: number;
+  jevContradicted?: number;
+  jevModel?: string;
 }
 
 /** The subset of a stored cycle trace this aggregation reads. */
@@ -125,6 +129,8 @@ export type ReportQualityTrend = "improving" | "declining" | "flat" | "insuffici
 export interface ReportQualityHealth {
   /** Cycles with a usable verdict. */
   judged: number;
+  /** Mean of Jev's grounding opinion over the judged cycles that carried one. */
+  jevGrounding: { supported: number; contradicted: number; n: number } | null;
   /** Cycles the judge pass has not reached yet. */
   notJudged: number;
   /** Cycles the judge answered unusably. Recorded as unjudged, never as a passing score. */
@@ -324,7 +330,18 @@ function aggregateReportQuality(
       findings: score.findings ?? [],
     }));
 
-  return { judged: judged.length, notJudged, unjudged, averages, trend, lowGrounding };
+  const withJev = judged.filter(
+    ({ score }) => typeof score.jevSupported === "number" && typeof score.jevContradicted === "number",
+  );
+  const jevGrounding =
+    withJev.length === 0
+      ? null
+      : {
+          supported: round2(mean(withJev.map(({ score }) => score.jevSupported as number))),
+          contradicted: round2(mean(withJev.map(({ score }) => score.jevContradicted as number))),
+          n: withJev.length,
+        };
+  return { judged: judged.length, notJudged, unjudged, averages, trend, lowGrounding, jevGrounding };
 }
 
 /**
@@ -427,6 +444,14 @@ function cycleLabel(entry: CycleRef): string {
  */
 export function formatEvalHealth(health: EvalHealth): string[] {
   const lines: string[] = ["EVAL HEALTH (online evals, observe only)"];
+  const jg = health.reportQuality.jevGrounding;
+  if (jg) {
+    // Beside the LLM judge, not instead of it. Two readings of the same cycles is the evidence
+    // that would justify leaning on the cheap one later.
+    lines.push(
+      `- Jev grounding (second opinion, n=${jg.n}): supported ${jg.supported}, contradicted ${jg.contradicted}`,
+    );
+  }
 
   if (health.cycles === 0) {
     lines.push(

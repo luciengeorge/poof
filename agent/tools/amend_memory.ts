@@ -3,6 +3,8 @@ import { z } from "zod";
 import { memoryFromEnv } from "../lib/memory.ts";
 import { tradingEnv } from "../lib/risk-runtime.ts";
 import { MAX_EDITS_PER_CYCLE } from "../../convex/memoryPolicy.ts";
+import { jevFromEnv } from "../lib/jev.ts";
+import { jevDurabilityCheck } from "../lib/jev-durability.ts";
 
 /**
  * The ONLY way to change durable memory, and deliberately a narrow one.
@@ -83,7 +85,20 @@ export default defineTool({
     if (edits.length === 0) return { applied: [], decisions: [], note: "no edits proposed" };
     try {
       const outcome = await memoryFromEnv().applyMemoryEdits(tradingEnv(), edits, sourceCycle);
-      return outcome;
+      // Jev's read on whether each proposed lesson is durable, attached to the result (and so to
+      // the cycle trace) beside the gate's decision. It admits and refuses nothing; the policy in
+      // code and the memory_gate keep that job.
+      const jev = jevFromEnv();
+      if (!jev) return outcome;
+      const jevDurability = await Promise.all(
+        edits
+          .filter((e): e is Extract<typeof e, { op: "add" }> => e.op === "add")
+          .map(async (e) => {
+            const d = await jevDurabilityCheck(jev, { condition: e.condition, action: e.action, reason: e.reason });
+            return { id: e.id, ...(d ? { durable: d.durable, model: d.model } : { unavailable: true }) };
+          }),
+      );
+      return { ...outcome, jevDurability };
     } catch (err) {
       // Non-fatal, like every other memory write: a cycle must still trade and report.
       console.warn("[memory] applyMemoryEdits failed (non-fatal):", err);
