@@ -1009,6 +1009,9 @@ export const saveReportScore = mutation({
     overall: v.optional(v.number()),
     findings: v.optional(v.array(v.string())),
     warning: v.optional(v.string()),
+    jevSupported: v.optional(v.number()),
+    jevContradicted: v.optional(v.number()),
+    jevModel: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     assertSecret(args.token);
@@ -1065,6 +1068,9 @@ export const saveReportScore = mutation({
         // Scores are dropped entirely on an unjudged verdict, so no partial number can later be
         // mistaken for a grade.
         ...(status === "judged" ? dimensions : {}),
+        ...(status === "judged" && typeof args.jevSupported === "number" && typeof args.jevContradicted === "number"
+          ? { jevSupported: args.jevSupported, jevContradicted: args.jevContradicted, jevModel: args.jevModel }
+          : {}),
         findings,
         warning:
           args.warning === undefined

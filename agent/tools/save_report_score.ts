@@ -11,6 +11,9 @@ import {
   unjudgeableVerdict,
 } from "../lib/report-judge.ts";
 import { tradingEnv } from "../lib/risk-runtime.ts";
+import { jevFromEnv } from "../lib/jev.ts";
+import { jevGroundingCheck } from "../lib/jev-grounding.ts";
+import { judgeGroundTruth } from "../lib/report-judge.ts";
 
 /**
  * ONLINE EVALS, step 2 of the weekly report-quality judge pass: persist one verdict.
@@ -72,10 +75,29 @@ export default defineTool({
     const summary = summarizeJudgeVerdict(parsed);
 
     const key = { env: tradingEnv(), sessionId, turnId };
+
+    // Jev's second opinion on grounding, computed from the same stored trace the LLM judge read,
+    // and stored beside its score. Best-effort: it can add fields to a judged verdict, never
+    // change one, and never decide whether the verdict is stored or alerted on.
+    let jevGrounding: { jevSupported: number; jevContradicted: number; jevModel: string } | undefined;
+    const jev = jevFromEnv();
+    if (jev && parsed.status === "judged") {
+      try {
+        const trace = await memoryFromEnv().getCycleTrace(key);
+        if (trace?.reportText) {
+          const gt = judgeGroundTruth(trace);
+          const g = await jevGroundingCheck(jev, { reportText: trace.reportText, groundTruth: gt, coverage: gt.coverage });
+          if (g) jevGrounding = { jevSupported: g.supported, jevContradicted: g.contradicted, jevModel: g.model };
+        }
+      } catch (err) {
+        console.warn("[online-eval] Jev grounding skipped (non-fatal):", err);
+      }
+    }
+
     const result = await memoryFromEnv().saveReportScore(
       key,
       parsed.status === "judged"
-        ? { status: "judged", ...parsed.score }
+        ? { status: "judged", ...parsed.score, ...(jevGrounding ?? {}) }
         : {
             status: "unjudged",
             findings: [],
