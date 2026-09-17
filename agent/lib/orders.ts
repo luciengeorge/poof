@@ -107,6 +107,9 @@ export interface Proposal {
   maxHoldDays?: number;
   /** ISO date of the next earnings print, when one falls inside the hold window. Justifies a short hold. */
   earningsDate?: string;
+  /** Set by submit_orders after placement, from Jev. Shadow only: recorded, scored, never acted on. */
+  jevConfidence?: number;
+  jevModel?: string;
 }
 
 export interface PlacedResult {

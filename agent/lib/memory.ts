@@ -30,6 +30,9 @@ export interface TradeRecord {
   thesis: string;
   /** Claimed probability of success at entry, 0..1. Scored by agent/lib/calibration.ts on close. */
   predictedConfidence?: number;
+  /** Jev's shadow forecast of the same outcome, recorded to be scored, never acted on. */
+  jevConfidence?: number;
+  jevModel?: string;
   redTeamVerdict?: string;
   strategyTag?: string;
   status: string;
