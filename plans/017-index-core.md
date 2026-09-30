@@ -266,8 +266,8 @@ broker's positions (constraint 3) and sizing with `fxForHolding` (rate 1).
   pending the next morning; the next cycle must not stack another.
 - **Bootstrap**: if VUAG is not held and not pending, the path must NOT guess a
   price. Return a clear "core not bootstrapped" status and do nothing. The
-  reviewer performs the bootstrap manually after merge. Do not implement an
-  automatic fixed-quantity blind order.
+  reviewer performs the bootstrap after merge with `scripts/bootstrap-core.ts`.
+  Do not implement an automatic fixed-quantity blind order.
 - **Funding**: in `submit_orders`, after validation, for BUYs rejected with
   `insufficient cash`, sum the shortfall, call the funding sale once, and add a
   clear note to the tool result ("raised £X from the index core; the stock can be
@@ -348,12 +348,16 @@ Stop and report back (do not improvise) if:
 
 ## Maintenance notes
 
-- **Rollout, by the reviewer, after merge, in order**: (1) deploy with
-  `DRY_RUN` on and read one cycle's core decisions; (2) buy a small amount of
-  VUAG by hand (a few pounds) to bootstrap the price, and confirm fractional
-  quantities are accepted; (3) read the contract note and confirm there is **no
-  FX fee** on a GBP instrument; (4) rebase the benchmark to VUAG at that day's
-  equity and VUAG price; (5) switch `DRY_RUN` off.
+- **Rollout, by the reviewer, after merge, in order**: (1) deploy; the core
+  path stays inert until VUAG is held; (2) run
+  `scripts/bootstrap-core.ts --env live --apply`, which checks the GBP quote and
+  buys the 0.05-share floor, and confirm the fractional quantity was accepted; (3)
+  read the contract note and confirm there is **no FX fee** on a GBP instrument;
+  (4) run `sweepCore` locally with `dryRun: true` against the live broker to
+  confirm sizing; (5) rebase the benchmark to VUAG at that day's equity and VUAG
+  price; the next cycle performs the first real sweep. Do not run a production
+  `DRY_RUN` cycle: it simulates exits too, suspending real stop-losses on open
+  positions.
 - **Beta goes to about 1.** The account will now follow the market down as well
   as up. That is the owner's intended trade, not a regression.
 - **Halts will fire on market moves.** The drawdown and consecutive-loss halts
