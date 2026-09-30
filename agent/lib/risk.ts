@@ -1,3 +1,5 @@
+import { isCore } from "./core.ts";
+
 export type Side = "BUY" | "SELL";
 
 export interface RiskLimits {
@@ -136,10 +138,13 @@ export function evaluateBuy(
     return `per-name concentration ${((resultingName / p.equity) * 100).toFixed(1)}% exceeds ${(limits.maxPerNamePct * 100).toFixed(0)}%`;
   }
 
-  const resultingCash = running.cash - order.notional;
-  const minCash = (1 - limits.maxDeployedPct) * p.equity;
-  if (resultingCash < minCash) {
-    return `would breach cash floor (deployed > ${(limits.maxDeployedPct * 100).toFixed(0)}%)`;
+  // The deployed cap bounds the STOCK SLEEVE. Idle money now waits in the index core rather than
+  // in cash, so a floor on cash would reject every stock buy once the core had swept it up; the
+  // core is the remainder of equity, not the risk this cap exists to limit.
+  let stockSleeve = 0;
+  for (const value of running.valueByTicker.values()) stockSleeve += value;
+  if (stockSleeve + order.notional > limits.maxDeployedPct * p.equity) {
+    return `would breach deployed cap (stocks > ${(limits.maxDeployedPct * 100).toFixed(0)}% of equity)`;
   }
 
   const isNew = !running.valueByTicker.has(order.ticker);
@@ -167,10 +172,14 @@ export function validateOrders(
   const accepted: ProposedOrder[] = [];
   const rejected: Rejection[] = [];
 
+  // Stock limits see stocks only. The index core is not a position the sleeve chose: counted,
+  // it would take one of the stock slots and fill the deployed cap by itself. Equity stays the
+  // broker's total, core included, so every percentage is still a share of the whole account.
+  const stocks = p.positions.filter((pos) => !isCore(pos.ticker));
   const running: RunningState = {
     cash: p.cash,
-    valueByTicker: new Map(p.positions.map((pos) => [pos.ticker, pos.value])),
-    distinctPositions: p.positions.length,
+    valueByTicker: new Map(stocks.map((pos) => [pos.ticker, pos.value])),
+    distinctPositions: stocks.length,
     newPositionsToday: p.newPositionsToday,
   };
 
