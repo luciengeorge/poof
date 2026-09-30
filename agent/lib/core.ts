@@ -22,6 +22,11 @@
 import { roundQuantity } from "./execution.ts";
 
 export const CORE_TICKER = "VUAGl_EQ";
+/**
+ * Enforced once, at bootstrap, by coreCurrencyProblem (scripts/bootstrap-core.ts), not on every
+ * cycle: instrument metadata is rate-limited to about one call a minute, and a listing's quote
+ * currency does not change. Everything downstream (fxForHolding returning 1) assumes it is GBP.
+ */
 export const CORE_QUOTE_CURRENCY = "GBP";
 
 /** Cash left free, as a fraction of equity, for FX fees on stock buys, rounding, and drift. */
@@ -86,4 +91,20 @@ export function fundingSale(args: {
   const target = args.shortfall + CORE_CASH_BUFFER_PCT * args.equity;
   const wanted = target / (args.corePrice * (1 - CORE_PRICE_MARGIN));
   return roundQuantity(Math.min(wanted, sellable), args.precision);
+}
+
+/**
+ * Why the core must not be bought, or null when Trading 212 confirms it quotes in pounds. A GBX
+ * (pence) quote read as pounds would misvalue the core a hundredfold, which is the single mistake
+ * fxForHolding's hard-coded rate of 1 cannot survive. Pure, so the guard is tested, not assumed.
+ */
+export function coreCurrencyProblem(
+  instruments: readonly { ticker: string; currencyCode?: string }[],
+): string | null {
+  const core = instruments.find((i) => i.ticker === CORE_TICKER);
+  if (!core) return `${CORE_TICKER} is not in Trading 212's instrument list`;
+  if (core.currencyCode !== CORE_QUOTE_CURRENCY) {
+    return `${CORE_TICKER} quotes in ${String(core.currencyCode)}, not ${CORE_QUOTE_CURRENCY}; refusing to value it as pounds`;
+  }
+  return null;
 }

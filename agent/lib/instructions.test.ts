@@ -23,6 +23,8 @@ const FORBIDDEN = [
   "80-90% of the account",
   "Bias to act",
   "LSE-listed UCITS",
+  // Once the benchmark is switched to the core, alpha is no longer measured against SPY.
+  "alpha vs buy-and-hold SPY",
 ];
 
 for (const phrase of FORBIDDEN) {

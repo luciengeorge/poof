@@ -6,6 +6,7 @@ import {
   CORE_MIN_ORDER_GBP,
   CORE_PRICE_MARGIN,
   CORE_TICKER,
+  coreCurrencyProblem,
   fundingSale,
   fxForHolding,
   isCore,
@@ -113,4 +114,13 @@ test("fundingSale refuses a bad price or equity rather than guessing", () => {
   assert.equal(fund({ corePrice: 0 }), 0);
   assert.equal(fund({ corePrice: Number.NaN }), 0);
   assert.equal(fund({ equity: Number.NaN }), 0);
+});
+
+test("the core is only bought once Trading 212 confirms it quotes in pounds", () => {
+  assert.equal(coreCurrencyProblem([{ ticker: CORE_TICKER, currencyCode: "GBP" }]), null);
+  // GBX is pence: read as pounds it would misvalue the core a hundredfold.
+  assert.match(coreCurrencyProblem([{ ticker: CORE_TICKER, currencyCode: "GBX" }]) ?? "", /GBX/);
+  assert.match(coreCurrencyProblem([{ ticker: CORE_TICKER, currencyCode: "USD" }]) ?? "", /USD/);
+  assert.match(coreCurrencyProblem([{ ticker: "OTHERl_EQ", currencyCode: "GBP" }]) ?? "", /not in/);
+  assert.match(coreCurrencyProblem([]) ?? "", /not in/);
 });
