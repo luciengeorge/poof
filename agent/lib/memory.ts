@@ -86,6 +86,8 @@ export interface BenchmarkRecord {
   inceptionDate: string;
   /** USD -> GBP at inception. Absent on baselines captured before it was recorded. */
   inceptionFxRate?: number;
+  /** The index core's ticker when measured against it; absent for the legacy SPY baseline. */
+  benchmarkTicker?: string;
 }
 
 /** One index-core order (agent/lib/core-orders.ts). Never a trade: see the coreOrders table. */

@@ -156,6 +156,10 @@ export default defineSchema({
     // OPTIONAL for the same reason as `cycles.fxRate` above: the table is populated and the
     // stored row predates this field. Only `convex deploy` validates against existing rows.
     inceptionFxRate: v.optional(v.number()),
+    // "VUAGl_EQ" measures the account against the index core itself (GBP, total return): the
+    // stored inception price is then the core's GBP price and the FX rate is 1. Absent means the
+    // legacy SPY baseline. OPTIONAL because the table is populated.
+    benchmarkTicker: v.optional(v.string()),
     updatedAt: v.number(),
   }).index("by_env", ["env"]),
 

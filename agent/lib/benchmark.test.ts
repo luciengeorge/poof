@@ -1,7 +1,14 @@
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
-import { computeAlpha, rebaseForCashFlow, type Benchmark } from "./benchmark.ts";
+import {
+  alphaVsCore,
+  computeAlpha,
+  isCoreBenchmark,
+  rebaseForCashFlow,
+  type Benchmark,
+} from "./benchmark.ts";
+import { CORE_TICKER } from "./core.ts";
 
 const closeTo = (actual: number, expected: number, tol = 1e-9) =>
   assert.ok(
@@ -246,4 +253,56 @@ test("the fallback FX rate never reaches computeAlpha labelled as GBP (structura
 
   const script = readFileSync(new URL("../../scripts/rebase-benchmark.ts", import.meta.url), "utf8");
   assert.match(script, /resolved\.source === "fallback"/, "the rebase preview must gate too");
+});
+
+// --- measured against the index core itself ---
+
+const coreBaseline: Benchmark = {
+  inceptionEquity: 1000,
+  inceptionSpyPrice: 95.5, // the core's GBP price at inception
+  inceptionDate: "2026-10-01",
+  inceptionFxRate: 1,
+  benchmarkTicker: CORE_TICKER,
+};
+
+test("isCoreBenchmark: only a baseline naming the core; absent means legacy SPY", () => {
+  assert.equal(isCoreBenchmark(coreBaseline), true);
+  assert.equal(isCoreBenchmark(liveBaseline), false);
+  assert.equal(isCoreBenchmark({ ...liveBaseline, benchmarkTicker: "SPY" }), false);
+  assert.equal(isCoreBenchmark(null), false);
+});
+
+test("alphaVsCore: priced from the held core in GBP, no conversion", () => {
+  // Account +7%, core +5% (95.50 -> 100.275 GBP): alpha +2pp, in pounds.
+  const r = alphaVsCore(coreBaseline, 1070, [
+    { ticker: "AAPL_US_EQ", currentPrice: 230 },
+    { ticker: CORE_TICKER, currentPrice: 100.275 },
+  ]);
+  assert.ok(r);
+  closeTo(r.accountReturnPct, 7);
+  closeTo(r.spyReturnPct, 5);
+  closeTo(r.alphaPct, 2);
+  assert.equal(r.spyReturnBasis, "GBP");
+});
+
+test("alphaVsCore: GBP basis even if the stored row lacks an inception rate", () => {
+  const { inceptionFxRate: _dropped, ...noRate } = coreBaseline;
+  const r = alphaVsCore(noRate, 1000, [{ ticker: CORE_TICKER, currentPrice: 95.5 }]);
+  assert.equal(r?.spyReturnBasis, "GBP");
+  assert.equal(r?.spyReturnPct, 0);
+});
+
+test("alphaVsCore: no alpha when the core is not held, never a guessed price", () => {
+  assert.equal(alphaVsCore(coreBaseline, 1000, [{ ticker: "AAPL_US_EQ", currentPrice: 230 }]), null);
+  assert.equal(alphaVsCore(coreBaseline, 1000, [{ ticker: CORE_TICKER, currentPrice: 0 }]), null);
+});
+
+test("review_performance measures a core baseline against the core, and SPY otherwise (structural)", () => {
+  const tool = readFileSync(new URL("../tools/review_performance.ts", import.meta.url), "utf8");
+  const branch = tool.indexOf("if (benchmark && isCoreBenchmark(benchmark))");
+  const core = tool.indexOf("alphaVsCore(benchmark, equity, positions)");
+  const spy = tool.indexOf('getQuote("SPY")');
+  assert.ok(branch > 0, "a core baseline must be recognised");
+  assert.ok(branch < core && core < spy, "the core path runs instead of the SPY quote");
+  assert.match(tool, /\} else \{\s*try \{\s*const quote = await finnhubFromEnv\(\)\.getQuote\("SPY"\)/);
 });

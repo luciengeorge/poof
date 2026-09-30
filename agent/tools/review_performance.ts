@@ -15,7 +15,12 @@ import {
   realizedStatsByTag,
   type OpenBuyTrade,
 } from "../lib/positions.ts";
-import { computeAlpha, type Benchmark } from "../lib/benchmark.ts";
+import {
+  alphaVsCore,
+  computeAlpha,
+  isCoreBenchmark,
+  type Benchmark,
+} from "../lib/benchmark.ts";
 import { attributeFailures } from "../lib/attribution.ts";
 import { calibrationFrom } from "../lib/calibration.ts";
 import { effectiveLevels, DEFAULT_EXITS } from "../lib/exits.ts";
@@ -116,35 +121,42 @@ export default defineTool({
     let spyPrice: number | null = null;
     let alpha: ReturnType<typeof computeAlpha> | null = null;
     let benchmark = (recall as { benchmark?: Benchmark | null })?.benchmark ?? null;
-    try {
-      const quote = await finnhubFromEnv().getQuote("SPY");
-      spyPrice = quote.price;
-      if (!benchmark && spyPrice > 0) {
-        // The inception rate is written ONCE and priced against forever, so a fallback rate is
-        // not good enough: pinning 0.75 when the market is at 0.7386 would bake 1.5pp of fake
-        // alpha into every future cycle. Leave it unset and let computeAlpha label the result
-        // "USD-unadjusted" until an operator supplies the real rate via scripts/rebase-benchmark.
-        const inceptionFxRate = fx.source === "fallback" ? undefined : fxRate;
-        const seeded = {
-          inceptionEquity: equity,
-          inceptionSpyPrice: spyPrice,
-          inceptionDate: etDateString(new Date()),
-          inceptionFxRate,
-        };
-        await memory.saveBenchmark({ env, ...seeded });
-        benchmark = seeded;
+    if (benchmark && isCoreBenchmark(benchmark)) {
+      // Against the index core itself, priced from the broker's own read of the held core: no
+      // SPY quote and no FX rate. Set by scripts/rebase-benchmark.ts, never seeded here.
+      alpha = alphaVsCore(benchmark, equity, positions);
+      if (!alpha) console.warn("[benchmark] index core not held; no alpha this cycle");
+    } else {
+      try {
+        const quote = await finnhubFromEnv().getQuote("SPY");
+        spyPrice = quote.price;
+        if (!benchmark && spyPrice > 0) {
+          // The inception rate is written ONCE and priced against forever, so a fallback rate is
+          // not good enough: pinning 0.75 when the market is at 0.7386 would bake 1.5pp of fake
+          // alpha into every future cycle. Leave it unset and let computeAlpha label the result
+          // "USD-unadjusted" until an operator supplies the real rate via scripts/rebase-benchmark.
+          const inceptionFxRate = fx.source === "fallback" ? undefined : fxRate;
+          const seeded = {
+            inceptionEquity: equity,
+            inceptionSpyPrice: spyPrice,
+            inceptionDate: etDateString(new Date()),
+            inceptionFxRate,
+          };
+          await memory.saveBenchmark({ env, ...seeded });
+          benchmark = seeded;
+        }
+        if (benchmark && spyPrice > 0) {
+          // Gate the CURRENT rate exactly as the seed above gates the inception rate. The
+          // hardcoded fallback is not a measurement, and feeding it in would price SPY at 0.75
+          // against a real market near 0.755 while still labelling the result "GBP", which the
+          // tool description tells the agent means like-for-like. Better an honest
+          // "USD-unadjusted" than a GBP figure that is quietly ~0.65pp out.
+          const usableFx = fx.source === "fallback" ? undefined : fxRate;
+          alpha = computeAlpha(benchmark, equity, spyPrice, usableFx);
+        }
+      } catch (err) {
+        console.warn("[benchmark] SPY quote/seed failed (non-fatal):", err);
       }
-      if (benchmark && spyPrice > 0) {
-        // Gate the CURRENT rate exactly as the seed above gates the inception rate. The
-        // hardcoded fallback is not a measurement, and feeding it in would price SPY at 0.75
-        // against a real market near 0.755 while still labelling the result "GBP", which the
-        // tool description tells the agent means like-for-like. Better an honest
-        // "USD-unadjusted" than a GBP figure that is quietly ~0.65pp out.
-        const usableFx = fx.source === "fallback" ? undefined : fxRate;
-        alpha = computeAlpha(benchmark, equity, spyPrice, usableFx);
-      }
-    } catch (err) {
-      console.warn("[benchmark] SPY quote/seed failed (non-fatal):", err);
     }
 
     return {

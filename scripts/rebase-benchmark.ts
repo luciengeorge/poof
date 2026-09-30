@@ -33,10 +33,19 @@
  *   --env demo|live     override TRADING212_ENV (default: TRADING212_ENV, else "demo")
  *   --current-equity    override the equity used for the alpha preview (default: latest cycle)
  *   --current-spy       override the SPY price used for the preview (default: live quote)
+ *   --benchmark-ticker VUAGl_EQ
+ *                       measure against the index core instead of SPY. --spy then carries the
+ *                       core's GBP price at inception (read it from the held position in Trading
+ *                       212), the inception rate is 1, and --fx must be omitted or 1. OMITTING
+ *                       THIS FLAG returns the baseline to SPY, so pass it on every core rebase.
+ *   --current-core      the core's current GBP price for the preview. Nothing outside Trading
+ *                       212 prices it, so there is no live default: without it, a core baseline
+ *                       gets no preview line.
  *   --apply             actually write the new baseline
  */
 import { memoryFromEnv, type Env } from "../agent/lib/memory.ts";
-import { computeAlpha, type Benchmark } from "../agent/lib/benchmark.ts";
+import { computeAlpha, isCoreBenchmark, type Benchmark } from "../agent/lib/benchmark.ts";
+import { CORE_TICKER } from "../agent/lib/core.ts";
 import { finnhubFromEnv } from "../agent/lib/data.ts";
 import { resolveUsdGbp } from "../agent/lib/fx.ts";
 
@@ -72,7 +81,20 @@ function parseEnvFlag(argv: string[]): Env {
   return env;
 }
 
+function parseBenchmarkTicker(argv: string[]): string | undefined {
+  const ticker = flag(argv, "--benchmark-ticker");
+  if (ticker !== undefined && ticker !== CORE_TICKER) {
+    throw new Error(
+      `--benchmark-ticker must be "${CORE_TICKER}" (omit it for SPY), got "${ticker}"`,
+    );
+  }
+  return ticker;
+}
+
 function describe(label: string, b: Benchmark): string {
+  if (isCoreBenchmark(b)) {
+    return `${label}: inception ${b.inceptionDate}, equity GBP ${b.inceptionEquity.toFixed(2)}, ${CORE_TICKER} GBP ${b.inceptionSpyPrice.toFixed(2)}, FX 1`;
+  }
   const fx = b.inceptionFxRate === undefined ? "none" : b.inceptionFxRate.toFixed(7);
   return `${label}: inception ${b.inceptionDate}, equity GBP ${b.inceptionEquity.toFixed(2)}, SPY USD ${b.inceptionSpyPrice.toFixed(2)}, FX USD->GBP ${fx}`;
 }
@@ -85,7 +107,8 @@ function describeAlpha(
   fx: number | undefined,
 ): string {
   const a = computeAlpha(b, equity, spy, fx);
-  return `${label}: account ${a.accountReturnPct.toFixed(2)}%, SPY ${a.spyReturnPct.toFixed(2)}% (${a.spyReturnBasis}), alpha ${a.alphaPct.toFixed(2)}pp`;
+  const name = isCoreBenchmark(b) ? CORE_TICKER : "SPY";
+  return `${label}: account ${a.accountReturnPct.toFixed(2)}%, ${name} ${a.spyReturnPct.toFixed(2)}% (${a.spyReturnBasis}), alpha ${a.alphaPct.toFixed(2)}pp`;
 }
 
 async function main(): Promise<void> {
@@ -97,11 +120,17 @@ async function main(): Promise<void> {
   if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
     throw new Error(`--date is required as YYYY-MM-DD, got "${date}"`);
   }
+  const benchmarkTicker = parseBenchmarkTicker(argv);
+  const fxFlag = optionalNumber(argv, "--fx");
+  if (benchmarkTicker !== undefined && fxFlag !== undefined && fxFlag !== 1) {
+    throw new Error(`${CORE_TICKER} is quoted in GBP, so its inception rate is 1; got --fx ${fxFlag}`);
+  }
   const proposed: Benchmark = {
     inceptionDate: date,
     inceptionEquity: requiredNumber(argv, "--equity"),
     inceptionSpyPrice: requiredNumber(argv, "--spy"),
-    inceptionFxRate: optionalNumber(argv, "--fx"),
+    inceptionFxRate: benchmarkTicker !== undefined ? 1 : fxFlag,
+    benchmarkTicker,
   };
 
   const memory = memoryFromEnv();
@@ -120,11 +149,13 @@ async function main(): Promise<void> {
   console.log(describe("current ", recall.benchmark));
   console.log(describe("proposed", proposed));
 
-  // Alpha preview. Both readings are best-effort: a missing quote must not stop the operator
-  // seeing the two baselines side by side.
+  // Alpha preview. Every reading is best-effort: a missing quote must not stop the operator
+  // seeing the two baselines side by side. Each baseline is priced in its own instrument: SPY in
+  // USD at the live rate, the core in GBP at a rate of 1.
   const currentEquity = optionalNumber(argv, "--current-equity") ?? recall.cycles[0]?.equity;
+  const needsSpy = !isCoreBenchmark(recall.benchmark) || !isCoreBenchmark(proposed);
   let currentSpy = optionalNumber(argv, "--current-spy");
-  if (currentSpy === undefined) {
+  if (needsSpy && currentSpy === undefined) {
     try {
       currentSpy = (await finnhubFromEnv().getQuote("SPY")).price;
     } catch (err) {
@@ -136,22 +167,35 @@ async function main(): Promise<void> {
   // a fallback must NOT produce a "(GBP)" line priced at 0.75. Drop it and let the preview say
   // USD-unadjusted instead.
   let currentFx = optionalNumber(argv, "--current-fx");
-  if (currentFx === undefined) {
+  if (needsSpy && currentFx === undefined) {
     const resolved = await resolveUsdGbp();
     currentFx = resolved.source === "fallback" ? undefined : resolved.rate;
   }
-  if (currentEquity && currentSpy) {
+  const currentCore = optionalNumber(argv, "--current-core");
+  if (currentEquity) {
     console.log(
-      `measured at: equity GBP ${currentEquity.toFixed(2)}, SPY USD ${currentSpy.toFixed(2)}, FX USD->GBP ${currentFx?.toFixed(7) ?? "none (lookup fell back)"}`,
+      `measured at: equity GBP ${currentEquity.toFixed(2)}, SPY USD ${currentSpy?.toFixed(2) ?? "none"}, FX USD->GBP ${currentFx?.toFixed(7) ?? "none"}, ${CORE_TICKER} GBP ${currentCore?.toFixed(2) ?? "none"}`,
     );
-    console.log(describeAlpha("before  ", recall.benchmark, currentEquity, currentSpy, currentFx));
-    console.log(describeAlpha("after   ", proposed, currentEquity, currentSpy, currentFx));
+    for (const [label, b] of [
+      ["before  ", recall.benchmark],
+      ["after   ", proposed],
+    ] as const) {
+      if (isCoreBenchmark(b)) {
+        console.log(
+          currentCore
+            ? describeAlpha(label, b, currentEquity, currentCore, 1)
+            : `${label}: preview skipped, pass --current-core`,
+        );
+      } else {
+        console.log(
+          currentSpy
+            ? describeAlpha(label, b, currentEquity, currentSpy, currentFx)
+            : `${label}: preview skipped, pass --current-spy`,
+        );
+      }
+    }
   } else {
-    const missing = [
-      currentEquity ? null : "equity (no cycle row; pass --current-equity)",
-      currentSpy ? null : "SPY price (pass --current-spy)",
-    ].filter(Boolean);
-    console.log(`alpha preview skipped, missing ${missing.join(" and ")}`);
+    console.log("alpha preview skipped, missing equity (no cycle row; pass --current-equity)");
   }
 
   if (!apply) {
