@@ -139,6 +139,16 @@ test("universe loads, deduplicates, and stripes into chunks that partition it", 
   assert.equal(chunks.reduce((n, c) => n + c.length, 0), u.tickers.length);
   assert.equal(new Set(chunks.flat()).size, u.tickers.length);
   assert.throws(() => universeChunk(u.tickers, FUNNEL_CHUNKS, FUNNEL_CHUNKS));
+  for (const t of ["AAPL", "MSFT"]) assert.ok(u.tickers.includes(t), `${t} should be in the universe`);
+});
+
+test("the universe is imported, never read off disk (structural)", () => {
+  // The bundler collapses the app into one file, so a runtime read of a sibling data file resolves
+  // to a path production does not have. That broke every funnel fire for thirteen days.
+  const src = readFileSync(new URL("./universe.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(src, /node:fs/);
+  assert.doesNotMatch(src, /import\.meta\.url/);
+  assert.match(src, /from "\.\.\/data\/universe\.ts"/);
 });
 
 // --- selection ---
@@ -281,4 +291,19 @@ test("four funnel schedules exist, all before the 15:00 UTC cycle, all calling t
     assert.match(src, /runFunnelSchedule\("funnel-[a-d]"\)/);
   }
   assert.equal(letters.length, FUNNEL_CHUNKS);
+});
+
+test("nothing between claiming a chunk and the try that can mark it failed (structural)", () => {
+  // A throw after the claim but outside the try leaves the chunk at `started` for ever, so the
+  // ordering here is the whole point: unit tests cannot see it.
+  const src = readFileSync(new URL("./funnel-schedule.ts", import.meta.url), "utf8");
+  const claim = src.indexOf("claimFunnelChunk(");
+  const tryAt = src.indexOf("try {", claim);
+  const failure = src.indexOf('status: "failed"', tryAt);
+  assert.ok(claim > 0 && tryAt > 0 && failure > 0, "expected a claim, a try, and a failure path");
+  for (const call of ["loadUniverse(", "universeChunk(", "finnhubFromEnv()", "claimed chunk"]) {
+    const at = src.indexOf(call, claim);
+    assert.ok(at > tryAt, `${call} runs before the try that marks the chunk failed`);
+    assert.ok(at < failure, `${call} should sit inside that try, not after its catch`);
+  }
 });

@@ -129,6 +129,7 @@ export const saveBenchmark = mutation({
     inceptionEquity: v.number(),
     inceptionSpyPrice: v.number(),
     inceptionDate: v.string(),
+    inceptionFxRate: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     assertSecret(args.token);
@@ -139,6 +140,41 @@ export const saveBenchmark = mutation({
       .unique();
     if (existing) return existing._id; // baseline captured once, never overwritten
     return await ctx.db.insert("benchmark", { ...rest, updatedAt: Date.now() });
+  },
+});
+
+// The deliberate counterpart to saveBenchmark's insert-once rule: correcting a baseline that
+// is already wrong, e.g. one captured before a deposit and so reporting the funding as return.
+// Named for what it does so it can never be reached by accident from the trading cycle.
+export const overwriteBenchmark = mutation({
+  args: {
+    token: v.string(),
+    env: v.string(),
+    inceptionEquity: v.number(),
+    inceptionSpyPrice: v.number(),
+    inceptionDate: v.string(),
+    inceptionFxRate: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    assertSecret(args.token);
+    const { token, ...rest } = args;
+    const existing = await ctx.db
+      .query("benchmark")
+      .withIndex("by_env", (q) => q.eq("env", rest.env))
+      .unique();
+    if (!existing) {
+      throw new Error(
+        `no benchmark row for env "${rest.env}"; capture one with saveBenchmark first`,
+      );
+    }
+    await ctx.db.patch("benchmark", existing._id, {
+      ...rest,
+      // Spelled out so a rebase that omits the rate CLEARS it (Convex drops a field patched
+      // with undefined) instead of pairing a stale inception rate with a new SPY price.
+      inceptionFxRate: rest.inceptionFxRate,
+      updatedAt: Date.now(),
+    });
+    return existing._id;
   },
 });
 

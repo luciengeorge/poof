@@ -134,7 +134,13 @@ function fillsByDate(
   return byDate;
 }
 
-/** Alpha vs buy-and-hold SPY over the run window, via the shared computeAlpha. */
+/**
+ * Alpha vs buy-and-hold SPY over the run window, via the shared computeAlpha.
+ *
+ * No FX is passed, so this reports a "USD-unadjusted" basis, and that is correct here: the
+ * backtest's equity curve is denominated in the same currency as the SPY candles, so there is
+ * no currency mismatch to correct. Do not "fix" this by feeding it a GBP rate.
+ */
 function alphaVsSpy(
   spySeries: Candle[],
   startingEquity: number,
@@ -146,7 +152,12 @@ function alphaVsSpy(
   const first = spyByDate.get(firstDate) ?? spySeries[0];
   const last = spyByDate.get(lastDate) ?? spySeries[spySeries.length - 1];
   if (!first || !last) {
-    return { accountReturnPct: 0, spyReturnPct: 0, alphaPct: 0 };
+    return {
+      accountReturnPct: 0,
+      spyReturnPct: 0,
+      alphaPct: 0,
+      spyReturnBasis: "USD-unadjusted",
+    };
   }
   const baseline: Benchmark = {
     inceptionEquity: startingEquity,

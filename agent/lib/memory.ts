@@ -84,6 +84,8 @@ export interface BenchmarkRecord {
   inceptionEquity: number;
   inceptionSpyPrice: number;
   inceptionDate: string;
+  /** USD -> GBP at inception. Absent on baselines captured before it was recorded. */
+  inceptionFxRate?: number;
 }
 
 export interface CycleRecord {
@@ -297,6 +299,10 @@ export class Memory {
   }
   saveBenchmark(b: BenchmarkRecord): Promise<unknown> {
     return this.mutation("saveBenchmark", { ...b });
+  }
+  /** Correct an existing baseline. saveBenchmark refuses to overwrite one, by design. */
+  overwriteBenchmark(b: BenchmarkRecord): Promise<unknown> {
+    return this.mutation("overwriteBenchmark", { ...b });
   }
   getBenchmark(env: Env): Promise<unknown> {
     return this.query("getBenchmark", { env });
