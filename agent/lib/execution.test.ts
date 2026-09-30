@@ -13,6 +13,7 @@ import {
 } from "./execution.ts";
 import type { CashBalance, T212Position } from "./t212.ts";
 import type { FxResolution } from "./fx.ts";
+import { CORE_TICKER } from "./core.ts";
 
 function cash(over: Partial<CashBalance> = {}): CashBalance {
   return {
@@ -320,4 +321,48 @@ test("buildRiskSnapshot keeps a higher stored peakEquity", () => {
   });
   assert.equal(snap.equity, 10);
   assert.equal(snap.peakEquity, 100); // stored peak wins over current
+});
+
+// --- the GBP-quoted index core ---
+
+test("buildRiskSnapshot values a USD stock at qty * price * fx and the core at qty * price", () => {
+  const snap = buildRiskSnapshot({
+    brokerSnapshot: brokerSnapshot({
+      cash: cash({ total: 20 + 40 + 300, free: 20 }),
+      positions: [
+        pos({ ticker: "AAPL_US_EQ", quantity: 1, currentPrice: 50 }),
+        pos({ ticker: CORE_TICKER, quantity: 3, currentPrice: 100 }),
+      ],
+      fx: resolvedFx(0.8),
+    }),
+    peakEquity: 0,
+    dayPnl: 0,
+    newPositionsToday: 0,
+    consecutiveLossDays: 0,
+  });
+  const value = new Map(snap.positions.map((p) => [p.ticker, p.value]));
+  assert.equal(value.get("AAPL_US_EQ"), 40); // 1 * 50 * 0.8
+  assert.equal(value.get(CORE_TICKER), 300); // 3 * 100, already GBP
+});
+
+test("reconciliation with the core held matches a broker total built the same way", () => {
+  // Valued with the USD rate, the core would read about 25% low and this would alert as a
+  // divergence on every cycle.
+  const positions = [
+    pos({ ticker: "AAPL_US_EQ", quantity: 2, currentPrice: 150 }),
+    pos({ ticker: CORE_TICKER, quantity: 4.2, currentPrice: 95.5 }),
+  ];
+  const stockGbp = 2 * 150 * 0.755;
+  const coreGbp = 4.2 * 95.5;
+  const free = 12.4;
+  const reconciliation = reconcileAccountValueGbp(
+    brokerSnapshot({
+      cash: cash({ total: free + stockGbp + coreGbp, free }),
+      positions,
+      fx: resolvedFx(0.755),
+    }),
+  );
+  assert.equal(reconciliation.alert, null);
+  assert.ok(Math.abs(reconciliation.computedAccountValueGbp - (free + stockGbp + coreGbp)) < 1e-9);
+  assert.ok(Math.abs(deployedValueGbp(positions, 0.755) - (stockGbp + coreGbp)) < 1e-9);
 });

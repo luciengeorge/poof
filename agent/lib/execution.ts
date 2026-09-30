@@ -1,6 +1,7 @@
 import type { PortfolioSnapshot, Position } from "./risk.ts";
 import type { BrokerAccountSnapshot, T212Position } from "./t212.ts";
 import type { FxResolution } from "./fx.ts";
+import { fxForHolding } from "./core.ts";
 
 /**
  * Convert a target notional in the ACCOUNT currency (e.g. GBP) into a signed share
@@ -70,10 +71,14 @@ export function t212TickerToFinnhubSymbol(ticker: string): string | null {
 
 /**
  * Σ position market value in the ACCOUNT currency (GBP): each position's
- * quantity × instrument-ccy price (USD) × fxRate (USD -> GBP).
+ * quantity × instrument-ccy price × that holding's rate to GBP (the USD -> GBP `fxRate` for US
+ * stocks, 1 for the GBP-quoted index core).
  */
 export function deployedValueGbp(positions: T212Position[], fxRate: number): number {
-  return positions.reduce((sum, p) => sum + p.quantity * p.currentPrice * fxRate, 0);
+  return positions.reduce(
+    (sum, p) => sum + p.quantity * p.currentPrice * fxForHolding(p.ticker, fxRate),
+    0,
+  );
 }
 
 /**
@@ -234,7 +239,7 @@ export function buildRiskSnapshot(args: {
   }
   const riskPositions: Position[] = positions.map((p) => ({
     ticker: p.ticker,
-    value: p.quantity * p.currentPrice * fx.rate,
+    value: p.quantity * p.currentPrice * fxForHolding(p.ticker, fx.rate),
   }));
   const accountValueReconciliation = reconcileAccountValueGbp(args.brokerSnapshot);
   const equity = accountValueReconciliation.accountValueGbp;
