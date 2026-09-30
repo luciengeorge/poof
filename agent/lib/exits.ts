@@ -30,8 +30,9 @@ export interface ExitDefaults {
 // 8% (typical swing-trade give-back), clamped to 3%..20% so it's never absurdly tight or
 // loose. It arms off the peak at the breakeven point for its own width (+8.7% for the default
 // 8%), so it can never exit below entry at the price the cycle observes; the hard stop-loss
-// protects the downside until then. activateTrailAtPct (0.05) is only a floor: raising or
-// lowering it does NOT move the default trail, which arms at +8.7% regardless.
+// protects the downside until then. activateTrailAtPct (0.05) is only a floor: lowering it,
+// or raising it anywhere up to +8.7%, does NOT move the default 8% trail. Raising it ABOVE
+// +8.7% does, because activation is max(floor, breakeven) and the floor then binds.
 export const DEFAULT_EXITS: ExitDefaults = {
   defaultStopLossPct: 0.1,
   defaultTakeProfitPct: 0.4,
