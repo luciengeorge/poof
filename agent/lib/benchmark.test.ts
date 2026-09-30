@@ -225,11 +225,23 @@ test("the fallback FX rate never reaches computeAlpha labelled as GBP (structura
   // seed and the compute path must gate on the source. Unit tests on computeAlpha cannot
   // prove the CALLER gates, which is exactly how this was reintroduced once already.
   const tool = readFileSync(new URL("../tools/review_performance.ts", import.meta.url), "utf8");
-  assert.match(tool, /source === "fallback"/, "review_performance must gate on the fx source");
+  // Assert the COMPUTE path specifically. A bare /source === "fallback"/ would pass with this
+  // gate deleted, because the seed gate and the returned `fallbackUsed` field both contain that
+  // string, which is the vacuous-assertion trap this repo keeps falling into.
+  assert.match(
+    tool,
+    /const usableFx = fx\.source === "fallback" \? undefined : fxRate;/,
+    "the current rate must be gated on the fx source before computeAlpha sees it",
+  );
+  assert.match(
+    tool,
+    /computeAlpha\(benchmark, equity, spyPrice, usableFx\)/,
+    "computeAlpha must receive the gated rate, not the raw one",
+  );
   assert.doesNotMatch(
     tool,
     /computeAlpha\(benchmark, equity, spyPrice, fxRate\)/,
-    "the raw fxRate must not be passed straight through; gate it first",
+    "the raw fxRate must not be passed straight through",
   );
 
   const script = readFileSync(new URL("../../scripts/rebase-benchmark.ts", import.meta.url), "utf8");
