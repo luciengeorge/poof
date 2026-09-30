@@ -154,6 +154,58 @@ test("funding sells the shortfall plus the buffer and says the stock waits a cyc
   );
 });
 
+test("the funding marker is written BEFORE the sale is sent", async () => {
+  // In winter the sale fills at once and leaves nothing pending, so the marker alone stops this
+  // cycle's sweep buying it back. Written after the send, a crash in between loses it.
+  const log: string[] = [];
+  const { client, sent } = fakeClient({
+    total: 1000,
+    free: 30,
+    positions: [position(CORE_TICKER, 9, 100)],
+  });
+  const place = client.placeMarketOrder;
+  client.placeMarketOrder = async (input) => {
+    log.push(`sale ${input.ticker}`);
+    return place(input);
+  };
+  const result = await fundFromCore({
+    client,
+    fx: FX,
+    dryRun: false,
+    now: NOW,
+    shortfall: 120,
+    hasOrderIntent: async () => false,
+    recordOrderIntent: async (key) => {
+      log.push(`marker ${key}`);
+    },
+  });
+  assert.equal(result.status, "placed");
+  assert.equal(sent.length, 1);
+  assert.deepEqual(log, [`marker ${coreFundingKey(NOW, false)}`, `sale ${CORE_TICKER}`]);
+});
+
+test("a marker that cannot be written means no sale", async () => {
+  const { client, sent } = fakeClient({
+    total: 1000,
+    free: 30,
+    positions: [position(CORE_TICKER, 9, 100)],
+  });
+  const result = await fundFromCore({
+    client,
+    fx: FX,
+    dryRun: false,
+    now: NOW,
+    shortfall: 120,
+    hasOrderIntent: async () => false,
+    recordOrderIntent: async () => {
+      throw new Error("convex unavailable");
+    },
+  });
+  assert.equal(result.status, "failed");
+  assert.match(result.detail, /no sale was placed: convex unavailable/);
+  assert.deepEqual(sent, []);
+});
+
 test("funding never sells the core below the floor", async () => {
   const { client, sent } = fakeClient({
     total: 1000,

@@ -227,7 +227,6 @@ export async function fundFromCore(
     return { ...base, status: "nothing-to-do", detail: "no cash shortfall to fund" };
   }
   const key = coreFundingKey(opts.now ?? new Date(), opts.dryRun);
-  let result: CoreResult;
   try {
     if (await opts.hasOrderIntent(key)) {
       return {
@@ -253,22 +252,28 @@ export async function fundFromCore(
         detail: `the index core is at its floor of ${CORE_FLOOR_QUANTITY} shares; nothing to sell`,
       };
     }
-    result = await send(opts, "fund", quantity, core.priceGbp, (n) =>
+    // The marker goes down BEFORE the sale. In winter London is open when the cycle runs, so the
+    // sale fills at once and leaves no pending order behind; the marker is then the only thing
+    // stopping this cycle's sweep from buying the index straight back, so it must exist even if
+    // the process dies the moment the sale is sent. No marker, no sale: an unfunded stock buy
+    // just waits a cycle, and with no measured stock edge nothing is lost by waiting. A sale that
+    // is then refused leaves the marker behind, which only keeps the cash idle until tomorrow.
+    try {
+      await opts.recordOrderIntent(key);
+    } catch (err) {
+      return {
+        ...base,
+        priceGbp: core.priceGbp,
+        status: "failed",
+        detail: `the funding marker could not be saved, so no sale was placed: ${errorText(err)}`,
+      };
+    }
+    return await send(opts, "fund", quantity, core.priceGbp, (n) =>
       `raised ${gbp(n)} from the index core; the stock can be bought next cycle`,
     );
   } catch (err) {
     return { ...base, status: "failed", detail: `index core funding failed: ${errorText(err)}` };
   }
-  if (result.status === "placed" || result.status === "simulated") {
-    try {
-      await opts.recordOrderIntent(key);
-    } catch (err) {
-      console.warn("[core] funding marker write failed:", err);
-      result.detail +=
-        "; WARNING: the funding marker could not be saved, so this cycle's sweep may buy it back";
-    }
-  }
-  return result;
 }
 
 /** The audit row for a core order that was attempted, or null when nothing was attempted. */
