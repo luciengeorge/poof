@@ -25,7 +25,7 @@ instrument announces itself.
 | Plan | Title | Priority | Effort | Depends on | Status |
 |------|-------|----------|--------|------------|--------|
 | 001 | Reinstall the dependency tree so local runs are evidence | P1 | S |, | TODO |
-| 002 | Arm the trailing stop off the peak, not the current price | P1 | S | 001 | TODO |
+| 002 | Arm the trailing stop off the peak, at breakeven | P1 | S | 001 | IN PROGRESS |
 | 003 | Stop failure payloads carrying the shared secret to Slack | P1 | S | 001 | TODO |
 | 004 | Stop `.env.example` reinstating the pre-#76 risk gate | P1 | S | 001 | TODO |
 | 005 | Never place an order twice, never lose one that filled | P1 | M | 001 | TODO |
@@ -91,3 +91,12 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (one-line reason) | REJECTED 
   independently flagged by the direction audit as the thing not to do: paper
   money cannot compound a real £250 account, and an intraday loop needs either
   many jittered cron files or leaving the Vercel Hobby plan.
+
+## Verified baseline
+
+- 2026-09-30, plan 001: reinstalled with `pnpm install --frozen-lockfile` on
+  Node v24.17.0. Installed `ai` 7.0.28 and `typescript` 7.0.2 now match the
+  lockfile (they were 7.0.0-beta.178 and 7.0.1-rc). On the real tree:
+  `pnpm typecheck` exit 0, `npx tsc -p convex/tsconfig.json` exit 0,
+  `pnpm test` **633 passed, 0 failed**, `pnpm build` exit 0. No source change was
+  needed: nothing had been hiding behind the drifted tree.
