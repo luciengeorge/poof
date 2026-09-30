@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { loadExitScope } from "../tools/manage_positions.ts";
+import { presentPosition } from "../tools/review_performance.ts";
 import { CORE_TICKER } from "./core.ts";
 import { checkExits, DEFAULT_EXITS } from "./exits.ts";
 import { buildManagedPositions, orphanedOpenBuys, type OpenBuyTrade } from "./positions.ts";
@@ -72,4 +73,24 @@ test("manage_positions filters the core out before checkExits and orphan reconci
   const orphans = src.indexOf("orphanedOpenBuys(openBuys, positions)");
   assert.ok(scope > 0, "the tool must load its positions through loadExitScope");
   assert.ok(scope < exits && scope < orphans, "the filtered scope must feed exits and orphans");
+});
+
+test("review_performance shows the core with no exit levels, marked as the index core", () => {
+  const [core, stock] = buildManagedPositions(
+    [position(CORE_TICKER), position("AAPL_US_EQ")],
+    [openBuy("AAPL_US_EQ")],
+    0.755,
+  );
+  const shownCore = presentPosition(core, NOW);
+  const shownStock = presentPosition(stock, NOW);
+  for (const level of ["stopLossPct", "takeProfitPct", "trailingStopPct", "maxHoldDays"]) {
+    assert.equal(level in shownCore, false, `the core must not show ${level}`);
+    assert.equal(level in shownStock, true, `a stock still shows ${level}`);
+  }
+  assert.equal((shownCore as { indexCore?: boolean }).indexCore, true);
+  assert.match((shownCore as { exits?: string }).exits ?? "", /exempt from exits/);
+  assert.equal((shownStock as { indexCore?: boolean }).indexCore, undefined);
+  // And the tool shows every position through it.
+  const src = readFileSync(new URL("../tools/review_performance.ts", import.meta.url), "utf8");
+  assert.match(src, /const managed = rawManaged\.map\(\(m\) => presentPosition\(m, now\)\);/);
 });

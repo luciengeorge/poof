@@ -13,6 +13,7 @@ import {
   buildManagedPositions,
   realizedStats,
   realizedStatsByTag,
+  type ManagedPosition,
   type OpenBuyTrade,
 } from "../lib/positions.ts";
 import {
@@ -24,13 +25,44 @@ import {
 import { attributeFailures } from "../lib/attribution.ts";
 import { calibrationFrom } from "../lib/calibration.ts";
 import { effectiveLevels, DEFAULT_EXITS } from "../lib/exits.ts";
-import { CORE_TICKER } from "../lib/core.ts";
+import { CORE_TICKER, isCore } from "../lib/core.ts";
 
 const DAY = 86_400_000;
 
+/**
+ * One open position as the agent sees it. The index core carries no exit levels: the exit engine
+ * never sells it (see manage_positions), so a stop-loss or max-hold printed beside it would be a
+ * rule that does not exist, and an invitation to "honour" it by hand.
+ */
+export function presentPosition(m: ManagedPosition, now: number) {
+  const base = {
+    ticker: m.ticker,
+    thesis: m.thesis,
+    entryPrice: m.entryPrice,
+    currentPrice: m.currentPrice,
+    unrealizedPnl: m.unrealizedPnl,
+    unrealizedPnlPct:
+      m.entryPrice > 0
+        ? ((m.currentPrice - m.entryPrice) / m.entryPrice) * 100
+        : 0,
+    ageDays: m.openedAt ? Math.floor((now - m.openedAt) / DAY) : null,
+  };
+  if (isCore(m.ticker)) {
+    return { ...base, indexCore: true, exits: "none: the index core is exempt from exits" };
+  }
+  const lv = effectiveLevels(m, DEFAULT_EXITS);
+  return {
+    ...base,
+    stopLossPct: lv.stopLossPct,
+    takeProfitPct: lv.takeProfitPct,
+    trailingStopPct: lv.trailingStopPct,
+    maxHoldDays: lv.maxHoldDays,
+  };
+}
+
 export default defineTool({
   description:
-    `Review how the account is actually doing: open positions with unrealized P&L, their thesis, age, and active exit levels; realized win/loss stats from closed trades; and alpha since inception against a benchmark. \`benchmark.benchmarkTicker\` says which benchmark: when it is ${CORE_TICKER}, alpha is measured against the index core itself, in GBP, total return, with no currency conversion (\`alpha.spyReturnPct\` is then the core's return and \`spyPrice\` is null); otherwise it is measured against buy-and-hold SPY. Read alpha.spyReturnBasis before quoting alpha: "GBP" means the benchmark's return is in pounds (for SPY, including the currency move) and the comparison is like-for-like; "USD-unadjusted" means no FX rate was available for SPY and the two returns are in different currencies, so say so rather than presenting the gap as real. Call this EARLY each cycle (after managing exits) so new decisions are informed by what worked and whether you're beating just holding the index. CURRENCY: accountValueGbp, cashGbp, deployedGbp and each position's marketValue/unrealizedPnl are GBP; each position's entryPrice/currentPrice are share prices in the instrument's own currency (USD for US stocks), NOT GBP. Read-only.`,
+    `Review how the account is actually doing: open positions with unrealized P&L, their thesis, age, and active exit levels (the index core is marked \`indexCore\` and has none: it is exempt from exits); realized win/loss stats from closed trades; and alpha since inception against a benchmark. \`benchmark.benchmarkTicker\` says which benchmark: when it is ${CORE_TICKER}, alpha is measured against the index core itself, in GBP, total return, with no currency conversion (\`alpha.spyReturnPct\` is then the core's return and \`spyPrice\` is null); otherwise it is measured against buy-and-hold SPY. Read alpha.spyReturnBasis before quoting alpha: "GBP" means the benchmark's return is in pounds (for SPY, including the currency move) and the comparison is like-for-like; "USD-unadjusted" means no FX rate was available for SPY and the two returns are in different currencies, so say so rather than presenting the gap as real. Call this EARLY each cycle (after managing exits) so new decisions are informed by what worked and whether you're beating just holding the index. CURRENCY: accountValueGbp, cashGbp, deployedGbp and each position's marketValue/unrealizedPnl are GBP; each position's entryPrice/currentPrice are share prices in the instrument's own currency (USD for US stocks), NOT GBP. Read-only.`,
   inputSchema: z.object({}),
   async execute() {
     const client = t212FromEnv();
@@ -69,25 +101,7 @@ export default defineTool({
 
     const now = Date.now();
     const rawManaged = buildManagedPositions(positions, openBuys, fxRate);
-    const managed = rawManaged.map((m) => {
-      const lv = effectiveLevels(m, DEFAULT_EXITS);
-      return {
-        ticker: m.ticker,
-        thesis: m.thesis,
-        entryPrice: m.entryPrice,
-        currentPrice: m.currentPrice,
-        unrealizedPnl: m.unrealizedPnl,
-        unrealizedPnlPct:
-          m.entryPrice > 0
-            ? ((m.currentPrice - m.entryPrice) / m.entryPrice) * 100
-            : 0,
-        ageDays: m.openedAt ? Math.floor((now - m.openedAt) / DAY) : null,
-        stopLossPct: lv.stopLossPct,
-        takeProfitPct: lv.takeProfitPct,
-        trailingStopPct: lv.trailingStopPct,
-        maxHoldDays: lv.maxHoldDays,
-      };
-    });
+    const managed = rawManaged.map((m) => presentPosition(m, now));
 
     // Thesis-break check, one Jev call per position with news since entry. Annotation only: the
     // flag asks the agent to decide, it never sells. Best-effort per position, and byte-for-byte
