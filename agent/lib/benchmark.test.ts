@@ -9,6 +9,7 @@ import {
   type Benchmark,
 } from "./benchmark.ts";
 import { CORE_TICKER } from "./core.ts";
+import reviewPerformanceTool from "../tools/review_performance.ts";
 
 const closeTo = (actual: number, expected: number, tol = 1e-9) =>
   assert.ok(
@@ -305,4 +306,12 @@ test("review_performance measures a core baseline against the core, and SPY othe
   assert.ok(branch > 0, "a core baseline must be recognised");
   assert.ok(branch < core && core < spy, "the core path runs instead of the SPY quote");
   assert.match(tool, /\} else \{\s*try \{\s*const quote = await finnhubFromEnv\(\)\.getQuote\("SPY"\)/);
+});
+
+test("the review_performance description names both benchmarks and the basis field", () => {
+  const { description } = reviewPerformanceTool as { description: string };
+  assert.ok(description.includes(`when it is ${CORE_TICKER}, alpha is measured against the index core`));
+  assert.match(description, /`benchmark\.benchmarkTicker`/);
+  assert.match(description, /alpha\.spyReturnBasis/);
+  assert.doesNotMatch(description, /alpha vs buy-and-hold SPY/);
 });

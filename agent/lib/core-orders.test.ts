@@ -8,7 +8,7 @@ import { checkHalt, DEFAULT_LIMITS } from "./risk.ts";
 import type { OrderExecClient } from "./orders.ts";
 import type { CashBalance, T212Order, T212Position } from "./t212.ts";
 import type { CoreOrderRecord, TradeRecord } from "./memory.ts";
-import { CORE_PROPOSAL_REASON, submitOrders } from "../tools/submit_orders.ts";
+import submitOrdersTool, { CORE_PROPOSAL_REASON, submitOrders } from "../tools/submit_orders.ts";
 
 const NOW = new Date(Date.UTC(2026, 8, 30, 15, 35));
 const FX = { rate: 0.755, source: "live" } as const;
@@ -492,4 +492,10 @@ test("the tools wire the core path where it belongs (structural)", () => {
   const sweep = record.indexOf("await sweepCore(");
   assert.ok(logged > 0 && sweep > logged, "the sweep runs after the cycle is recorded");
   assert.doesNotMatch(record, /recordTrade|buildRecordTradeArgs/, "a sweep is never a trade");
+});
+
+test("the submit_orders description tells the agent the core is refused and what `core` reports", () => {
+  const { description } = submitOrdersTool as { description: string };
+  assert.ok(description.includes(`Never propose ${CORE_TICKER}`));
+  assert.match(description, /reports that sale in `core`/);
 });
