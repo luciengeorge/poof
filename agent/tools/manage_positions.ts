@@ -1,10 +1,10 @@
 import { defineTool } from "eve/tools";
 import { z } from "zod";
-import { t212FromEnv } from "../lib/t212.ts";
+import { t212FromEnv, type T212Client, type T212Position } from "../lib/t212.ts";
 import { evaluateAndExecute, type Proposal } from "../lib/orders.ts";
 import { resolveLimits, isDryRun } from "../lib/state.ts";
 import { fxForCycle } from "../lib/fx.ts";
-import { memoryFromEnv } from "../lib/memory.ts";
+import { memoryFromEnv, type Env, type Memory } from "../lib/memory.ts";
 import { resolveRiskState, tradingEnv } from "../lib/risk-runtime.ts";
 import { checkExits, DEFAULT_EXITS } from "../lib/exits.ts";
 import {
@@ -16,6 +16,26 @@ import {
   buildCloseTradeArgs,
   buildOrphanCloseTradeArgs,
 } from "../lib/order-bookkeeping.ts";
+import { isCore } from "../lib/core.ts";
+
+/**
+ * The positions the exit engine may sell and the open BUYs it may reconcile: never the index core.
+ * The core is the account's home for idle money, not a trade, so a 20-day max-hold would sell the
+ * index every month and a 10% stop would sell it in every correction. Both lists are filtered, the
+ * open BUYs too, so a core row can never be booked as an orphan once its position is filtered out.
+ * Exported as the test seam that proves this tool, not just a helper, applies the filter.
+ */
+export async function loadExitScope(
+  client: Pick<T212Client, "getPortfolio">,
+  memory: Pick<Memory, "openBuys">,
+  env: Env,
+): Promise<{ positions: T212Position[]; openBuys: OpenBuyTrade[] }> {
+  const positions = (await client.getPortfolio()).filter((p) => !isCore(p.ticker));
+  const openBuys = (((await memory.openBuys(env)) ?? []) as OpenBuyTrade[]).filter(
+    (b) => !isCore(b.ticker),
+  );
+  return { positions, openBuys };
+}
 
 export default defineTool({
   description:
@@ -26,10 +46,8 @@ export default defineTool({
     const fx = await fxForCycle();
     const fxRate = fx.rate;
     const dryRun = isDryRun();
-    const positions = await client.getPortfolio();
-
     const memory = memoryFromEnv();
-    const openBuys = ((await memory.openBuys(tradingEnv())) ?? []) as OpenBuyTrade[];
+    const { positions, openBuys } = await loadExitScope(client, memory, tradingEnv());
 
     // Ratchet each held position's high-water mark up to the latest price, and persist it
     // so the trailing stop is durable across cycles. Best-effort: a memory failure must
