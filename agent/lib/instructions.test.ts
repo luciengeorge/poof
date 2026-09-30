@@ -17,6 +17,12 @@ const FORBIDDEN = [
   "cash can't beat SPY",
   "2%-of-equity floor",
   "bias sizing/selection toward strategy types",
+  // The same pressure, from outside the forced-trade paragraph itself.
+  "is failure",
+  "refusing to trade",
+  "80-90% of the account",
+  "Bias to act",
+  "LSE-listed UCITS",
 ];
 
 for (const phrase of FORBIDDEN) {
@@ -31,4 +37,12 @@ test("instructions name the index core as the default home for money", () => {
 
 test("instructions say a cycle with no stock trade is normal", () => {
   assert.match(instructions, /a cycle with no stock trade is normal/i);
+});
+
+test("the ISA rule says the index core is bought in code, not by the agent", () => {
+  const isa = instructions
+    .split("\n")
+    .find((line) => line.startsWith("- **This is a UK Stocks ISA account.**"));
+  assert.ok(isa, "the ISA rule must still exist");
+  assert.ok(isa.includes(CORE_TICKER), `the ISA rule must name ${CORE_TICKER}`);
 });
