@@ -113,16 +113,17 @@ test("checkExits: unknown open time still lets stop-loss fire", () => {
   assert.equal(r[0].reason, "stop-loss");
 });
 
-test("checkExits: trailing stop is dormant below the activation threshold", () => {
-  // Up only 3% (< 5% activation): the trail must NOT fire even though price 103
-  // is below peak 115 * (1 - 0.08) = 105.8. Below activation only the hard stop
-  // governs, and the hard stop isn't hit -> no exit.
+test("checkExits: current P&L under +5% no longer disarms a trail armed by the peak", () => {
+  // This test used to assert the bug: current +3% was under the +5% line, so the trail
+  // stayed dormant even though price 103 is below peak 115 * (1 - 0.08) = 105.8. Arming is
+  // off the peak now, and +15% is past the +8.70% breakeven, so it fires and locks in +3%.
   const r = checkExits(
     [pos({ currentPrice: 103, peakPrice: 115, trailingStopPct: 0.08 })],
     DEFAULT_EXITS,
     NOW,
   );
-  assert.equal(r.length, 0);
+  assert.equal(r.length, 1);
+  assert.equal(r[0].reason, "trailing-stop");
 });
 
 test("checkExits: at a fresh high the trail ratchets up to the current price", () => {
@@ -180,8 +181,8 @@ test("checkExits: trailing stop wins over take-profit when both would trigger", 
 });
 
 test("checkExits: hard stop-loss wins over the trailing stop when the position is down", () => {
-  // Down 12% (past the 10% hard stop). The trail would also point below current,
-  // but the position is below activation and the hard stop is the floor -> stop-loss.
+  // Down 12% (past the 10% hard stop). The peak of 150 arms the trail and current is
+  // below its stop too, but the hard stop is the floor and comes first -> stop-loss.
   const r = checkExits(
     [pos({ currentPrice: 88, peakPrice: 150, stopLossPct: 0.1, trailingStopPct: 0.08 })],
     DEFAULT_EXITS,
@@ -189,4 +190,82 @@ test("checkExits: hard stop-loss wins over the trailing stop when the position i
   );
   assert.equal(r.length, 1);
   assert.equal(r[0].reason, "stop-loss");
+});
+
+test("checkExits: trail arms off the peak, so a winner that fell back to +0.2% still exits", () => {
+  // Peak +9% is past the +8.70% breakeven for an 8% trail, so the trail is armed. Stop is
+  // 109 * 0.92 = 100.28 and current 100.2 is below it. Arming on current P&L (+0.2%, under
+  // the +5% line) left this position riding to the time stop instead.
+  const r = checkExits(
+    [pos({ currentPrice: 100.2, peakPrice: 109, trailingStopPct: 0.08 })],
+    DEFAULT_EXITS,
+    NOW,
+  );
+  assert.equal(r.length, 1);
+  assert.equal(r[0].reason, "trailing-stop");
+});
+
+test("checkExits: trail stays dormant while the peak is under this trail's breakeven", () => {
+  // Peak +8% is under the +8.70% breakeven, so the trail is not armed even though current
+  // 99.3 is below its stop 108 * 0.92 = 99.36. Firing here would realise a -0.7% loss.
+  const r = checkExits(
+    [pos({ currentPrice: 99.3, peakPrice: 108, trailingStopPct: 0.08 })],
+    DEFAULT_EXITS,
+    NOW,
+  );
+  assert.equal(r.length, 0);
+});
+
+test("checkExits: a +5% peak cannot arm the trail and stop out at -3.4%", () => {
+  // The case the fixed +5% activation would have allowed: peak 105, stop 105 * 0.92 = 96.6,
+  // current 96.6 sits on it. Arming at +5% off the peak would exit a winner at -3.4%.
+  const r = checkExits(
+    [pos({ currentPrice: 96.6, peakPrice: 105, trailingStopPct: 0.08 })],
+    DEFAULT_EXITS,
+    NOW,
+  );
+  assert.equal(r.length, 0);
+});
+
+test("checkExits: breakeven activation follows each position's own trail width", () => {
+  // A 15% trail breaks even at a +17.6% peak, not the +8.7% of the 8% default. Peak +12%
+  // with current 95 under the stop 112 * 0.85 = 95.2 must not fire.
+  const dormant = checkExits(
+    [pos({ currentPrice: 95, peakPrice: 112, trailingStopPct: 0.15 })],
+    DEFAULT_EXITS,
+    NOW,
+  );
+  assert.equal(dormant.length, 0);
+  // Peak +20% clears that breakeven; current 102 sits on the stop 120 * 0.85 = 102 and fires.
+  const armed = checkExits(
+    [pos({ currentPrice: 102, peakPrice: 120, trailingStopPct: 0.15 })],
+    DEFAULT_EXITS,
+    NOW,
+  );
+  assert.equal(armed.length, 1);
+  assert.equal(armed[0].reason, "trailing-stop");
+});
+
+test("checkExits: stop-loss still wins over an armed trail when both would trigger", () => {
+  // Peak +10% arms the 8% trail (stop 101.2) and current 89 is below it, but it is also
+  // past the 10% hard stop, which comes first in precedence.
+  const r = checkExits(
+    [pos({ currentPrice: 89, peakPrice: 110, stopLossPct: 0.1, trailingStopPct: 0.08 })],
+    DEFAULT_EXITS,
+    NOW,
+  );
+  assert.equal(r.length, 1);
+  assert.equal(r[0].reason, "stop-loss");
+});
+
+test("checkExits: no stored peak and no rise never arms the trail", () => {
+  // With no peakPrice the peak falls back to entry (100), so the trail stop is 92 and
+  // current 91 is below it. A position that never rose cannot arm the trail; the 10% hard
+  // stop at 90 is not hit either, so nothing fires.
+  const r = checkExits(
+    [pos({ currentPrice: 91, stopLossPct: 0.1, trailingStopPct: 0.08 })],
+    DEFAULT_EXITS,
+    NOW,
+  );
+  assert.equal(r.length, 0);
 });
