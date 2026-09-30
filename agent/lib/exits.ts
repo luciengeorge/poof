@@ -14,8 +14,11 @@ export interface ExitDefaults {
   maxStopLossPct: number;
   minTakeProfitPct: number;
   maxTakeProfitPct: number;
-  // Trailing stop: once a position is up by activateTrailAtPct, a stop that ratchets
-  // up with the high-water mark takes over as the primary exit for winners.
+  // Trailing stop: once a position's PEAK is at or above its activation, a stop that
+  // ratchets up with the high-water mark takes over as the primary exit for winners.
+  // Activation is max(activateTrailAtPct, 1 / (1 - trail) - 1): the peak at which that
+  // position's trail stop sits at entry. activateTrailAtPct is a floor that governs only
+  // trails narrower than about 4.76% (a 3% trail breaks even at +3.09%, so the floor wins).
   defaultTrailingStopPct: number;
   minTrailingStopPct: number;
   maxTrailingStopPct: number;
@@ -25,8 +28,10 @@ export interface ExitDefaults {
 // Defaults rationale: the trailing stop is the primary exit on winners, so take-profit
 // is loosened to a far backstop (0.4) that rarely front-runs the trail. Trail defaults to
 // 8% (typical swing-trade give-back), clamped to 3%..20% so it's never absurdly tight or
-// loose, and only activates once a trade is +5% so early noise can't shake it out while the
-// hard stop-loss still protects the downside below that threshold.
+// loose. It arms off the peak at the breakeven point for its own width (+8.7% for the default
+// 8%), so it can never exit below entry at the price the cycle observes; the hard stop-loss
+// protects the downside until then. activateTrailAtPct (0.05) is only a floor: raising or
+// lowering it does NOT move the default trail, which arms at +8.7% regardless.
 export const DEFAULT_EXITS: ExitDefaults = {
   defaultStopLossPct: 0.1,
   defaultTakeProfitPct: 0.4,

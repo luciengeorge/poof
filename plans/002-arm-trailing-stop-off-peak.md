@@ -117,9 +117,12 @@ prefix is `ℹ` on Node 24 and `#` on Node 22; seeing `#` means the wrong Node.
 
 **Out of scope** (do NOT touch, even though they look related):
 - The numeric values in `DEFAULT_EXITS`. Leave `activateTrailAtPct: 0.05` in
-  place as a floor; the derived breakeven will dominate it for every legal
-  trail width. Changing the constants is plan 016's subject and needs plan
-  015's replay harness.
+  place as a floor. The derived breakeven dominates it for trails of about
+  4.76% and wider, and the floor governs below that (the clamp allows trails
+  down to 3%, and a 3% trail breaks even at +3.09%, so it arms at +5% and first
+  exits at +1.85%). So the floor does real work, which matters if plan 016
+  considers dropping it. Changing the constants is plan 016's subject and needs
+  plan 015's replay harness.
 - Stop-loss, take-profit and max-hold logic, and the precedence order.
 - Whether the trail should refuse to fire once the price is below entry after
   an overnight gap. That is a further behaviour change with no evidence behind
