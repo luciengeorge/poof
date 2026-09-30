@@ -131,15 +131,18 @@ async function main(): Promise<void> {
       console.warn("SPY quote failed, pass --current-spy to see the alpha preview:", err);
     }
   }
-  // The current rate only changes the basis when the baseline carries one, so a failed lookup
-  // costs the preview nothing beyond falling back to the labelled USD comparison.
+  // resolveUsdGbp never throws: it degrades to the hardcoded 0.75 with source "fallback". That
+  // is not a measurement, and this preview is the evidence the operator reads before --apply, so
+  // a fallback must NOT produce a "(GBP)" line priced at 0.75. Drop it and let the preview say
+  // USD-unadjusted instead.
   let currentFx = optionalNumber(argv, "--current-fx");
   if (currentFx === undefined) {
-    currentFx = (await resolveUsdGbp()).rate;
+    const resolved = await resolveUsdGbp();
+    currentFx = resolved.source === "fallback" ? undefined : resolved.rate;
   }
   if (currentEquity && currentSpy) {
     console.log(
-      `measured at: equity GBP ${currentEquity.toFixed(2)}, SPY USD ${currentSpy.toFixed(2)}, FX USD->GBP ${currentFx.toFixed(7)}`,
+      `measured at: equity GBP ${currentEquity.toFixed(2)}, SPY USD ${currentSpy.toFixed(2)}, FX USD->GBP ${currentFx?.toFixed(7) ?? "none (lookup fell back)"}`,
     );
     console.log(describeAlpha("before  ", recall.benchmark, currentEquity, currentSpy, currentFx));
     console.log(describeAlpha("after   ", proposed, currentEquity, currentSpy, currentFx));

@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 import { computeAlpha, rebaseForCashFlow, type Benchmark } from "./benchmark.ts";
 
@@ -215,4 +216,22 @@ test("rebaseForCashFlow: a cash flow says nothing about FX, so the inception rat
     computeAlpha(rebased, 350.77, 764.2, CURRENT_FX).spyReturnBasis,
     "GBP",
   );
+});
+
+test("the fallback FX rate never reaches computeAlpha labelled as GBP (structural)", () => {
+  // fx.ts degrades to a hardcoded 0.75 with source "fallback" rather than throwing. Feeding
+  // that in prices SPY ~0.65pp wrong against a real market near 0.755 while still reporting
+  // basis "GBP", which the tool description tells the agent means like-for-like. Both the
+  // seed and the compute path must gate on the source. Unit tests on computeAlpha cannot
+  // prove the CALLER gates, which is exactly how this was reintroduced once already.
+  const tool = readFileSync(new URL("../tools/review_performance.ts", import.meta.url), "utf8");
+  assert.match(tool, /source === "fallback"/, "review_performance must gate on the fx source");
+  assert.doesNotMatch(
+    tool,
+    /computeAlpha\(benchmark, equity, spyPrice, fxRate\)/,
+    "the raw fxRate must not be passed straight through; gate it first",
+  );
+
+  const script = readFileSync(new URL("../../scripts/rebase-benchmark.ts", import.meta.url), "utf8");
+  assert.match(script, /resolved\.source === "fallback"/, "the rebase preview must gate too");
 });

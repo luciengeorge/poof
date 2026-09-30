@@ -135,7 +135,13 @@ export default defineTool({
         benchmark = seeded;
       }
       if (benchmark && spyPrice > 0) {
-        alpha = computeAlpha(benchmark, equity, spyPrice, fxRate);
+        // Gate the CURRENT rate exactly as the seed above gates the inception rate. The
+        // hardcoded fallback is not a measurement, and feeding it in would price SPY at 0.75
+        // against a real market near 0.755 while still labelling the result "GBP", which the
+        // tool description tells the agent means like-for-like. Better an honest
+        // "USD-unadjusted" than a GBP figure that is quietly ~0.65pp out.
+        const usableFx = fx.source === "fallback" ? undefined : fxRate;
+        alpha = computeAlpha(benchmark, equity, spyPrice, usableFx);
       }
     } catch (err) {
       console.warn("[benchmark] SPY quote/seed failed (non-fatal):", err);
