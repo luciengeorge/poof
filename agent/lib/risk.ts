@@ -68,11 +68,13 @@ export interface RunningState {
 // "Concentrate, deploy, keep the breakers": seven weeks live showed the picks had positive
 // expectancy (+0.8% mean per closed trade) while the account went nowhere, because the median
 // order was 10 GBP on a 250 GBP account and cash drifted to 84%. A perfect signal is invisible at
-// that size. The floor is now 15% of equity so a "probe" is rejected rather than placed, the
-// position cap is 4 so the floor and the cap agree (4 x ~22% fills the 90% target), and 10% cash
-// stays free for FX and fees. The daily-loss and drawdown breakers loosen to fit concentration:
-// at 4 names a single -16% day on one 25% position is a -4% account day, which under the old 4%
-// halt stopped the whole system for one stock's bad print. They remain ruin-prevention.
+// that size. The floor is now 15% of equity so a "probe" is rejected rather than placed, and the
+// position cap is 4 so the floor and the cap agree (4 x ~22% fills the 90% cap). The stock sleeve
+// is capped at maxDeployedPct of equity; the remainder sits in the index core (core.ts), which
+// keeps its own small cash buffer for FX and fees. The daily-loss and drawdown breakers loosen to
+// fit concentration: at 4 names a single -16% day on one 25% position is a -4% account day, which
+// under the old 4% halt stopped the whole system for one stock's bad print. They remain
+// ruin-prevention.
 // Every field is overridable per-deployment via resolveLimits()/TRADING_* env vars.
 export const DEFAULT_LIMITS: RiskLimits = {
   maxPerNamePct: 0.3,
