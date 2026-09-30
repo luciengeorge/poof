@@ -86,6 +86,12 @@ test("every Memory method includes the token in its args", async () => {
     inceptionSpyPrice: 500,
     inceptionDate: "2026-06-25",
   });
+  await m.overwriteBenchmark({
+    env: "demo",
+    inceptionEquity: 252.17,
+    inceptionSpyPrice: 754.81,
+    inceptionDate: "2026-07-15",
+  });
   await m.getBenchmark("demo");
   await m.saveLessons("demo", "lesson text");
   await m.getLessons("demo");
