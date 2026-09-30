@@ -150,9 +150,22 @@ not a smoke test.
 
 ### Step 3: Validate the Convex schema against stored rows
 
-Add a CI step running `npx convex deploy --dry-run`. This is the only check
+Add a CI step running `npx convex deploy --dry-run -y`. This is the only check
 that validates the schema against **existing data**, which is what `tsc` cannot
 do and what broke a production deploy before.
+
+**The `-y` matters.** Without it the command prompts for target confirmation
+and aborts in a non-interactive terminal, which looks like the check not
+working. Verified on 2026-09-30, the full run prints:
+
+```
+Pushing code to your Convex deployment...
+Schema validation complete.
+✔ Would have deployed Convex functions to https://...
+```
+
+It contacts production and validates against real documents, then stops before
+writing. "Would have deployed" is the confirmation that nothing was written.
 
 This needs a deploy key with at least preview access, exposed as a repository
 secret. **Do not** put any secret value in the workflow file or in this plan;
