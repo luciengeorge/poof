@@ -40,12 +40,16 @@ export async function runFunnelSchedule(
     return;
   }
 
-  const universe = loadUniverse();
-  const tickers = universeChunk(universe.tickers, claim.chunk, FUNNEL_CHUNKS);
-  const news = finnhubFromEnv();
-  logger.log(`[${schedule}] claimed chunk ${claim.chunk}/${FUNNEL_CHUNKS} for ${day}: ${tickers.length} tickers`);
-
+  // Everything after the claim belongs in the try: a throw out here would leave the chunk at
+  // `started` for good, which is how a broken universe load went unnoticed for thirteen days.
+  let tickers: string[] = [];
+  let news: ReturnType<typeof finnhubFromEnv>;
   try {
+    const universe = loadUniverse();
+    tickers = universeChunk(universe.tickers, claim.chunk, FUNNEL_CHUNKS);
+    news = finnhubFromEnv();
+    logger.log(`[${schedule}] claimed chunk ${claim.chunk}/${FUNNEL_CHUNKS} for ${day}: ${tickers.length} tickers`);
+
     const result = await runFunnelChunk(tickers, { news, jev, memory, now, logger });
     await memory.finishFunnelChunk({
       id: claim.id,

@@ -1,12 +1,14 @@
-import { readFileSync } from "node:fs";
+import { UNIVERSE } from "../data/universe.ts";
 
 /**
  * The tradable universe the wide funnel scans.
  *
  * A committed file, not a live index lookup. Constituent lists move a few names a quarter, and a
  * scan that silently changed its own universe would make day-to-day funnel counts incomparable.
- * `scripts/refresh-universe.ts` rewrites this file deliberately, with the date, when someone
- * decides to.
+ * Someone edits `agent/data/universe.ts` deliberately, with the date, when the list should move.
+ *
+ * It is imported rather than read from disk because the deploy bundler traces imports and collapses
+ * the app into one file: a runtime read of a sibling JSON resolved to a path production never had.
  */
 export interface Universe {
   asOf: string;
@@ -14,12 +16,10 @@ export interface Universe {
   tickers: string[];
 }
 
-const FILE = new URL("../data/universe.json", import.meta.url);
-
 export function loadUniverse(): Universe {
-  const raw = JSON.parse(readFileSync(FILE, "utf8")) as Partial<Universe>;
+  const raw = UNIVERSE as Partial<Universe>;
   if (!Array.isArray(raw.tickers) || raw.tickers.length === 0 || typeof raw.asOf !== "string") {
-    throw new Error("agent/data/universe.json is malformed");
+    throw new Error("agent/data/universe.ts is malformed");
   }
   const seen = new Set<string>();
   const tickers = raw.tickers.filter((t) => {
