@@ -266,6 +266,26 @@ export const recordOrderIntent = mutation({
   },
 });
 
+export const recordCoreOrder = mutation({
+  args: {
+    token: v.string(),
+    env: v.string(),
+    action: v.union(v.literal("sweep"), v.literal("fund")),
+    status: v.string(),
+    quantity: v.number(),
+    priceGbp: v.number(),
+    notionalGbp: v.number(),
+    dryRun: v.boolean(),
+    detail: v.string(),
+    orderId: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    assertSecret(args.token);
+    const { token, ...rest } = args;
+    return await ctx.db.insert("coreOrders", { ...rest, createdAt: Date.now() });
+  },
+});
+
 /**
  * Record the last OBSERVED price for a set of open positions, in ONE round trip.
  *

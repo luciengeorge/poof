@@ -45,6 +45,11 @@ export interface Rejection {
 export interface ValidationResult {
   accepted: ProposedOrder[];
   rejected: Rejection[];
+  /**
+   * Cash, in account currency, that would have let through the BUYs rejected ONLY for want of
+   * cash. 0 when there are none. The caller may raise it from the index core (core-orders.ts).
+   */
+  cashShortfall: number;
 }
 
 export interface HaltDecision {
@@ -182,6 +187,7 @@ export function validateOrders(
     distinctPositions: stocks.length,
     newPositionsToday: p.newPositionsToday,
   };
+  let unfundedNotional = 0;
 
   for (const order of orders) {
     if (order.side === "SELL") {
@@ -216,6 +222,11 @@ export function validateOrders(
     const reason = evaluateBuy(order, p, limits, running);
     if (reason) {
       rejected.push({ order, reason });
+      // Re-run the same rules with unlimited cash: a buy that passes then was stopped by cash
+      // alone. One that another limit would also stop is never worth raising cash for.
+      if (evaluateBuy(order, p, limits, { ...running, cash: Infinity }) === null) {
+        unfundedNotional += order.notional;
+      }
       continue;
     }
     const isNew = !running.valueByTicker.has(order.ticker);
@@ -231,5 +242,5 @@ export function validateOrders(
     }
   }
 
-  return { accepted, rejected };
+  return { accepted, rejected, cashShortfall: Math.max(0, unfundedNotional - running.cash) };
 }

@@ -185,6 +185,23 @@ export default defineSchema({
     createdAt: v.number(),
   }).index("by_env_and_key", ["env", "key"]),
 
+  // Orders for the index core (agent/lib/core-orders.ts): the end-of-cycle sweep of idle cash in,
+  // and the sale that funds a stock buy. Kept OUT of `trades` on purpose: that table feeds win
+  // rate, per-tag stats, calibration and attribution, and index rebalances there would pollute the
+  // measurement of whether stock picking works. A new table, so every field can be required.
+  coreOrders: defineTable({
+    env: v.string(),
+    action: v.union(v.literal("sweep"), v.literal("fund")),
+    status: v.string(), // placed | simulated | rejected
+    quantity: v.number(), // signed shares: positive buys, negative sells
+    priceGbp: v.number(),
+    notionalGbp: v.number(),
+    dryRun: v.boolean(),
+    detail: v.string(),
+    orderId: v.optional(v.number()),
+    createdAt: v.number(),
+  }).index("by_env", ["env"]),
+
   // ONLINE EVALS: one row per production trading-cycle TURN, written by the trace-cycle hook.
   //
   // The `cycles` table above is a DECISION log (what the agent concluded). This is a

@@ -88,6 +88,19 @@ export interface BenchmarkRecord {
   inceptionFxRate?: number;
 }
 
+/** One index-core order (agent/lib/core-orders.ts). Never a trade: see the coreOrders table. */
+export interface CoreOrderRecord {
+  env: Env;
+  action: "sweep" | "fund";
+  status: string;
+  quantity: number;
+  priceGbp: number;
+  notionalGbp: number;
+  dryRun: boolean;
+  detail: string;
+  orderId?: number;
+}
+
 export interface CycleRecord {
   env: Env;
   equity: number;
@@ -404,6 +417,9 @@ export class Memory {
   }
   async hasOrderIntent(env: Env, key: string): Promise<boolean> {
     return (await this.query("hasOrderIntent", { env, key })) as boolean;
+  }
+  recordCoreOrder(r: CoreOrderRecord): Promise<unknown> {
+    return this.mutation("recordCoreOrder", { ...r });
   }
   getRiskState(env: Env): Promise<unknown> {
     return this.query("getRiskState", { env });

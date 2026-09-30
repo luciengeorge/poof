@@ -1,18 +1,21 @@
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 import { t212FromEnv } from "../lib/t212.ts";
-import { evaluateAndExecute } from "../lib/orders.ts";
-import { resolveLimits, isDryRun } from "../lib/state.ts";
-import { fxForCycle } from "../lib/fx.ts";
-import { memoryFromEnv } from "../lib/memory.ts";
+import { evaluateAndExecute, type OrderExecClient, type Proposal } from "../lib/orders.ts";
+import { resolveLimits, isDryRun, type RiskState } from "../lib/state.ts";
+import { fxForCycle, type FxResolution } from "../lib/fx.ts";
+import { memoryFromEnv, type Env, type Memory } from "../lib/memory.ts";
 import { resolveRiskState, tradingEnv } from "../lib/risk-runtime.ts";
 import { finnhubFromEnv } from "../lib/data.ts";
 import { t212TickerToFinnhubSymbol } from "../lib/execution.ts";
 import { buildRecordTradeArgs } from "../lib/order-bookkeeping.ts";
 import { applyHoldFloor } from "../lib/hold-floor.ts";
-import { jevFromEnv } from "../lib/jev.ts";
+import { jevFromEnv, type JevClient } from "../lib/jev.ts";
 import { shadowConfidence } from "../lib/jev-shadow.ts";
 import { STRATEGY_TAGS } from "../lib/positions.ts";
+import type { RiskLimits } from "../lib/risk.ts";
+import { CORE_TICKER, isCore } from "../lib/core.ts";
+import { coreOrderRecord, fundFromCore, type CoreResult } from "../lib/core-orders.ts";
 import {
   externalHoldingSymbols,
   partitionExternalHoldingBuys,
@@ -84,6 +87,162 @@ const proposalSchema = z.object({
     ),
 });
 
+export const CORE_PROPOSAL_REASON =
+  `${CORE_TICKER} is the index core, bought and sold automatically; do not propose it`;
+
+/** Everything the tool reaches outside itself, so the whole path can run against fakes. */
+export interface SubmitOrdersDeps {
+  client: OrderExecClient;
+  memory: Pick<
+    Memory,
+    "listExternalHoldings" | "hasOrderIntent" | "recordOrderIntent" | "recordTrade" | "recordCoreOrder"
+  >;
+  env: Env;
+  fx: FxResolution;
+  dryRun: boolean;
+  resolveRiskState: (currentEquity: number) => Promise<RiskState>;
+  resolvePrice: (ticker: string) => Promise<number>;
+  limits: RiskLimits;
+  jev: JevClient | null;
+}
+
+/**
+ * The tool's whole path with its IO passed in. The test seam that proves, end to end, that no
+ * index core order reaches the trades table: a unit test on one helper cannot show that.
+ */
+export async function submitOrders(proposals: Proposal[], deps: SubmitOrdersDeps) {
+  const { client, memory, env, fx, dryRun } = deps;
+
+  // PRE-GATE GUARD: never BUY a name the user holds in the external advisory account.
+  // The instructions say so too, but prompts are not a control, so it is enforced here in
+  // code. Deliberately OUTSIDE evaluateAndExecute: that function and buildRiskSnapshot are
+  // pure functions of broker inputs with no Convex access, which is precisely why an
+  // external holding's VALUE can never reach equity or sizing. Only ticker STRINGS cross
+  // this boundary; a string cannot be summed into equity.
+  let excludedSymbols: ReadonlySet<string> = new Set<string>();
+  let blockAllBuys = false;
+  try {
+    excludedSymbols = externalHoldingSymbols(
+      await memory.listExternalHoldings(env),
+    );
+  } catch (err) {
+    // Without the list we cannot tell which names are excluded. On live, open no new
+    // exposure (same fail-closed stance resolveRiskState takes on a Convex outage:
+    // halt BUYs, allow SELLs). On demo, warn and continue.
+    blockAllBuys = env === "live";
+    console.warn(
+      `[external] holding lookup FAILED${
+        blockAllBuys ? " on LIVE; failing closed (skip BUYs, allow SELLs)" : ""
+      }:`,
+      err,
+    );
+  }
+  // Entry-time hold floor, in code: the exit engine honours a per-position maxHoldDays over
+  // the default, and the model had been stamping 10 on nearly every BUY. See hold-floor.ts.
+  const floored = applyHoldFloor(proposals);
+  for (const note of floored.notes) console.log(`[hold-floor] ${note}`);
+
+  const { allowed, blocked } = partitionExternalHoldingBuys(
+    floored.proposals,
+    excludedSymbols,
+    { blockAllBuys },
+  );
+
+  // The index core is bought and sold in code, never proposed. Sized here it would be priced as a
+  // USD stock and booked as a trade, so it is refused before the gate. Refused, not skipped: a
+  // skip is recorded to the trades table, and no core order may ever reach it.
+  const coreProposals = allowed.filter((p) => isCore(p.ticker));
+  const stockProposals = allowed.filter((p) => !isCore(p.ticker));
+
+  const result = await evaluateAndExecute(stockProposals, {
+    client,
+    fx,
+    dryRun,
+    resolveRiskState: deps.resolveRiskState,
+    resolvePrice: deps.resolvePrice,
+    limits: deps.limits,
+    hasOrderIntent: (key) => memory.hasOrderIntent(env, key),
+    recordOrderIntent: async (key) => {
+      await memory.recordOrderIntent(env, key);
+    },
+  });
+  for (const proposal of coreProposals) {
+    result.rejected.push({ proposal, reason: CORE_PROPOSAL_REASON });
+  }
+
+  // Report each blocked BUY as a skip with an explicit reason, mirroring the existing
+  // skip-with-reason pattern (precision / pending / duplicate). A skip rather than a throw,
+  // so one blocked proposal never aborts the rest of the batch. These are recorded to memory
+  // below with status "skipped" (never "placed"), so the guard's activation is auditable and
+  // the blocked name never becomes an open position.
+  for (const proposal of blocked) {
+    result.placed.push({
+      proposal,
+      quantity: 0,
+      dryRun,
+      skipped: EXTERNAL_HOLDING_SKIP_REASON,
+    });
+  }
+
+  // FUNDING. A stock BUY the gate rejected only for want of cash is funded by selling just enough
+  // of the index core, once for the whole batch. The stock is not retried here: the agent decides
+  // again next cycle with the cash in hand. See fundFromCore.
+  let core: CoreResult | undefined;
+  if ((result.cashShortfall ?? 0) > 0) {
+    core = await fundFromCore({
+      client,
+      fx,
+      dryRun,
+      shortfall: result.cashShortfall ?? 0,
+      hasOrderIntent: (key) => memory.hasOrderIntent(env, key),
+      recordOrderIntent: async (key) => {
+        await memory.recordOrderIntent(env, key);
+      },
+    });
+  }
+
+  // SHADOW forecast: ask Jev the same question the agent answered with `confidence`, for every
+  // BUY that was actually placed, and record it beside the claim. It is scored by calibration.ts
+  // against the realised outcome and influences nothing. Best-effort and after the gate on
+  // purpose: an observer must not be able to delay or block an order.
+  const { jev } = deps;
+  if (jev) {
+    await Promise.all(
+      result.placed
+        .filter((p) => p.proposal.side === "BUY" && !p.skipped)
+        .map(async (p) => {
+          const shadow = await shadowConfidence(jev, p.proposal);
+          if (shadow) Object.assign(p.proposal, shadow);
+        }),
+    );
+  }
+
+  // Record every placed/simulated trade to durable memory. Best-effort:
+  // a memory failure must never break trading.
+  try {
+    const args = buildRecordTradeArgs(result.placed, env);
+    await Promise.all(args.map((a) => memory.recordTrade(a)));
+  } catch (err) {
+    console.warn("[memory] recordTrade failed (non-fatal):", err);
+  }
+
+  // Core orders go to their own audit table, never to trades. Best-effort, like the above.
+  const audit = core ? coreOrderRecord(core, env) : null;
+  if (audit) {
+    try {
+      await memory.recordCoreOrder(audit);
+    } catch (err) {
+      console.warn("[memory] recordCoreOrder failed (non-fatal):", err);
+    }
+  }
+
+  return {
+    ...result,
+    holdFloorNotes: floored.notes,
+    ...(core ? { core } : {}),
+  };
+}
+
 export default defineTool({
   description:
     "Validate proposed trades against the hard risk limits on the LIVE account, then place the accepted ones as market orders. The risk gate runs INSIDE this tool and is authoritative and cannot be bypassed. BUYs for any ticker held in the user's external advisory account are blocked in code before the gate and reported as skipped: that account is not tradable here, so do not propose those names. Honors DRY_RUN (default on: orders are simulated, not sent). On BUYs, set stopLossPct + trailingStopPct (the trailing stop is the primary exit for winners; leave takeProfitPct as a far backstop, plus maxHoldDays if time-bound). The exit engine enforces them automatically on later cycles. Returns `placed` (with share quantity; `dryRun`/`skipped` flags) and `rejected` (with reasons). Always report both back to the user.",
@@ -96,50 +255,12 @@ export default defineTool({
   approval: () =>
     process.env.REQUIRE_APPROVAL === "true" && process.env.DRY_RUN === "false",
   async execute({ proposals }) {
-    const client = t212FromEnv();
     const finnhub = finnhubFromEnv();
-    const memory = memoryFromEnv();
-    const env = tradingEnv();
-    const fx = await fxForCycle();
-
-    // PRE-GATE GUARD: never BUY a name the user holds in the external advisory account.
-    // The instructions say so too, but prompts are not a control, so it is enforced here in
-    // code. Deliberately OUTSIDE evaluateAndExecute: that function and buildRiskSnapshot are
-    // pure functions of broker inputs with no Convex access, which is precisely why an
-    // external holding's VALUE can never reach equity or sizing. Only ticker STRINGS cross
-    // this boundary; a string cannot be summed into equity.
-    let excludedSymbols: ReadonlySet<string> = new Set<string>();
-    let blockAllBuys = false;
-    try {
-      excludedSymbols = externalHoldingSymbols(
-        await memory.listExternalHoldings(env),
-      );
-    } catch (err) {
-      // Without the list we cannot tell which names are excluded. On live, open no new
-      // exposure (same fail-closed stance resolveRiskState takes on a Convex outage:
-      // halt BUYs, allow SELLs). On demo, warn and continue.
-      blockAllBuys = env === "live";
-      console.warn(
-        `[external] holding lookup FAILED${
-          blockAllBuys ? " on LIVE; failing closed (skip BUYs, allow SELLs)" : ""
-        }:`,
-        err,
-      );
-    }
-    // Entry-time hold floor, in code: the exit engine honours a per-position maxHoldDays over
-    // the default, and the model had been stamping 10 on nearly every BUY. See hold-floor.ts.
-    const floored = applyHoldFloor(proposals);
-    for (const note of floored.notes) console.log(`[hold-floor] ${note}`);
-
-    const { allowed, blocked } = partitionExternalHoldingBuys(
-      floored.proposals,
-      excludedSymbols,
-      { blockAllBuys },
-    );
-
-    const result = await evaluateAndExecute(allowed, {
-      client,
-      fx,
+    return submitOrders(proposals, {
+      client: t212FromEnv(),
+      memory: memoryFromEnv(),
+      env: tradingEnv(),
+      fx: await fxForCycle(),
       dryRun: isDryRun(),
       resolveRiskState,
       resolvePrice: async (ticker) => {
@@ -150,51 +271,7 @@ export default defineTool({
         return (await finnhub.getQuote(symbol)).price;
       },
       limits: resolveLimits(),
-      hasOrderIntent: (key) => memory.hasOrderIntent(tradingEnv(), key),
-      recordOrderIntent: async (key) => {
-        await memory.recordOrderIntent(tradingEnv(), key);
-      },
+      jev: jevFromEnv(),
     });
-
-    // Report each blocked BUY as a skip with an explicit reason, mirroring the existing
-    // skip-with-reason pattern (precision / pending / duplicate). A skip rather than a throw,
-    // so one blocked proposal never aborts the rest of the batch. These are recorded to memory
-    // below with status "skipped" (never "placed"), so the guard's activation is auditable and
-    // the blocked name never becomes an open position.
-    for (const proposal of blocked) {
-      result.placed.push({
-        proposal,
-        quantity: 0,
-        dryRun: isDryRun(),
-        skipped: EXTERNAL_HOLDING_SKIP_REASON,
-      });
-    }
-
-    // SHADOW forecast: ask Jev the same question the agent answered with `confidence`, for every
-    // BUY that was actually placed, and record it beside the claim. It is scored by calibration.ts
-    // against the realised outcome and influences nothing. Best-effort and after the gate on
-    // purpose: an observer must not be able to delay or block an order.
-    const jev = jevFromEnv();
-    if (jev) {
-      await Promise.all(
-        result.placed
-          .filter((p) => p.proposal.side === "BUY" && !p.skipped)
-          .map(async (p) => {
-            const shadow = await shadowConfidence(jev, p.proposal);
-            if (shadow) Object.assign(p.proposal, shadow);
-          }),
-      );
-    }
-
-    // Record every placed/simulated trade to durable memory. Best-effort:
-    // a memory failure must never break trading.
-    try {
-      const args = buildRecordTradeArgs(result.placed, tradingEnv());
-      await Promise.all(args.map((a) => memory.recordTrade(a)));
-    } catch (err) {
-      console.warn("[memory] recordTrade failed (non-fatal):", err);
-    }
-
-    return { ...result, holdFloorNotes: floored.notes };
   },
 });

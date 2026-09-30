@@ -373,3 +373,58 @@ test("validateOrders: three stocks plus the core allow a fourth stock and not a 
   assert.equal(res.rejected[0].order.ticker, "EEE");
   assert.match(res.rejected[0].reason, /max 4 concurrent positions/);
 });
+
+// --- Task 7: the cash a funding sale would need ---
+
+test("validateOrders: cashShortfall is the cash the buys rejected only for cash would need", () => {
+  const p = basePortfolio({
+    equity: 1000,
+    peakEquity: 1000,
+    cash: 200,
+    positions: [
+      { ticker: CORE_TICKER, value: 700 },
+      { ticker: "AAA", value: 100 },
+    ],
+  });
+  const res = validateOrders(
+    [buy({ ticker: "BBB", notional: 250 }), buy({ ticker: "CCC", notional: 150 })],
+    p,
+    DEFAULT_LIMITS,
+  );
+  // BBB is short (250 > 200); CCC then spends 150, leaving 50. BBB needs 200 more.
+  assert.deepEqual(
+    res.accepted.map((o) => o.ticker),
+    ["CCC"],
+  );
+  assert.match(res.rejected[0].reason, /insufficient cash/);
+  assert.equal(res.cashShortfall, 200);
+});
+
+test("validateOrders: a buy another limit would also stop raises no cash", () => {
+  // Short of cash AND over the 30% per-name cap once bought: cash is not its only problem.
+  const p = basePortfolio({
+    equity: 1000,
+    peakEquity: 1000,
+    cash: 30,
+    positions: [
+      { ticker: CORE_TICKER, value: 720 },
+      { ticker: "AAA", value: 250 },
+    ],
+  });
+  const res = validateOrders([buy({ ticker: "AAA", notional: 150 })], p, DEFAULT_LIMITS);
+  assert.match(res.rejected[0].reason, /insufficient cash/);
+  assert.equal(res.cashShortfall, 0);
+});
+
+test("validateOrders: a halt raises no cash, so it can never sell the core", () => {
+  const p = basePortfolio({
+    equity: 1000,
+    peakEquity: 1000,
+    cash: 30,
+    dayPnl: -100,
+    positions: [{ ticker: CORE_TICKER, value: 970 }],
+  });
+  const res = validateOrders([buy({ ticker: "BBB", notional: 150 })], p, DEFAULT_LIMITS);
+  assert.match(res.rejected[0].reason, /halted/);
+  assert.equal(res.cashShortfall, 0);
+});

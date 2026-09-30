@@ -48,7 +48,7 @@ function t212RejectionSkip(err: unknown): string | null {
  * rest of the batch. Genuine infra failures (network, 5xx, exhausted rate-limit backoff)
  * still throw so they surface instead of being silently swallowed.
  */
-async function placeWithPrecision(
+export async function placeWithPrecision(
   client: OrderExecClient,
   ticker: string,
   magnitude: number,
@@ -124,6 +124,8 @@ export interface ExecutionResult {
   placed: PlacedResult[];
   rejected: { proposal: Proposal; reason: string }[];
   accountValueReconciliation?: import("./execution.ts").AccountValueReconciliation;
+  /** From the gate: cash that would have let the BUYs rejected only for cash through. */
+  cashShortfall?: number;
 }
 
 export interface ExecuteOpts {
@@ -190,7 +192,7 @@ export async function evaluateAndExecute(
   const snapshot = buildRiskSnapshot({ brokerSnapshot, ...riskState });
   // Pass full proposals through; validateOrders only reads ticker/side/notional/price,
   // but keeping the original objects means thesis/redTeamVerdict ride along to the result.
-  const { accepted, rejected } = validateOrders(proposals, snapshot, limits);
+  const { accepted, rejected, cashShortfall } = validateOrders(proposals, snapshot, limits);
 
   const result: ExecutionResult = {
     placed: [],
@@ -199,6 +201,7 @@ export async function evaluateAndExecute(
       reason: r.reason,
     })),
     accountValueReconciliation,
+    cashShortfall,
   };
 
   for (const order of accepted) {
