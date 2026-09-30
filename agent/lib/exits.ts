@@ -14,8 +14,11 @@ export interface ExitDefaults {
   maxStopLossPct: number;
   minTakeProfitPct: number;
   maxTakeProfitPct: number;
-  // Trailing stop: once a position is up by activateTrailAtPct, a stop that ratchets
-  // up with the high-water mark takes over as the primary exit for winners.
+  // Trailing stop: once a position's PEAK is at or above its activation, a stop that
+  // ratchets up with the high-water mark takes over as the primary exit for winners.
+  // Activation is max(activateTrailAtPct, 1 / (1 - trail) - 1): the peak at which that
+  // position's trail stop sits at entry. activateTrailAtPct is a floor that governs only
+  // trails narrower than about 4.76% (a 3% trail breaks even at +3.09%, so the floor wins).
   defaultTrailingStopPct: number;
   minTrailingStopPct: number;
   maxTrailingStopPct: number;
@@ -25,8 +28,11 @@ export interface ExitDefaults {
 // Defaults rationale: the trailing stop is the primary exit on winners, so take-profit
 // is loosened to a far backstop (0.4) that rarely front-runs the trail. Trail defaults to
 // 8% (typical swing-trade give-back), clamped to 3%..20% so it's never absurdly tight or
-// loose, and only activates once a trade is +5% so early noise can't shake it out while the
-// hard stop-loss still protects the downside below that threshold.
+// loose. It arms off the peak at the breakeven point for its own width (+8.7% for the default
+// 8%), so it can never exit below entry at the price the cycle observes; the hard stop-loss
+// protects the downside until then. activateTrailAtPct (0.05) is only a floor: lowering it,
+// or raising it anywhere up to +8.7%, does NOT move the default 8% trail. Raising it ABOVE
+// +8.7% does, because activation is max(floor, breakeven) and the floor then binds.
 export const DEFAULT_EXITS: ExitDefaults = {
   defaultStopLossPct: 0.1,
   defaultTakeProfitPct: 0.4,
@@ -131,7 +137,20 @@ export function checkExits(
 
     const peak = Math.max(p.peakPrice ?? p.entryPrice, p.currentPrice);
     const trailStopPrice = peak * (1 - trailingStopPct);
-    const trailActive = pnlPct >= defaults.activateTrailAtPct;
+    // Arm off the PEAK, at this position's breakeven. Arming used to test CURRENT P&L against
+    // activateTrailAtPct while the stop price came off the peak, and at the 8% / +5% defaults
+    // the two conditions could only hold together above a +14.13% peak: by the time price was
+    // 8% off a smaller peak it was already under +5%, so the trail disarmed itself at the moment
+    // it should fire. That is why no trailing stop fired in the first 52 live trades. Arming off
+    // the peak at a fixed +5% would be no better: a +5% winner pulled back 8% exits at
+    // 1.05 * 0.92 = 0.966, a -3.4% loss. So activation is the peak at which THIS position's
+    // trail stop sits at entry, 1 / (1 - trail) - 1 (+8.7% for 8%, +17.6% for 15%), with
+    // activateTrailAtPct kept as a floor. The trail then cannot exit below entry at the price
+    // the cycle observes (an overnight gap through the stop still can).
+    const peakPnlPct = (peak - p.entryPrice) / p.entryPrice;
+    const breakevenActivation = 1 / (1 - trailingStopPct) - 1;
+    const activation = Math.max(defaults.activateTrailAtPct, breakevenActivation);
+    const trailActive = peakPnlPct >= activation;
 
     let reason: ExitReason | null = null;
     if (pnlPct <= -stopLossPct) reason = "stop-loss";
