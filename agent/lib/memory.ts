@@ -86,6 +86,21 @@ export interface BenchmarkRecord {
   inceptionDate: string;
   /** USD -> GBP at inception. Absent on baselines captured before it was recorded. */
   inceptionFxRate?: number;
+  /** The index core's ticker when measured against it; absent for the legacy SPY baseline. */
+  benchmarkTicker?: string;
+}
+
+/** One index-core order (agent/lib/core-orders.ts). Never a trade: see the coreOrders table. */
+export interface CoreOrderRecord {
+  env: Env;
+  action: "sweep" | "fund";
+  status: string;
+  quantity: number;
+  priceGbp: number;
+  notionalGbp: number;
+  dryRun: boolean;
+  detail: string;
+  orderId?: number;
 }
 
 export interface CycleRecord {
@@ -404,6 +419,9 @@ export class Memory {
   }
   async hasOrderIntent(env: Env, key: string): Promise<boolean> {
     return (await this.query("hasOrderIntent", { env, key })) as boolean;
+  }
+  recordCoreOrder(r: CoreOrderRecord): Promise<unknown> {
+    return this.mutation("recordCoreOrder", { ...r });
   }
   getRiskState(env: Env): Promise<unknown> {
     return this.query("getRiskState", { env });

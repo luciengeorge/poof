@@ -2,7 +2,13 @@
  * Benchmark the account against buy-and-hold SPY. A baseline (equity + SPY price) is
  * captured once at inception; alpha is the account's return minus SPY's return over the
  * same window. Pure + unit-tested. If the agent can't beat holding SPY, it should hold SPY.
+ *
+ * Or, once the baseline names the index core (`benchmarkTicker`), against the core itself: the
+ * exact counterfactual "did poof beat just holding the index, in pounds?", total return, and no
+ * currency conversion at all.
  */
+import { isCore } from "./core.ts";
+
 export interface Benchmark {
   inceptionEquity: number;
   inceptionSpyPrice: number;
@@ -13,6 +19,11 @@ export interface Benchmark {
    * captured before this existed have no rate, and there is no honest way to invent one.
    */
   inceptionFxRate?: number;
+  /**
+   * The index core's ticker when the account is measured against it. `inceptionSpyPrice` then
+   * holds the core's GBP price at inception. Absent on the legacy SPY baseline.
+   */
+  benchmarkTicker?: string;
 }
 
 /**
@@ -98,4 +109,25 @@ export function computeAlpha(
     alphaPct: accountReturnPct - spyReturnPct,
     spyReturnBasis: gbpBasis ? "GBP" : "USD-unadjusted",
   };
+}
+
+/** Does this baseline measure against the index core rather than SPY? */
+export function isCoreBenchmark(baseline: Benchmark | null | undefined): boolean {
+  return isCore(baseline?.benchmarkTicker ?? "");
+}
+
+/**
+ * Alpha against the index core, priced from Trading 212's own price on the held core: nothing
+ * outside the broker prices it. The core is quoted in GBP, so both rates are 1 by definition and
+ * the basis is "GBP" whatever rate the stored row happens to carry. Null when the core is not
+ * held, rather than a number built on a guessed price.
+ */
+export function alphaVsCore(
+  baseline: Benchmark,
+  currentEquity: number,
+  positions: readonly { ticker: string; currentPrice: number }[],
+): AlphaResult | null {
+  const held = positions.find((p) => isCore(p.ticker));
+  if (!held || !(held.currentPrice > 0)) return null;
+  return computeAlpha({ ...baseline, inceptionFxRate: 1 }, currentEquity, held.currentPrice, 1);
 }

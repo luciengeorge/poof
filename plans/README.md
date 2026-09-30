@@ -25,7 +25,7 @@ instrument announces itself.
 | Plan | Title | Priority | Effort | Depends on | Status |
 |------|-------|----------|--------|------------|--------|
 | 001 | Reinstall the dependency tree so local runs are evidence | P1 | S |, | TODO |
-| 002 | Arm the trailing stop off the peak, at breakeven | P1 | S | 001 | IN PROGRESS |
+| 002 | Arm the trailing stop off the peak, at breakeven | P1 | S | 001 | DONE (#83) |
 | 003 | Stop failure payloads carrying the shared secret to Slack | P1 | S | 001 | TODO |
 | 004 | Stop `.env.example` reinstating the pre-#76 risk gate | P1 | S | 001 | TODO |
 | 005 | Never place an order twice, never lose one that filled | P1 | M | 001 | TODO |
@@ -39,6 +39,8 @@ instrument announces itself.
 | 014 | Collapse the duplicated Jev news screener | P3 | S | 001 | TODO |
 | 015 | SPIKE: replay real trades through the backtest harness | P2 | M | 001, 002 | TODO |
 | 016 | SPIKE: re-derive the exit ladder from the real win distribution | P3 | M | 015 | TODO |
+| 017 | Hold the index with every pound not in a stock | P1 | L | 001 | IN PROGRESS |
+| 018 | Stop telling the agent to trade when it has no reason to | P1 | S | 017 (same release) | IN PROGRESS |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (one-line reason) | REJECTED (one-line rationale)
 
@@ -68,6 +70,10 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (one-line reason) | REJECTED 
   roughly 42 seconds on the cycle that trades real money. The right shape is a
   token bucket sized against a measured 429 rate, and nobody has collected one.
   The limiter wants its own plan once that data exists.
+
+- **017 and 018 must ship together.** 018 removes the prompt's rule to trade every
+  cycle; without 017's index core that would leave MORE money in cash and raise
+  the drag it exists to remove. They are one PR.
 
 ## Findings considered and rejected
 

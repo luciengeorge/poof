@@ -130,6 +130,7 @@ export const saveBenchmark = mutation({
     inceptionSpyPrice: v.number(),
     inceptionDate: v.string(),
     inceptionFxRate: v.optional(v.number()),
+    benchmarkTicker: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     assertSecret(args.token);
@@ -154,6 +155,7 @@ export const overwriteBenchmark = mutation({
     inceptionSpyPrice: v.number(),
     inceptionDate: v.string(),
     inceptionFxRate: v.optional(v.number()),
+    benchmarkTicker: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     assertSecret(args.token);
@@ -172,6 +174,9 @@ export const overwriteBenchmark = mutation({
       // Spelled out so a rebase that omits the rate CLEARS it (Convex drops a field patched
       // with undefined) instead of pairing a stale inception rate with a new SPY price.
       inceptionFxRate: rest.inceptionFxRate,
+      // Same rule: a rebase that omits the ticker returns to SPY rather than leaving a core
+      // ticker paired with a SPY price.
+      benchmarkTicker: rest.benchmarkTicker,
       updatedAt: Date.now(),
     });
     return existing._id;
@@ -263,6 +268,26 @@ export const recordOrderIntent = mutation({
     assertSecret(args.token);
     const { env, key } = args;
     return await ctx.db.insert("orderIntents", { env, key, createdAt: Date.now() });
+  },
+});
+
+export const recordCoreOrder = mutation({
+  args: {
+    token: v.string(),
+    env: v.string(),
+    action: v.union(v.literal("sweep"), v.literal("fund")),
+    status: v.string(),
+    quantity: v.number(),
+    priceGbp: v.number(),
+    notionalGbp: v.number(),
+    dryRun: v.boolean(),
+    detail: v.string(),
+    orderId: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    assertSecret(args.token);
+    const { token, ...rest } = args;
+    return await ctx.db.insert("coreOrders", { ...rest, createdAt: Date.now() });
   },
 });
 

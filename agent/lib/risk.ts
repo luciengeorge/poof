@@ -1,3 +1,5 @@
+import { isCore } from "./core.ts";
+
 export type Side = "BUY" | "SELL";
 
 export interface RiskLimits {
@@ -43,6 +45,11 @@ export interface Rejection {
 export interface ValidationResult {
   accepted: ProposedOrder[];
   rejected: Rejection[];
+  /**
+   * Cash, in account currency, that would have let through the BUYs rejected ONLY for want of
+   * cash. 0 when there are none. The caller may raise it from the index core (core-orders.ts).
+   */
+  cashShortfall: number;
 }
 
 export interface HaltDecision {
@@ -61,11 +68,13 @@ export interface RunningState {
 // "Concentrate, deploy, keep the breakers": seven weeks live showed the picks had positive
 // expectancy (+0.8% mean per closed trade) while the account went nowhere, because the median
 // order was 10 GBP on a 250 GBP account and cash drifted to 84%. A perfect signal is invisible at
-// that size. The floor is now 15% of equity so a "probe" is rejected rather than placed, the
-// position cap is 4 so the floor and the cap agree (4 x ~22% fills the 90% target), and 10% cash
-// stays free for FX and fees. The daily-loss and drawdown breakers loosen to fit concentration:
-// at 4 names a single -16% day on one 25% position is a -4% account day, which under the old 4%
-// halt stopped the whole system for one stock's bad print. They remain ruin-prevention.
+// that size. The floor is now 15% of equity so a "probe" is rejected rather than placed, and the
+// position cap is 4 so the floor and the cap agree (4 x ~22% fills the 90% cap). The stock sleeve
+// is capped at maxDeployedPct of equity; the remainder sits in the index core (core.ts), which
+// keeps its own small cash buffer for FX and fees. The daily-loss and drawdown breakers loosen to
+// fit concentration: at 4 names a single -16% day on one 25% position is a -4% account day, which
+// under the old 4% halt stopped the whole system for one stock's bad print. They remain
+// ruin-prevention.
 // Every field is overridable per-deployment via resolveLimits()/TRADING_* env vars.
 export const DEFAULT_LIMITS: RiskLimits = {
   maxPerNamePct: 0.3,
@@ -136,10 +145,13 @@ export function evaluateBuy(
     return `per-name concentration ${((resultingName / p.equity) * 100).toFixed(1)}% exceeds ${(limits.maxPerNamePct * 100).toFixed(0)}%`;
   }
 
-  const resultingCash = running.cash - order.notional;
-  const minCash = (1 - limits.maxDeployedPct) * p.equity;
-  if (resultingCash < minCash) {
-    return `would breach cash floor (deployed > ${(limits.maxDeployedPct * 100).toFixed(0)}%)`;
+  // The deployed cap bounds the STOCK SLEEVE. Idle money now waits in the index core rather than
+  // in cash, so a floor on cash would reject every stock buy once the core had swept it up; the
+  // core is the remainder of equity, not the risk this cap exists to limit.
+  let stockSleeve = 0;
+  for (const value of running.valueByTicker.values()) stockSleeve += value;
+  if (stockSleeve + order.notional > limits.maxDeployedPct * p.equity) {
+    return `would breach deployed cap (stocks > ${(limits.maxDeployedPct * 100).toFixed(0)}% of equity)`;
   }
 
   const isNew = !running.valueByTicker.has(order.ticker);
@@ -167,12 +179,17 @@ export function validateOrders(
   const accepted: ProposedOrder[] = [];
   const rejected: Rejection[] = [];
 
+  // Stock limits see stocks only. The index core is not a position the sleeve chose: counted,
+  // it would take one of the stock slots and fill the deployed cap by itself. Equity stays the
+  // broker's total, core included, so every percentage is still a share of the whole account.
+  const stocks = p.positions.filter((pos) => !isCore(pos.ticker));
   const running: RunningState = {
     cash: p.cash,
-    valueByTicker: new Map(p.positions.map((pos) => [pos.ticker, pos.value])),
-    distinctPositions: p.positions.length,
+    valueByTicker: new Map(stocks.map((pos) => [pos.ticker, pos.value])),
+    distinctPositions: stocks.length,
     newPositionsToday: p.newPositionsToday,
   };
+  let unfundedNotional = 0;
 
   for (const order of orders) {
     if (order.side === "SELL") {
@@ -207,6 +224,11 @@ export function validateOrders(
     const reason = evaluateBuy(order, p, limits, running);
     if (reason) {
       rejected.push({ order, reason });
+      // Re-run the same rules with unlimited cash: a buy that passes then was stopped by cash
+      // alone. One that another limit would also stop is never worth raising cash for.
+      if (evaluateBuy(order, p, limits, { ...running, cash: Infinity }) === null) {
+        unfundedNotional += order.notional;
+      }
       continue;
     }
     const isNew = !running.valueByTicker.has(order.ticker);
@@ -222,5 +244,5 @@ export function validateOrders(
     }
   }
 
-  return { accepted, rejected };
+  return { accepted, rejected, cashShortfall: Math.max(0, unfundedNotional - running.cash) };
 }

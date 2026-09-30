@@ -13,18 +13,56 @@ import {
   buildManagedPositions,
   realizedStats,
   realizedStatsByTag,
+  type ManagedPosition,
   type OpenBuyTrade,
 } from "../lib/positions.ts";
-import { computeAlpha, type Benchmark } from "../lib/benchmark.ts";
+import {
+  alphaVsCore,
+  computeAlpha,
+  isCoreBenchmark,
+  type Benchmark,
+} from "../lib/benchmark.ts";
 import { attributeFailures } from "../lib/attribution.ts";
 import { calibrationFrom } from "../lib/calibration.ts";
 import { effectiveLevels, DEFAULT_EXITS } from "../lib/exits.ts";
+import { CORE_TICKER, isCore } from "../lib/core.ts";
 
 const DAY = 86_400_000;
 
+/**
+ * One open position as the agent sees it. The index core carries no exit levels: the exit engine
+ * never sells it (see manage_positions), so a stop-loss or max-hold printed beside it would be a
+ * rule that does not exist, and an invitation to "honour" it by hand.
+ */
+export function presentPosition(m: ManagedPosition, now: number) {
+  const base = {
+    ticker: m.ticker,
+    thesis: m.thesis,
+    entryPrice: m.entryPrice,
+    currentPrice: m.currentPrice,
+    unrealizedPnl: m.unrealizedPnl,
+    unrealizedPnlPct:
+      m.entryPrice > 0
+        ? ((m.currentPrice - m.entryPrice) / m.entryPrice) * 100
+        : 0,
+    ageDays: m.openedAt ? Math.floor((now - m.openedAt) / DAY) : null,
+  };
+  if (isCore(m.ticker)) {
+    return { ...base, indexCore: true, exits: "none: the index core is exempt from exits" };
+  }
+  const lv = effectiveLevels(m, DEFAULT_EXITS);
+  return {
+    ...base,
+    stopLossPct: lv.stopLossPct,
+    takeProfitPct: lv.takeProfitPct,
+    trailingStopPct: lv.trailingStopPct,
+    maxHoldDays: lv.maxHoldDays,
+  };
+}
+
 export default defineTool({
   description:
-    "Review how the account is actually doing: open positions with unrealized P&L, their thesis, age, and active exit levels; realized win/loss stats from closed trades; and alpha vs buy-and-hold SPY since inception. SPY is quoted in USD and the account is GBP, so read alpha.spyReturnBasis before quoting alpha: \"GBP\" means SPY's return includes the currency move and the comparison is like-for-like; \"USD-unadjusted\" means no FX rate was available and the two returns are in different currencies, so say so rather than presenting the gap as real. Call this EARLY each cycle (after managing exits) so new decisions are informed by what worked and whether you're beating just holding SPY. CURRENCY: accountValueGbp, cashGbp, deployedGbp and each position's marketValue/unrealizedPnl are GBP; each position's entryPrice/currentPrice are share prices in the instrument's own currency (USD for US stocks), NOT GBP. Read-only.",
+    `Review how the account is actually doing: open positions with unrealized P&L, their thesis, age, and active exit levels (the index core is marked \`indexCore\` and has none: it is exempt from exits); realized win/loss stats from closed trades; and alpha since inception against a benchmark. \`benchmark.benchmarkTicker\` says which benchmark: when it is ${CORE_TICKER}, alpha is measured against the index core itself, in GBP, total return, with no currency conversion (\`alpha.spyReturnPct\` is then the core's return and \`spyPrice\` is null); otherwise it is measured against buy-and-hold SPY. Read alpha.spyReturnBasis before quoting alpha: "GBP" means the benchmark's return is in pounds (for SPY, including the currency move) and the comparison is like-for-like; "USD-unadjusted" means no FX rate was available for SPY and the two returns are in different currencies, so say so rather than presenting the gap as real. Call this EARLY each cycle (after managing exits) so new decisions are informed by what worked and whether you're beating just holding the index. CURRENCY: accountValueGbp, cashGbp, deployedGbp and each position's marketValue/unrealizedPnl are GBP; each position's entryPrice/currentPrice are share prices in the instrument's own currency (USD for US stocks), NOT GBP. Read-only.`,
   inputSchema: z.object({}),
   async execute() {
     const client = t212FromEnv();
@@ -63,25 +101,7 @@ export default defineTool({
 
     const now = Date.now();
     const rawManaged = buildManagedPositions(positions, openBuys, fxRate);
-    const managed = rawManaged.map((m) => {
-      const lv = effectiveLevels(m, DEFAULT_EXITS);
-      return {
-        ticker: m.ticker,
-        thesis: m.thesis,
-        entryPrice: m.entryPrice,
-        currentPrice: m.currentPrice,
-        unrealizedPnl: m.unrealizedPnl,
-        unrealizedPnlPct:
-          m.entryPrice > 0
-            ? ((m.currentPrice - m.entryPrice) / m.entryPrice) * 100
-            : 0,
-        ageDays: m.openedAt ? Math.floor((now - m.openedAt) / DAY) : null,
-        stopLossPct: lv.stopLossPct,
-        takeProfitPct: lv.takeProfitPct,
-        trailingStopPct: lv.trailingStopPct,
-        maxHoldDays: lv.maxHoldDays,
-      };
-    });
+    const managed = rawManaged.map((m) => presentPosition(m, now));
 
     // Thesis-break check, one Jev call per position with news since entry. Annotation only: the
     // flag asks the agent to decide, it never sells. Best-effort per position, and byte-for-byte
@@ -116,35 +136,42 @@ export default defineTool({
     let spyPrice: number | null = null;
     let alpha: ReturnType<typeof computeAlpha> | null = null;
     let benchmark = (recall as { benchmark?: Benchmark | null })?.benchmark ?? null;
-    try {
-      const quote = await finnhubFromEnv().getQuote("SPY");
-      spyPrice = quote.price;
-      if (!benchmark && spyPrice > 0) {
-        // The inception rate is written ONCE and priced against forever, so a fallback rate is
-        // not good enough: pinning 0.75 when the market is at 0.7386 would bake 1.5pp of fake
-        // alpha into every future cycle. Leave it unset and let computeAlpha label the result
-        // "USD-unadjusted" until an operator supplies the real rate via scripts/rebase-benchmark.
-        const inceptionFxRate = fx.source === "fallback" ? undefined : fxRate;
-        const seeded = {
-          inceptionEquity: equity,
-          inceptionSpyPrice: spyPrice,
-          inceptionDate: etDateString(new Date()),
-          inceptionFxRate,
-        };
-        await memory.saveBenchmark({ env, ...seeded });
-        benchmark = seeded;
+    if (benchmark && isCoreBenchmark(benchmark)) {
+      // Against the index core itself, priced from the broker's own read of the held core: no
+      // SPY quote and no FX rate. Set by scripts/rebase-benchmark.ts, never seeded here.
+      alpha = alphaVsCore(benchmark, equity, positions);
+      if (!alpha) console.warn("[benchmark] index core not held; no alpha this cycle");
+    } else {
+      try {
+        const quote = await finnhubFromEnv().getQuote("SPY");
+        spyPrice = quote.price;
+        if (!benchmark && spyPrice > 0) {
+          // The inception rate is written ONCE and priced against forever, so a fallback rate is
+          // not good enough: pinning 0.75 when the market is at 0.7386 would bake 1.5pp of fake
+          // alpha into every future cycle. Leave it unset and let computeAlpha label the result
+          // "USD-unadjusted" until an operator supplies the real rate via scripts/rebase-benchmark.
+          const inceptionFxRate = fx.source === "fallback" ? undefined : fxRate;
+          const seeded = {
+            inceptionEquity: equity,
+            inceptionSpyPrice: spyPrice,
+            inceptionDate: etDateString(new Date()),
+            inceptionFxRate,
+          };
+          await memory.saveBenchmark({ env, ...seeded });
+          benchmark = seeded;
+        }
+        if (benchmark && spyPrice > 0) {
+          // Gate the CURRENT rate exactly as the seed above gates the inception rate. The
+          // hardcoded fallback is not a measurement, and feeding it in would price SPY at 0.75
+          // against a real market near 0.755 while still labelling the result "GBP", which the
+          // tool description tells the agent means like-for-like. Better an honest
+          // "USD-unadjusted" than a GBP figure that is quietly ~0.65pp out.
+          const usableFx = fx.source === "fallback" ? undefined : fxRate;
+          alpha = computeAlpha(benchmark, equity, spyPrice, usableFx);
+        }
+      } catch (err) {
+        console.warn("[benchmark] SPY quote/seed failed (non-fatal):", err);
       }
-      if (benchmark && spyPrice > 0) {
-        // Gate the CURRENT rate exactly as the seed above gates the inception rate. The
-        // hardcoded fallback is not a measurement, and feeding it in would price SPY at 0.75
-        // against a real market near 0.755 while still labelling the result "GBP", which the
-        // tool description tells the agent means like-for-like. Better an honest
-        // "USD-unadjusted" than a GBP figure that is quietly ~0.65pp out.
-        const usableFx = fx.source === "fallback" ? undefined : fxRate;
-        alpha = computeAlpha(benchmark, equity, spyPrice, usableFx);
-      }
-    } catch (err) {
-      console.warn("[benchmark] SPY quote/seed failed (non-fatal):", err);
     }
 
     return {

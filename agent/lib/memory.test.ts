@@ -159,6 +159,25 @@ test("recordOrderIntent issues a mutation; hasOrderIntent issues a query returni
   assert.equal(result, true);
 });
 
+test("recordCoreOrder issues a mutation carrying the token and the whole row", async () => {
+  const { client, calls } = fakeClient();
+  const row = {
+    env: "live" as const,
+    action: "sweep" as const,
+    status: "placed",
+    quantity: 1.5,
+    priceGbp: 100,
+    notionalGbp: 150,
+    dryRun: false,
+    detail: "swept",
+    orderId: 42,
+  };
+  await new Memory(client, TOKEN).recordCoreOrder(row);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].kind, "mutation");
+  assert.deepEqual(calls[0].args, { token: TOKEN, ...row });
+});
+
 test("external-holding methods carry the token; list returns [] when memory is empty", async () => {
   const { client, calls } = fakeClient();
   const m = new Memory(client, TOKEN);

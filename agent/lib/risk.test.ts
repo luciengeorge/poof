@@ -10,6 +10,7 @@ import {
   type PortfolioSnapshot,
   type ProposedOrder,
 } from "./risk.ts";
+import { CORE_TICKER } from "./core.ts";
 
 // Fixed limits table for exercising the engine MECHANICS independent of whatever policy
 // DEFAULT_LIMITS happens to ship (the shipped defaults are asserted separately below).
@@ -304,4 +305,126 @@ test("validateOrders: a clamped full-close SELL removes the position from runnin
   assert.equal(res.accepted[0].notional, 1000);
   assert.equal(res.rejected.length, 1);
   assert.match(res.rejected[0].reason, /no position/i);
+});
+
+// --- Task 6: the index core is not a stock ---
+
+test("validateOrders: with 90% in the core and 3% cash, a valid 15% buy fails only for cash", () => {
+  const p = basePortfolio({
+    equity: 1000,
+    peakEquity: 1000,
+    cash: 30,
+    positions: [
+      { ticker: CORE_TICKER, value: 900 },
+      { ticker: "AAA", value: 30 },
+      { ticker: "BBB", value: 20 },
+      { ticker: "CCC", value: 20 },
+    ],
+  });
+  const order = buy({ ticker: "DDD", notional: 150 });
+  const res = validateOrders([order], p, DEFAULT_LIMITS);
+  assert.equal(res.accepted.length, 0);
+  assert.equal(res.rejected.length, 1);
+  assert.match(res.rejected[0].reason, /insufficient cash/);
+  // Given the cash, neither the deployed cap nor the position count would stop it: the core
+  // occupies no stock slot and is not part of the stock sleeve.
+  const withCash = validateOrders([order], { ...p, cash: 1_000_000 }, DEFAULT_LIMITS);
+  assert.equal(withCash.accepted.length, 1);
+});
+
+test("validateOrders: the deployed cap measures the stock sleeve, not cash", () => {
+  // 700 core + 100 stock + 200 cash. A 150 buy leaves 50 cash, which the old cash floor (10% of
+  // equity) rejected; the stock sleeve after the buy is 25%, well inside the 90% cap.
+  const p = basePortfolio({
+    equity: 1000,
+    peakEquity: 1000,
+    cash: 200,
+    positions: [
+      { ticker: CORE_TICKER, value: 700 },
+      { ticker: "AAA", value: 100 },
+    ],
+  });
+  const res = validateOrders([buy({ ticker: "BBB", notional: 150 })], p, DEFAULT_LIMITS);
+  assert.equal(res.rejected.length, 0);
+  assert.equal(res.accepted.length, 1);
+});
+
+test("validateOrders: three stocks plus the core allow a fourth stock and not a fifth", () => {
+  const p = basePortfolio({
+    equity: 10000,
+    cash: 4500,
+    positions: [
+      { ticker: CORE_TICKER, value: 4000 },
+      { ticker: "AAA", value: 500 },
+      { ticker: "BBB", value: 500 },
+      { ticker: "CCC", value: 500 },
+    ],
+  });
+  const res = validateOrders(
+    [buy({ ticker: "DDD", notional: 1500 }), buy({ ticker: "EEE", notional: 1500 })],
+    p,
+    DEFAULT_LIMITS,
+  );
+  assert.deepEqual(
+    res.accepted.map((o) => o.ticker),
+    ["DDD"],
+  );
+  assert.equal(res.rejected.length, 1);
+  assert.equal(res.rejected[0].order.ticker, "EEE");
+  assert.match(res.rejected[0].reason, /max 4 concurrent positions/);
+});
+
+// --- Task 7: the cash a funding sale would need ---
+
+test("validateOrders: cashShortfall is the cash the buys rejected only for cash would need", () => {
+  const p = basePortfolio({
+    equity: 1000,
+    peakEquity: 1000,
+    cash: 200,
+    positions: [
+      { ticker: CORE_TICKER, value: 700 },
+      { ticker: "AAA", value: 100 },
+    ],
+  });
+  const res = validateOrders(
+    [buy({ ticker: "BBB", notional: 250 }), buy({ ticker: "CCC", notional: 150 })],
+    p,
+    DEFAULT_LIMITS,
+  );
+  // BBB is short (250 > 200); CCC then spends 150, leaving 50. BBB needs 200 more.
+  assert.deepEqual(
+    res.accepted.map((o) => o.ticker),
+    ["CCC"],
+  );
+  assert.match(res.rejected[0].reason, /insufficient cash/);
+  assert.equal(res.cashShortfall, 200);
+});
+
+test("validateOrders: a buy another limit would also stop raises no cash", () => {
+  // Short of cash AND over the 30% per-name cap once bought: cash is not its only problem.
+  const p = basePortfolio({
+    equity: 1000,
+    peakEquity: 1000,
+    cash: 30,
+    positions: [
+      { ticker: CORE_TICKER, value: 720 },
+      { ticker: "AAA", value: 250 },
+    ],
+  });
+  const res = validateOrders([buy({ ticker: "AAA", notional: 150 })], p, DEFAULT_LIMITS);
+  assert.match(res.rejected[0].reason, /insufficient cash/);
+  assert.equal(res.cashShortfall, 0);
+});
+
+test("validateOrders: a halt raises no cash, so it can never sell the core", () => {
+  const p = basePortfolio({
+    equity: 1000,
+    peakEquity: 1000,
+    cash: 30,
+    dayPnl: -100,
+    positions: [{ ticker: CORE_TICKER, value: 970 }],
+  });
+  const res = validateOrders([buy({ ticker: "BBB", notional: 150 })], p, DEFAULT_LIMITS);
+  assert.match(res.rejected[0].reason, /halted/);
+  assert.equal(res.cashShortfall, 0);
 });
