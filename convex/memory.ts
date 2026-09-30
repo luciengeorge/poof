@@ -129,6 +129,7 @@ export const saveBenchmark = mutation({
     inceptionEquity: v.number(),
     inceptionSpyPrice: v.number(),
     inceptionDate: v.string(),
+    inceptionFxRate: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     assertSecret(args.token);
@@ -152,6 +153,7 @@ export const overwriteBenchmark = mutation({
     inceptionEquity: v.number(),
     inceptionSpyPrice: v.number(),
     inceptionDate: v.string(),
+    inceptionFxRate: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     assertSecret(args.token);
@@ -167,6 +169,9 @@ export const overwriteBenchmark = mutation({
     }
     await ctx.db.patch("benchmark", existing._id, {
       ...rest,
+      // Spelled out so a rebase that omits the rate CLEARS it (Convex drops a field patched
+      // with undefined) instead of pairing a stale inception rate with a new SPY price.
+      inceptionFxRate: rest.inceptionFxRate,
       updatedAt: Date.now(),
     });
     return existing._id;

@@ -25,6 +25,11 @@
  *   --date YYYY-MM-DD   new inception date (required)
  *   --equity <gbp>      new inception equity (required)
  *   --spy <usd>         new inception SPY price (required)
+ *   --fx <usd->gbp>     inception USD -> GBP rate, e.g. 0.7386233 for GBPUSD 1.35387. Optional,
+ *                       but without it SPY's return is compared in USD against a GBP account
+ *                       and alpha is reported as "USD-unadjusted". OMITTING IT CLEARS any rate
+ *                       already stored, so pass it on every rebase you want measured in GBP.
+ *   --current-fx        override the current USD -> GBP used for the preview (default: live)
  *   --env demo|live     override TRADING212_ENV (default: TRADING212_ENV, else "demo")
  *   --current-equity    override the equity used for the alpha preview (default: latest cycle)
  *   --current-spy       override the SPY price used for the preview (default: live quote)
@@ -33,6 +38,7 @@
 import { memoryFromEnv, type Env } from "../agent/lib/memory.ts";
 import { computeAlpha, type Benchmark } from "../agent/lib/benchmark.ts";
 import { finnhubFromEnv } from "../agent/lib/data.ts";
+import { resolveUsdGbp } from "../agent/lib/fx.ts";
 
 function flag(argv: string[], name: string): string | undefined {
   const i = argv.indexOf(name);
@@ -67,12 +73,19 @@ function parseEnvFlag(argv: string[]): Env {
 }
 
 function describe(label: string, b: Benchmark): string {
-  return `${label}: inception ${b.inceptionDate}, equity GBP ${b.inceptionEquity.toFixed(2)}, SPY USD ${b.inceptionSpyPrice.toFixed(2)}`;
+  const fx = b.inceptionFxRate === undefined ? "none" : b.inceptionFxRate.toFixed(7);
+  return `${label}: inception ${b.inceptionDate}, equity GBP ${b.inceptionEquity.toFixed(2)}, SPY USD ${b.inceptionSpyPrice.toFixed(2)}, FX USD->GBP ${fx}`;
 }
 
-function describeAlpha(label: string, b: Benchmark, equity: number, spy: number): string {
-  const a = computeAlpha(b, equity, spy);
-  return `${label}: account ${a.accountReturnPct.toFixed(2)}%, SPY ${a.spyReturnPct.toFixed(2)}%, alpha ${a.alphaPct.toFixed(2)}pp`;
+function describeAlpha(
+  label: string,
+  b: Benchmark,
+  equity: number,
+  spy: number,
+  fx: number | undefined,
+): string {
+  const a = computeAlpha(b, equity, spy, fx);
+  return `${label}: account ${a.accountReturnPct.toFixed(2)}%, SPY ${a.spyReturnPct.toFixed(2)}% (${a.spyReturnBasis}), alpha ${a.alphaPct.toFixed(2)}pp`;
 }
 
 async function main(): Promise<void> {
@@ -88,6 +101,7 @@ async function main(): Promise<void> {
     inceptionDate: date,
     inceptionEquity: requiredNumber(argv, "--equity"),
     inceptionSpyPrice: requiredNumber(argv, "--spy"),
+    inceptionFxRate: optionalNumber(argv, "--fx"),
   };
 
   const memory = memoryFromEnv();
@@ -117,10 +131,18 @@ async function main(): Promise<void> {
       console.warn("SPY quote failed, pass --current-spy to see the alpha preview:", err);
     }
   }
+  // The current rate only changes the basis when the baseline carries one, so a failed lookup
+  // costs the preview nothing beyond falling back to the labelled USD comparison.
+  let currentFx = optionalNumber(argv, "--current-fx");
+  if (currentFx === undefined) {
+    currentFx = (await resolveUsdGbp()).rate;
+  }
   if (currentEquity && currentSpy) {
-    console.log(`measured at: equity GBP ${currentEquity.toFixed(2)}, SPY USD ${currentSpy.toFixed(2)}`);
-    console.log(describeAlpha("before  ", recall.benchmark, currentEquity, currentSpy));
-    console.log(describeAlpha("after   ", proposed, currentEquity, currentSpy));
+    console.log(
+      `measured at: equity GBP ${currentEquity.toFixed(2)}, SPY USD ${currentSpy.toFixed(2)}, FX USD->GBP ${currentFx.toFixed(7)}`,
+    );
+    console.log(describeAlpha("before  ", recall.benchmark, currentEquity, currentSpy, currentFx));
+    console.log(describeAlpha("after   ", proposed, currentEquity, currentSpy, currentFx));
   } else {
     const missing = [
       currentEquity ? null : "equity (no cycle row; pass --current-equity)",

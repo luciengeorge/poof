@@ -24,7 +24,7 @@ const DAY = 86_400_000;
 
 export default defineTool({
   description:
-    "Review how the account is actually doing: open positions with unrealized P&L, their thesis, age, and active exit levels; realized win/loss stats from closed trades; and alpha vs buy-and-hold SPY since inception. Call this EARLY each cycle (after managing exits) so new decisions are informed by what worked and whether you're beating just holding SPY. CURRENCY: accountValueGbp, cashGbp, deployedGbp and each position's marketValue/unrealizedPnl are GBP; each position's entryPrice/currentPrice are share prices in the instrument's own currency (USD for US stocks), NOT GBP. Read-only.",
+    "Review how the account is actually doing: open positions with unrealized P&L, their thesis, age, and active exit levels; realized win/loss stats from closed trades; and alpha vs buy-and-hold SPY since inception. SPY is quoted in USD and the account is GBP, so read alpha.spyReturnBasis before quoting alpha: \"GBP\" means SPY's return includes the currency move and the comparison is like-for-like; \"USD-unadjusted\" means no FX rate was available and the two returns are in different currencies, so say so rather than presenting the gap as real. Call this EARLY each cycle (after managing exits) so new decisions are informed by what worked and whether you're beating just holding SPY. CURRENCY: accountValueGbp, cashGbp, deployedGbp and each position's marketValue/unrealizedPnl are GBP; each position's entryPrice/currentPrice are share prices in the instrument's own currency (USD for US stocks), NOT GBP. Read-only.",
   inputSchema: z.object({}),
   async execute() {
     const client = t212FromEnv();
@@ -120,20 +120,22 @@ export default defineTool({
       const quote = await finnhubFromEnv().getQuote("SPY");
       spyPrice = quote.price;
       if (!benchmark && spyPrice > 0) {
-        await memory.saveBenchmark({
-          env,
+        // The inception rate is written ONCE and priced against forever, so a fallback rate is
+        // not good enough: pinning 0.75 when the market is at 0.7386 would bake 1.5pp of fake
+        // alpha into every future cycle. Leave it unset and let computeAlpha label the result
+        // "USD-unadjusted" until an operator supplies the real rate via scripts/rebase-benchmark.
+        const inceptionFxRate = fx.source === "fallback" ? undefined : fxRate;
+        const seeded = {
           inceptionEquity: equity,
           inceptionSpyPrice: spyPrice,
           inceptionDate: etDateString(new Date()),
-        });
-        benchmark = {
-          inceptionEquity: equity,
-          inceptionSpyPrice: spyPrice,
-          inceptionDate: etDateString(new Date()),
+          inceptionFxRate,
         };
+        await memory.saveBenchmark({ env, ...seeded });
+        benchmark = seeded;
       }
       if (benchmark && spyPrice > 0) {
-        alpha = computeAlpha(benchmark, equity, spyPrice);
+        alpha = computeAlpha(benchmark, equity, spyPrice, fxRate);
       }
     } catch (err) {
       console.warn("[benchmark] SPY quote/seed failed (non-fatal):", err);

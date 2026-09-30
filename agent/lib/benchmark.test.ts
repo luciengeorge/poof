@@ -132,3 +132,87 @@ test("rebaseForCashFlow: pins the live baseline defect (deposit read as +400%)",
   };
   closeTo(computeAlpha(corrected, currentEquity, currentSpy).accountReturnPct, -0.56, 0.01);
 });
+
+// --- SPY's return in the account's currency -------------------------------------------------
+// The account is a GBP ISA; SPY is quoted in USD. Subtracting a USD return from a GBP one
+// answered the wrong question and flattered poof by the size of the currency move.
+
+// 2026-07-15 inception. GBPUSD 1.35387 at inception, 1.322975 on 2026-09-29, inverted to the
+// USD->GBP convention the rest of the codebase uses.
+const INCEPTION_FX = 0.7386247; // 1 / 1.35387
+const CURRENT_FX = 0.7558725; // 1 / 1.322975
+
+const liveBaseline: Benchmark = {
+  inceptionEquity: 252.17,
+  inceptionSpyPrice: 754.81,
+  inceptionDate: "2026-07-15",
+  inceptionFxRate: INCEPTION_FX,
+};
+
+test("computeAlpha: the live GBP/USD mismatch, priced in the account's currency", () => {
+  const r = computeAlpha(liveBaseline, 250.77, 764.2, CURRENT_FX);
+  assert.equal(r.spyReturnBasis, "GBP");
+  closeTo(r.accountReturnPct, -0.5552, 0.005);
+  // +1.24% in USD, but sterling weakened, so a UK holder of SPY earned +3.61%.
+  closeTo(r.spyReturnPct, 3.6082, 0.005);
+  closeTo(r.alphaPct, -4.1634, 0.005);
+});
+
+test("computeAlpha: without FX it reports the old USD number AND labels it", () => {
+  const { inceptionFxRate, ...noFx } = liveBaseline;
+  const r = computeAlpha(noFx, 250.77, 764.2);
+  assert.equal(r.spyReturnBasis, "USD-unadjusted");
+  closeTo(r.spyReturnPct, 1.2440, 0.005);
+  closeTo(r.alphaPct, -1.7992, 0.005);
+  // 2.36pp of the published alpha was the currency move, not performance.
+  closeTo(r.alphaPct - computeAlpha(liveBaseline, 250.77, 764.2, CURRENT_FX).alphaPct, 2.3642, 0.005);
+});
+
+test("computeAlpha: a currency move alone moves SPY's return even with SPY flat in USD", () => {
+  const flat = computeAlpha(liveBaseline, 252.17, 754.81, CURRENT_FX);
+  assert.equal(flat.spyReturnBasis, "GBP");
+  // 0.7558725 / 0.7386247 - 1
+  closeTo(flat.spyReturnPct, 2.3351, 0.005);
+  assert.equal(flat.accountReturnPct, 0);
+  closeTo(flat.alphaPct, -2.3351, 0.005);
+  // The old comparison saw nothing at all.
+  assert.equal(computeAlpha(liveBaseline, 252.17, 754.81).spyReturnPct, 0);
+});
+
+test("computeAlpha: only one rate is not enough for a GBP basis", () => {
+  assert.equal(
+    computeAlpha(liveBaseline, 250.77, 764.2).spyReturnBasis,
+    "USD-unadjusted",
+  );
+  const { inceptionFxRate, ...noFx } = liveBaseline;
+  const r = computeAlpha(noFx, 250.77, 764.2, CURRENT_FX);
+  assert.equal(r.spyReturnBasis, "USD-unadjusted");
+  closeTo(r.spyReturnPct, 1.2440, 0.005);
+});
+
+test("computeAlpha: an unusable rate downgrades rather than producing a wrong percentage", () => {
+  const bad = [Number.NaN, Number.POSITIVE_INFINITY, 0, -0.75];
+  for (const rate of bad) {
+    const viaCurrent = computeAlpha(liveBaseline, 250.77, 764.2, rate);
+    assert.equal(viaCurrent.spyReturnBasis, "USD-unadjusted", `current rate ${rate}`);
+    closeTo(viaCurrent.spyReturnPct, 1.2440, 0.005);
+
+    const viaInception = computeAlpha(
+      { ...liveBaseline, inceptionFxRate: rate },
+      250.77,
+      764.2,
+      CURRENT_FX,
+    );
+    assert.equal(viaInception.spyReturnBasis, "USD-unadjusted", `inception rate ${rate}`);
+    closeTo(viaInception.spyReturnPct, 1.2440, 0.005);
+  }
+});
+
+test("rebaseForCashFlow: a cash flow says nothing about FX, so the inception rate survives", () => {
+  const rebased = rebaseForCashFlow(liveBaseline, 250.77, 350.77);
+  assert.equal(rebased.inceptionFxRate, INCEPTION_FX);
+  assert.equal(
+    computeAlpha(rebased, 350.77, 764.2, CURRENT_FX).spyReturnBasis,
+    "GBP",
+  );
+});

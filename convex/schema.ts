@@ -152,6 +152,10 @@ export default defineSchema({
     inceptionEquity: v.number(),
     inceptionSpyPrice: v.number(),
     inceptionDate: v.string(), // YYYY-MM-DD (ET)
+    // USD -> GBP at inception, so SPY's return can be measured in the account's currency.
+    // OPTIONAL for the same reason as `cycles.fxRate` above: the table is populated and the
+    // stored row predates this field. Only `convex deploy` validates against existing rows.
+    inceptionFxRate: v.optional(v.number()),
     updatedAt: v.number(),
   }).index("by_env", ["env"]),
 

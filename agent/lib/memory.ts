@@ -84,6 +84,8 @@ export interface BenchmarkRecord {
   inceptionEquity: number;
   inceptionSpyPrice: number;
   inceptionDate: string;
+  /** USD -> GBP at inception. Absent on baselines captured before it was recorded. */
+  inceptionFxRate?: number;
 }
 
 export interface CycleRecord {
