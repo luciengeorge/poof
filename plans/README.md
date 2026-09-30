@@ -14,7 +14,7 @@ of them reported healthy**:
 |---|---|---|
 | wide funnel | `ENOENT` on every production fire for 13 days | cron heartbeat `dispatched=true` |
 | funnel outcome scorer | calls a Finnhub endpoint that 403s on the free tier | nothing, silently |
-| evals workflow | `Trading 212 API error 401`, 10 consecutive failures | red in a tab nobody opens |
+| evals workflow | `Trading 212 API error 401`, **30 consecutive failures back to 2026-08-31** | red in a tab nobody opens, and within each run most guards report `PASSED VACUOUSLY` |
 | SPY benchmark | reported +397.56pp of alpha that did not exist | a spectacular quarter |
 
 Individual bugs are cheaper than this pattern. Plan 001 exists so the next dead
@@ -32,8 +32,8 @@ instrument announces itself.
 | 007 | Guard orphan reconciliation against an empty portfolio read | P1 | M | 001 | TODO |
 | 008 | Score funnel outcomes through Tiingo, not a 403 endpoint | P1 | S | 001 | TODO |
 | 009 | Make CI catch the two outages that shipped green | P1 | M | 001 | TODO |
-| 010 | Fix the evals workflow and make its failure loud | P2 | M | 001, 009 | TODO |
-| 011 | Give the Finnhub client a timeout and a shared rate limiter | P2 | M | 001 | TODO |
+| 010 | Fix the evals workflow and make its failure loud | P1 | M | 001, 009 | TODO |
+| 011 | Give the Finnhub client a timeout and a shared client | P2 | S | 001 | TODO |
 | 012 | Pin the fail-closed branches that tests do not reach | P2 | S | 001 | TODO |
 | 013 | Measure performance over the whole record, not 50 mixed rows | P2 | S | 001 | TODO |
 | 014 | Collapse the duplicated Jev news screener | P3 | S | 001 | TODO |
@@ -60,6 +60,14 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (one-line reason) | REJECTED 
   buy-and-hold signal, not poof's ~10-20 day catalyst entries.
 - **015 depends on 002.** Replaying trades through a trailing stop that cannot
   fire would bake the bug into the baseline you compare against.
+
+- **011 deliberately excludes the Finnhub rate limiter.** The plan builds the
+  timeout and the shared client only. A naive limiter would be a regression:
+  `agent/tools/get_prices.ts` sends up to 40 quotes in one `Promise.allSettled`
+  and returns in about a second, and pacing those at 1050ms turns that into
+  roughly 42 seconds on the cycle that trades real money. The right shape is a
+  token bucket sized against a measured 429 rate, and nobody has collected one.
+  The limiter wants its own plan once that data exists.
 
 ## Findings considered and rejected
 
