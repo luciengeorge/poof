@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readdirSync, readFileSync } from "node:fs";
 import { redact } from "./redact.ts";
 
 // Every secret this process can hold. Pinned here rather than imported, so dropping a name from
@@ -125,4 +126,24 @@ test("a message with no secret passes through unchanged", () => {
   withSecretEnv(allFake(), () => {
     assert.equal(redact(message), message);
   });
+});
+
+test("every secret-looking env var the code reads is on the list (structural)", () => {
+  // The list is kept by hand, and the pinned copy above only catches a name being removed. A new
+  // secret env read added later (a new API key, say) would skip the exact-value layer with nothing
+  // failing, so scan the source for secret-looking reads and require each to be listed.
+  const root = new URL("../../", import.meta.url);
+  const found = new Set<string>();
+  for (const dir of ["agent", "scripts", "convex"]) {
+    for (const rel of readdirSync(new URL(`${dir}/`, root), { recursive: true }) as string[]) {
+      if (!/\.(ts|mjs)$/.test(rel) || rel.includes("_generated") || rel.includes("node_modules")) continue;
+      const src = readFileSync(new URL(`${dir}/${rel}`, root), "utf8");
+      for (const m of src.matchAll(/process\.env\.([A-Z0-9_]+)/g)) {
+        if (/KEY|SECRET|TOKEN|PASSWORD|WEBHOOK/.test(m[1] ?? "")) found.add(m[1] ?? "");
+      }
+    }
+  }
+  assert.ok(found.has("CONVEX_APP_SECRET"), "the scan must see the reads it exists to check");
+  const missing = [...found].filter((name) => !SECRET_ENV_NAMES.includes(name));
+  assert.deepEqual(missing, [], `secret env vars read in code but not redacted: ${missing.join(", ")}`);
 });

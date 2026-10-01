@@ -15,9 +15,13 @@ import { redact } from "../agent/lib/redact.ts";
 
 
 // Log a redacted, truncated message, never the error object: it can carry the request
-// arguments, and the Convex secret is one of them. This log is public.
+// arguments, and the Convex secret is one of them. This log is public. Node's fetch puts the
+// real reason (DNS, TLS, refused connection) in `cause`, and that is what a dead-man's switch
+// most needs to say, so it is kept, redacted with the rest.
 function errorText(err) {
-  return redact(err instanceof Error ? err.message : String(err)).slice(0, 500);
+  const message = err instanceof Error ? err.message : String(err);
+  const cause = err instanceof Error && err.cause instanceof Error ? ` (cause: ${err.cause.message})` : "";
+  return redact(message + cause).slice(0, 500);
 }
 
 async function postSlackAlert(webhookUrl, text) {
