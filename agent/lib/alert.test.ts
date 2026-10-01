@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { alert } from "./alert.ts";
+import { alert, describeFailure } from "./alert.ts";
 
 const WEBHOOK = "https://hooks.example.invalid/services/T000/B000/xxx";
 
@@ -106,4 +106,101 @@ test("the alert text is never the secret: only the message is logged", async () 
   for (const line of logged) {
     assert.equal(line.includes(WEBHOOK), false, "the webhook URL is a secret and must not be logged");
   }
+});
+
+/** Run `body` with these env vars set (or unset, for `undefined`), then restore the previous values. */
+async function withEnv(
+  values: Record<string, string | undefined>,
+  body: () => void | Promise<void>,
+): Promise<void> {
+  const prev = new Map(Object.keys(values).map((name) => [name, process.env[name]]));
+  for (const [name, value] of Object.entries(values)) {
+    if (value !== undefined) process.env[name] = value;
+    else delete process.env[name];
+  }
+  try {
+    await body();
+  } finally {
+    for (const [name, value] of prev) {
+      if (value !== undefined) process.env[name] = value;
+      else delete process.env[name];
+    }
+  }
+}
+
+const FAKE_TOKEN = "FAKE_TOKEN_abc123XYZ";
+
+// Captured verbatim from the DEV deployment on 2026-10-01 with a fake token. Convex prints the
+// whole argument object, token first, when a field is missing. This is the path that leaked.
+const CONVEX_MISSING_FIELD = `[Request ID: 9c9740cd81b808e1] Server Error
+ArgumentValidationError: Object is missing the required field \`schedule\`. Consider wrapping the field validator in \`v.optional(...)\` if this is expected.
+
+Object: {token: "${FAKE_TOKEN}"}
+Validator: v.object({schedule: v.string(), token: v.string()})`;
+
+// eve's real turn.failed payload: { code, details?, message, sequence, turnId }.
+const turnFailed = {
+  type: "turn.failed",
+  data: {
+    code: "TURN_FAILED",
+    message: CONVEX_MISSING_FIELD,
+    sequence: 7,
+    turnId: "turn_test",
+    details: { token: FAKE_TOKEN, note: "DETAILS_SENTINEL" },
+  },
+};
+
+function assertSafeAndDiagnostic(text: string): void {
+  assert.ok(text.startsWith("TURN_FAILED: [Request ID"), text);
+  assert.ok(text.includes("ArgumentValidationError: Object is missing the required field `schedule`"));
+  assert.ok(text.includes('Object: {token: "[REDACTED]"}'));
+  assert.equal(text.includes(FAKE_TOKEN), false, "the shared secret must never reach Slack");
+  assert.equal(text.includes("DETAILS_SENTINEL"), false, "details is free-form and never included");
+}
+
+test("REGRESSION: a Convex validator failure is described from code and message, token redacted", async () => {
+  // The old describe() looked for data.error.message and data.reason, which eve never sends, so
+  // it stringified the whole payload on every failure and shipped the token to Slack.
+  await withEnv({ CONVEX_APP_SECRET: FAKE_TOKEN }, () => {
+    assertSafeAndDiagnostic(describeFailure(turnFailed));
+  });
+});
+
+test("the token is redacted even when this process does not hold the secret env var", async () => {
+  // The generic `token: "..."` pattern must catch it on its own, not the env lookup.
+  await withEnv({ CONVEX_APP_SECRET: undefined, APP_SHARED_SECRET: undefined }, () => {
+    assertSafeAndDiagnostic(describeFailure(turnFailed));
+  });
+});
+
+test("a payload with no code or message gets fixed text, never the stringified payload", () => {
+  const text = describeFailure({ data: { reason: "boom", details: { token: FAKE_TOKEN } } });
+  assert.equal(text, "(failure event carried no code or message)");
+  assert.equal(describeFailure({}), "(failure event carried no code or message)");
+});
+
+test("alert redacts at the boundary: a secret in the text reaches neither the log nor Slack", async () => {
+  const secret = "FAKE-convex-app-secret-0123456789";
+  const posted: string[] = [];
+  const logged: string[] = [];
+  const recordBody: typeof globalThis.fetch = async (_input, init) => {
+    posted.push(String(init?.body));
+    return new Response("ok");
+  };
+  await withEnv({ CONVEX_APP_SECRET: secret }, () =>
+    withStubbedWebhook(recordBody, async () => {
+      // Replaces the helper's silent stub; the helper's finally still restores the real one.
+      console.error = (...args: unknown[]) => {
+        logged.push(args.map(String).join(" "));
+      };
+      await alert(`memory call failed using ${secret}`);
+    }),
+  );
+  assert.equal(posted.length, 1);
+  assert.equal(logged.length, 1);
+  for (const text of [...posted, ...logged]) {
+    assert.equal(text.includes(secret), false, "the secret must not be posted or logged");
+  }
+  assert.deepEqual(JSON.parse(posted[0]), { text: "memory call failed using [REDACTED]" });
+  assert.equal(logged[0], "[alert] memory call failed using [REDACTED]");
 });
