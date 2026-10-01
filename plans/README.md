@@ -30,7 +30,7 @@ instrument announces itself.
 | 004 | Stop `.env.example` reinstating the pre-#76 risk gate | P1 | S | 001 | TODO |
 | 005 | Never place an order twice, never lose one that filled | P1 | M | 001 | TODO |
 | 007 | Guard orphan reconciliation against an empty portfolio read | P1 | M | 001 | TODO |
-| 008 | Score funnel outcomes through Tiingo, not a 403 endpoint | P1 | S | 001 | TODO |
+| 008 | Score funnel outcomes through Tiingo, not a 403 endpoint | P1 | M | 001 | DONE |
 | 009 | Make CI catch the two outages that shipped green | P1 | M | 001 | TODO |
 | 010 | Fix the evals workflow and make its failure loud | P1 | M | 001, 009 | TODO |
 | 011 | Give the Finnhub client a timeout and a shared client | P2 | S | 001 | TODO |
