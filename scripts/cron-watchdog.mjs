@@ -20,7 +20,7 @@ import { redact } from "../agent/lib/redact.ts";
 // most needs to say, so it is kept, redacted with the rest.
 function errorText(err) {
   const message = err instanceof Error ? err.message : String(err);
-  const cause = err instanceof Error && err.cause instanceof Error ? ` (cause: ${err.cause.message})` : "";
+  const cause = err instanceof Error && err.cause instanceof Error ? ` (cause: ${err.cause.message || err.cause.code || err.cause.name})` : "";
   return redact(message + cause).slice(0, 500);
 }
 
