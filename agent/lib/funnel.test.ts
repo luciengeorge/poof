@@ -7,7 +7,9 @@ import {
   FUNNEL_CHUNKS,
   FUNNEL_ITEMS_PER_TICKER,
   FUNNEL_MAX_ITEMS_PER_CHUNK,
+  FUNNEL_OUTCOME_TICKERS_PER_RUN,
   FUNNEL_OUTCOME_TRADING_DAYS,
+  type FunnelOutcome,
   outcomeFromCandles,
   runFunnelChunk,
   screenFunnelItem,
@@ -17,6 +19,7 @@ import {
 import { FUNNEL_TAG_WEIGHT, funnelScore, rankFunnel, recencyFactor } from "./funnel-score.ts";
 import type { JevClient, JevQuestion, JevResponse } from "./jev.ts";
 import type { FunnelItemRecord, StoredFunnelItem } from "./memory.ts";
+import { TiingoError } from "./tiingo.ts";
 import { loadUniverse, universeChunk } from "./universe.ts";
 
 const NOW = Date.parse("2026-09-17T12:05:00Z");
@@ -61,10 +64,12 @@ function fakeJev(answers: Partial<{ fresh: number; priced: number; tag: string; 
 function fakeMemory() {
   const stored: FunnelItemRecord[] = [];
   const outcomes: { id: string; outcomeUp: boolean; outcomePct: number }[] = [];
+  const batches: FunnelOutcome[][] = [];
   let awaiting: StoredFunnelItem[] = [];
   return {
     stored,
     outcomes,
+    batches,
     setAwaiting(items: StoredFunnelItem[]) {
       awaiting = items;
     },
@@ -83,11 +88,23 @@ function fakeMemory() {
         }
         return { inserted, skipped };
       },
-      async funnelItemsAwaitingOutcome() {
-        return awaiting;
+      // Both queries honour the window and the limit exactly as the Convex range queries do, so a
+      // scorer that swaps or drops a bound gets nothing back here, just as it would in production.
+      async funnelItemsAwaitingOutcome(screenedAfter: number, screenedBefore: number, limit: number) {
+        // Oldest first, and stable: several fixtures share a screenedAt and the run order depends on it.
+        return [...awaiting]
+          .filter((i) => i.screenedAt > screenedAfter && i.screenedAt < screenedBefore)
+          .sort((a, b) => a.screenedAt - b.screenedAt)
+          .slice(0, limit);
       },
-      async recordFunnelOutcome(input: { id: string; outcomeAt: number; outcomeUp: boolean; outcomePct: number }) {
-        outcomes.push(input);
+      async funnelItemsAwaitingOutcomeForTicker(ticker: string, screenedAfter: number, screenedBefore: number, limit: number) {
+        return awaiting
+          .filter((i) => i.ticker === ticker && i.screenedAt > screenedAfter && i.screenedAt < screenedBefore)
+          .slice(0, limit);
+      },
+      async recordFunnelOutcomes(batch: FunnelOutcome[]) {
+        batches.push(batch);
+        outcomes.push(...batch);
       },
     },
   };
@@ -185,9 +202,6 @@ test("a chunk fetches, screens, scores and stores; one failing ticker is counted
       if (symbol === "BAD") throw new Error("finnhub 500");
       return [news({ related: symbol, url: `https://n/${symbol}` })];
     },
-    async getCandles() {
-      return [];
-    },
   };
   const result = await runFunnelChunk(["AAA", "BAD", "CCC"], { news: src, jev: client, memory: store.memory, now: () => NOW, sleepImpl: noSleep, logger: quiet });
   assert.equal(result.tickers, 3);
@@ -213,9 +227,6 @@ test("a Jev failure on one item skips that item and keeps the rest", async () =>
     async getCompanyNews(symbol: string) {
       return [news({ url: `https://n/${symbol}` })];
     },
-    async getCandles() {
-      return [];
-    },
   };
   const result = await runFunnelChunk(["A", "B"], { news: src, jev: flaky, memory: store.memory, now: () => NOW, sleepImpl: noSleep, logger: quiet });
   assert.equal(result.screened, 1);
@@ -230,9 +241,6 @@ test("a chunk stops fetching once it has enough items for the time budget", asyn
     async getCompanyNews(symbol: string) {
       fetched += 1;
       return Array.from({ length: FUNNEL_ITEMS_PER_TICKER }, (_v, i) => news({ url: `https://n/${symbol}/${i}` }));
-    },
-    async getCandles() {
-      return [];
     },
   };
   const many = Array.from({ length: 200 }, (_v, i) => `T${i}`);
@@ -270,11 +278,136 @@ test("outcome scoring records finished items and leaves the rest pending", async
       return candles("2026-09-01", Array.from({ length: n }, (_v, i) => 50 - i));
     },
   };
-  const res = await scoreFunnelOutcomes({ news: src, memory: store.memory, now: () => NOW, sleepImpl: noSleep, logger: quiet });
+  const res = await scoreFunnelOutcomes({ candles: src, memory: store.memory, now: () => NOW, sleepImpl: noSleep, logger: quiet });
   assert.equal(res.scored, 1);
   assert.equal(res.pending, 1);
   assert.equal(store.outcomes[0]?.id, "done");
   assert.equal(store.outcomes[0]?.outcomeUp, false);
+});
+
+function awaitingItem(_id: string, ticker: string, screenedAt: number): StoredFunnelItem {
+  return { _id, day: new Date(screenedAt).toISOString().slice(0, 10), ticker, headline: "h", summary: "s", source: "r", url: `u/${_id}`, publishedAt: 0, screenedAt, model: "m", freshCatalyst: 0, pricedIn: 0, strategyTag: "other", strategyTagConfidence: 0, higherIn10d: 0.6, score: 0 };
+}
+
+const AUG = (day: number, hour = 12) => Date.UTC(2026, 7, day, hour);
+
+/** Records each request and serves a month of rising daily closes from the requested start. */
+function recordingCandles(fail: (symbol: string) => unknown = () => null) {
+  const calls: { symbol: string; fromISO: string }[] = [];
+  const source = {
+    async getCandles(symbol: string, fromISO: string) {
+      calls.push({ symbol, fromISO });
+      const err = fail(symbol);
+      if (err) throw err;
+      return candles(fromISO, Array.from({ length: 30 }, (_v, i) => 100 + i));
+    },
+  };
+  return { calls, source };
+}
+
+test("outcome scoring makes one candle request per ticker, from its oldest screening day", async () => {
+  const store = fakeMemory();
+  // X's oldest item is deliberately not first, so the request start cannot come from result order.
+  store.setAwaiting([awaitingItem("x-new", "X", AUG(25, 14)), awaitingItem("x-old", "X", AUG(20)), awaitingItem("x-same", "X", AUG(25, 15)), awaitingItem("y", "Y", AUG(21))]);
+  const { calls, source } = recordingCandles();
+  const res = await scoreFunnelOutcomes({ candles: source, memory: store.memory, now: () => NOW, sleepImpl: noSleep, logger: quiet });
+  assert.deepEqual(calls.map((c) => c.symbol).sort(), ["X", "Y"]);
+  assert.equal(calls.find((c) => c.symbol === "X")?.fromISO, "2026-08-20");
+  assert.equal(store.batches.length, 2);
+  assert.deepEqual(store.outcomes.map((o) => o.id).sort(), ["x-new", "x-old", "x-same", "y"]);
+  assert.equal(res.scored, 4);
+  assert.equal(res.tickers, 2);
+});
+
+test("outcome scoring fetches at most FUNNEL_OUTCOME_TICKERS_PER_RUN tickers, from a start that moves with the clock", async () => {
+  const store = fakeMemory();
+  const tickers = Array.from({ length: 12 }, (_v, i) => `T${i}`);
+  store.setAwaiting(tickers.map((t, i) => awaitingItem(t, t, AUG(1) + i * H)));
+  const start = Math.floor(NOW / 60_000) % tickers.length;
+  // A start of zero would hide a scorer that always begins at the head, and only a start past 2
+  // makes the ten wrap round the end of the list.
+  assert.ok(start > tickers.length - FUNNEL_OUTCOME_TICKERS_PER_RUN, `NOW gives start ${start}; pick one that wraps`);
+  const { calls, source } = recordingCandles();
+  const res = await scoreFunnelOutcomes({ candles: source, memory: store.memory, now: () => NOW, sleepImpl: noSleep, logger: quiet });
+  const expected = Array.from({ length: FUNNEL_OUTCOME_TICKERS_PER_RUN }, (_v, i) => tickers[(start + i) % tickers.length]);
+  assert.equal(calls.length, FUNNEL_OUTCOME_TICKERS_PER_RUN);
+  assert.deepEqual(calls.map((c) => c.symbol), expected);
+  assert.equal(res.tickers, FUNNEL_OUTCOME_TICKERS_PER_RUN);
+});
+
+test("a non-429 error on one ticker is counted and the run carries on", async () => {
+  const store = fakeMemory();
+  store.setAwaiting([awaitingItem("x", "X", AUG(20)), awaitingItem("y", "Y", AUG(21))]);
+  const at = NOW + 60_000;
+  assert.equal(Math.floor(at / 60_000) % 2, 0, "the run must start at X for this test to mean anything");
+  const { calls, source } = recordingCandles((s) => (s === "X" ? new Error("tiingo 404") : null));
+  const res = await scoreFunnelOutcomes({ candles: source, memory: store.memory, now: () => at, sleepImpl: noSleep, logger: quiet });
+  assert.deepEqual(calls.map((c) => c.symbol), ["X", "Y"]);
+  assert.equal(res.failures, 1);
+  assert.equal(res.rateLimited, false);
+  assert.deepEqual(store.outcomes.map((o) => o.id), ["y"]);
+});
+
+test("outcome scoring stops the run on a 429", async () => {
+  const store = fakeMemory();
+  store.setAwaiting([awaitingItem("x", "X", AUG(20)), awaitingItem("y", "Y", AUG(21))]);
+  const at = NOW + 60_000;
+  assert.equal(Math.floor(at / 60_000) % 2, 0, "the run must start at X for this test to mean anything");
+  const { calls, source } = recordingCandles((s) => (s === "X" ? new TiingoError(429, "rate limited") : null));
+  const res = await scoreFunnelOutcomes({ candles: source, memory: store.memory, now: () => at, sleepImpl: noSleep, logger: quiet });
+  assert.deepEqual(calls.map((c) => c.symbol), ["X"]);
+  assert.equal(res.rateLimited, true);
+  assert.equal(res.failures, 1);
+  assert.equal(res.scored, 0);
+});
+
+test("a ticker that always fails cannot block every fire", async () => {
+  const store = fakeMemory();
+  const tickers = Array.from({ length: 11 }, (_v, i) => `T${i}`);
+  store.setAwaiting(tickers.map((t, i) => awaitingItem(t, t, AUG(1) + i * H)));
+  const run = async (at: number) => {
+    const { calls, source } = recordingCandles((s) => (s === "T0" ? new Error("unknown symbol") : null));
+    await scoreFunnelOutcomes({ candles: source, memory: store.memory, now: () => at, sleepImpl: noSleep, logger: quiet });
+    return calls.map((c) => c.symbol);
+  };
+  const first = await run(NOW);
+  const second = await run(NOW + 60_000);
+  assert.notEqual(first[0], second[0]);
+  assert.ok(new Set([...first, ...second]).size > FUNNEL_OUTCOME_TICKERS_PER_RUN);
+});
+
+test("outcome scoring only touches items inside the window: older than 16 days, younger than 60", async () => {
+  const store = fakeMemory();
+  const day = 86_400_000;
+  store.setAwaiting([
+    awaitingItem("x-stale", "X", NOW - 61 * day),
+    awaitingItem("x-ripe", "X", NOW - 20 * day),
+    awaitingItem("x-young", "X", NOW - 10 * day),
+    awaitingItem("stale", "OLD", NOW - 61 * day),
+    awaitingItem("young", "NEW", NOW - 10 * day),
+  ]);
+  const { calls, source } = recordingCandles();
+  const res = await scoreFunnelOutcomes({ candles: source, memory: store.memory, now: () => NOW, sleepImpl: noSleep, logger: quiet });
+  assert.deepEqual(calls.map((c) => c.symbol), ["X"]);
+  assert.equal(calls[0]?.fromISO, new Date(NOW - 20 * day).toISOString().slice(0, 10));
+  assert.deepEqual(store.outcomes.map((o) => o.id), ["x-ripe"]);
+  assert.equal(res.scored, 1);
+});
+
+test("an item without a full window yet stays pending and records nothing", async () => {
+  const store = fakeMemory();
+  store.setAwaiting([awaitingItem("z", "Z", AUG(28))]);
+  const source = {
+    async getCandles(_symbol: string, fromISO: string) {
+      return candles(fromISO, Array.from({ length: FUNNEL_OUTCOME_TRADING_DAYS }, (_v, i) => 100 + i));
+    },
+  };
+  const res = await scoreFunnelOutcomes({ candles: source, memory: store.memory, now: () => NOW, sleepImpl: noSleep, logger: quiet });
+  assert.equal(res.tickers, 1);
+  assert.equal(res.pending, 1);
+  assert.equal(res.scored, 0);
+  assert.equal(store.batches.length, 0);
+  assert.equal(store.outcomes.length, 0);
 });
 
 // --- wiring ---
@@ -306,4 +439,16 @@ test("nothing between claiming a chunk and the try that can mark it failed (stru
     assert.ok(at > tryAt, `${call} runs before the try that marks the chunk failed`);
     assert.ok(at < failure, `${call} should sit inside that try, not after its catch`);
   }
+});
+
+test("outcome scoring gets its candles from Tiingo, not the Finnhub news client (structural)", () => {
+  // Every unit test injects a fake candle source, so all of them stay green if the schedule keeps
+  // passing the Finnhub client, whose /stock/candle 403s on our tier. That is the bug that shipped
+  // and scored nothing for months; only this file's source shows the wiring.
+  const src = readFileSync(new URL("./funnel-schedule.ts", import.meta.url), "utf8");
+  assert.match(src, /from "\.\/tiingo\.ts"/);
+  assert.match(src, /const candles = tiingoFromEnv\(\)/);
+  assert.match(src, /scoreFunnelOutcomes\(\{ candles, memory/);
+  assert.doesNotMatch(src, /scoreFunnelOutcomes\(\{[^}]*news/);
+  assert.match(src, /finnhubFromEnv\(\)/);
 });

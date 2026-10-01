@@ -402,11 +402,14 @@ export class Memory {
   funnelChunksForDay(day: string): Promise<FunnelChunkRow[]> {
     return this.query("funnelChunksForDay", { day }) as Promise<FunnelChunkRow[]>;
   }
-  funnelItemsAwaitingOutcome(screenedBefore: number, limit: number): Promise<StoredFunnelItem[]> {
-    return this.query("funnelItemsAwaitingOutcome", { screenedBefore, limit }) as Promise<StoredFunnelItem[]>;
+  funnelItemsAwaitingOutcome(screenedAfter: number, screenedBefore: number, limit: number): Promise<StoredFunnelItem[]> {
+    return this.query("funnelItemsAwaitingOutcome", { screenedAfter, screenedBefore, limit }) as Promise<StoredFunnelItem[]>;
   }
-  recordFunnelOutcome(input: { id: string; outcomeAt: number; outcomeUp: boolean; outcomePct: number }): Promise<unknown> {
-    return this.mutation("recordFunnelOutcome", { ...input });
+  funnelItemsAwaitingOutcomeForTicker(ticker: string, screenedAfter: number, screenedBefore: number, limit: number): Promise<StoredFunnelItem[]> {
+    return this.query("funnelItemsAwaitingOutcomeForTicker", { ticker, screenedAfter, screenedBefore, limit }) as Promise<StoredFunnelItem[]>;
+  }
+  recordFunnelOutcomes(outcomes: { id: string; outcomeAt: number; outcomeUp: boolean; outcomePct: number }[]): Promise<unknown> {
+    return this.mutation("recordFunnelOutcomes", { outcomes });
   }
   recordCronRun(r: CronRunRecord): Promise<unknown> {
     return this.mutation("recordCronRun", { ...r });

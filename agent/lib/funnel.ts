@@ -39,17 +39,47 @@ export const FUNNEL_MAX_ITEMS_PER_CHUNK = 220;
 export const FUNNEL_JEV_CONCURRENCY = 8;
 /** The directional shadow's horizon, matching the position hold window. */
 export const FUNNEL_OUTCOME_TRADING_DAYS = 10;
-export const FUNNEL_OUTCOMES_PER_RUN = 40;
+/**
+ * Tickers whose candles one fire fetches for outcome scoring. Tiingo's free tier allows 50
+ * requests an hour, and Hobby jitter can land all four fires inside one hour, so 4 x 10 = 40
+ * leaves headroom for local backtests on the same key. One request scores every matured item for
+ * its ticker, so this bounds requests, not items.
+ */
+export const FUNNEL_OUTCOME_TICKERS_PER_RUN = 10;
+/** Oldest awaiting items read to choose this fire's tickers. */
+export const FUNNEL_OUTCOME_HEAD_ITEMS = 100;
+/** Most awaiting items scored for one ticker in one fire. */
+export const FUNNEL_OUTCOME_ITEMS_PER_TICKER = 200;
+/** Items older than this are left unscored rather than retried for ever; see funnelItemsAwaitingOutcome. */
+export const FUNNEL_OUTCOME_MAX_AGE_DAYS = 60;
+/** Courtesy pause between ticker requests. Not the quota control: FUNNEL_OUTCOME_TICKERS_PER_RUN is. */
+export const FUNNEL_OUTCOME_INTERVAL_MS = 1_050;
 
 export interface FunnelNewsSource {
   getCompanyNews(symbol: string, fromISO: string, toISO: string): Promise<NewsItem[]>;
+}
+
+/**
+ * Daily candles for outcome scoring. Deliberately separate from FunnelNewsSource: news comes
+ * from Finnhub, whose /stock/candle is gated on our tier and 403s, which is why no funnel outcome
+ * was ever scored. Tiingo serves adjusted end-of-day bars on the free tier in the same Candle shape.
+ */
+export interface FunnelCandleSource {
   getCandles(symbol: string, fromISO: string, toISO: string): Promise<Candle[]>;
+}
+
+export interface FunnelOutcome {
+  id: string;
+  outcomeAt: number;
+  outcomeUp: boolean;
+  outcomePct: number;
 }
 
 export interface FunnelMemory {
   upsertFunnelItems(items: FunnelItemRecord[]): Promise<{ inserted: number; skipped: number }>;
-  funnelItemsAwaitingOutcome(screenedBefore: number, limit: number): Promise<StoredFunnelItem[]>;
-  recordFunnelOutcome(input: { id: string; outcomeAt: number; outcomeUp: boolean; outcomePct: number }): Promise<unknown>;
+  funnelItemsAwaitingOutcome(screenedAfter: number, screenedBefore: number, limit: number): Promise<StoredFunnelItem[]>;
+  funnelItemsAwaitingOutcomeForTicker(ticker: string, screenedAfter: number, screenedBefore: number, limit: number): Promise<StoredFunnelItem[]>;
+  recordFunnelOutcomes(outcomes: FunnelOutcome[]): Promise<unknown>;
 }
 
 export interface FunnelScreen {
@@ -251,42 +281,69 @@ export function outcomeFromCandles(candles: readonly Candle[], screenedDay: stri
 }
 
 /**
- * Score the directional shadow for items old enough to have an answer. Bounded per run and
- * best-effort per item, so this never competes with the screening for the time budget.
+ * Score the directional shadow for items old enough to have an answer, one ticker at a time: a
+ * single candle request covers every matured item for that ticker, across every day it was
+ * screened. Bounded per run and best-effort per ticker, so this never competes with the
+ * screening for the time budget.
  */
 export async function scoreFunnelOutcomes(deps: {
-  news: FunnelNewsSource;
+  candles: FunnelCandleSource;
   memory: FunnelMemory;
   now?: () => number;
   sleepImpl?: (ms: number) => Promise<void>;
   logger?: Pick<Console, "warn">;
-}): Promise<{ scored: number; pending: number; failures: number }> {
+}): Promise<{ tickers: number; scored: number; pending: number; failures: number; rateLimited: boolean }> {
   const now = deps.now ?? Date.now;
   const pause = deps.sleepImpl ?? sleep;
   const logger = deps.logger ?? console;
   const at = now();
   // Ten trading days is at least fourteen calendar days; a little more covers holidays.
   const screenedBefore = at - 16 * 86_400_000;
-  const items = await deps.memory.funnelItemsAwaitingOutcome(screenedBefore, FUNNEL_OUTCOMES_PER_RUN);
+  const screenedAfter = at - FUNNEL_OUTCOME_MAX_AGE_DAYS * 86_400_000;
+  const head = await deps.memory.funnelItemsAwaitingOutcome(screenedAfter, screenedBefore, FUNNEL_OUTCOME_HEAD_ITEMS);
+  const distinct = [...new Set(head.map((i) => i.ticker))];
+  // The head is deterministic, so starting at its first ticker every time would let one that never
+  // scores (unknown to Tiingo, or refused under the monthly symbol cap) hold slot one in every
+  // fire, and on a 429 stop every fire before anything else is tried. A start that moves with the
+  // clock means fires at different minutes try different tickers first.
+  const offset = distinct.length > 0 ? Math.floor(at / 60_000) % distinct.length : 0;
+  const picked = [...distinct.slice(offset), ...distinct.slice(0, offset)].slice(0, FUNNEL_OUTCOME_TICKERS_PER_RUN);
+
+  let tickers = 0;
   let scored = 0;
   let pending = 0;
   let failures = 0;
-  for (const item of items) {
+  let rateLimited = false;
+  for (const [n, ticker] of picked.entries()) {
+    if (n > 0) await pause(FUNNEL_OUTCOME_INTERVAL_MS);
     try {
-      const screenedDay = utcDay(item.screenedAt);
-      const candles = await deps.news.getCandles(item.ticker, screenedDay, utcDay(at));
-      const outcome = outcomeFromCandles(candles, screenedDay);
-      if (!outcome) {
-        pending += 1;
-        continue;
+      const items = await deps.memory.funnelItemsAwaitingOutcomeForTicker(ticker, screenedAfter, screenedBefore, FUNNEL_OUTCOME_ITEMS_PER_TICKER);
+      if (items.length === 0) continue;
+      const earliest = Math.min(...items.map((i) => i.screenedAt));
+      tickers += 1;
+      const bars = await deps.candles.getCandles(ticker, utcDay(earliest), utcDay(at));
+      const collected: FunnelOutcome[] = [];
+      for (const item of items) {
+        const outcome = outcomeFromCandles(bars, utcDay(item.screenedAt));
+        if (!outcome) pending += 1;
+        else collected.push({ id: item._id, outcomeAt: at, ...outcome });
       }
-      await deps.memory.recordFunnelOutcome({ id: item._id, outcomeAt: at, ...outcome });
-      scored += 1;
+      if (collected.length > 0) {
+        await deps.memory.recordFunnelOutcomes(collected);
+        scored += collected.length;
+      }
     } catch (err) {
       failures += 1;
-      logger.warn(`[funnel] outcome failed for ${item.ticker}:`, err);
+      const status = typeof err === "object" && err !== null && "status" in err ? (err as { status?: unknown }).status : undefined;
+      if (status === 429) {
+        // A cap is reached (hourly, daily, or the monthly symbol count), and the client has already
+        // spent its retries; every further ticker would wait about 30 s and fail the same way.
+        rateLimited = true;
+        logger.warn(`[funnel] outcome scoring rate limited at ${ticker}; stopping this run:`, err);
+        break;
+      }
+      logger.warn(`[funnel] outcome failed for ${ticker}:`, err);
     }
-    await pause(FUNNEL_FINNHUB_INTERVAL_MS);
   }
-  return { scored, pending, failures };
+  return { tickers, scored, pending, failures, rateLimited };
 }

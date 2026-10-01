@@ -414,7 +414,8 @@ export default defineSchema({
   })
     .index("by_day_and_score", ["day", "score"])
     .index("by_day_and_url", ["day", "url"])
-    .index("by_outcome_and_screened", ["outcomeAt", "screenedAt"]),
+    .index("by_outcome_and_screened", ["outcomeAt", "screenedAt"])
+    .index("by_ticker_and_outcome_and_screened", ["ticker", "outcomeAt", "screenedAt"]),
 
   /** Which slice of the universe each funnel fire took, so four jittered crons cover it exactly once. */
   funnelChunks: defineTable({
