@@ -88,12 +88,19 @@ function fakeMemory() {
         }
         return { inserted, skipped };
       },
-      async funnelItemsAwaitingOutcome() {
+      // Both queries honour the window and the limit exactly as the Convex range queries do, so a
+      // scorer that swaps or drops a bound gets nothing back here, just as it would in production.
+      async funnelItemsAwaitingOutcome(screenedAfter: number, screenedBefore: number, limit: number) {
         // Oldest first, and stable: several fixtures share a screenedAt and the run order depends on it.
-        return [...awaiting].sort((a, b) => a.screenedAt - b.screenedAt);
+        return [...awaiting]
+          .filter((i) => i.screenedAt > screenedAfter && i.screenedAt < screenedBefore)
+          .sort((a, b) => a.screenedAt - b.screenedAt)
+          .slice(0, limit);
       },
-      async funnelItemsAwaitingOutcomeForTicker(ticker: string) {
-        return awaiting.filter((i) => i.ticker === ticker);
+      async funnelItemsAwaitingOutcomeForTicker(ticker: string, screenedAfter: number, screenedBefore: number, limit: number) {
+        return awaiting
+          .filter((i) => i.ticker === ticker && i.screenedAt > screenedAfter && i.screenedAt < screenedBefore)
+          .slice(0, limit);
       },
       async recordFunnelOutcomes(batch: FunnelOutcome[]) {
         batches.push(batch);
@@ -367,6 +374,24 @@ test("a ticker that always fails cannot block every fire", async () => {
   const second = await run(NOW + 60_000);
   assert.notEqual(first[0], second[0]);
   assert.ok(new Set([...first, ...second]).size > FUNNEL_OUTCOME_TICKERS_PER_RUN);
+});
+
+test("outcome scoring only touches items inside the window: older than 16 days, younger than 60", async () => {
+  const store = fakeMemory();
+  const day = 86_400_000;
+  store.setAwaiting([
+    awaitingItem("x-stale", "X", NOW - 61 * day),
+    awaitingItem("x-ripe", "X", NOW - 20 * day),
+    awaitingItem("x-young", "X", NOW - 10 * day),
+    awaitingItem("stale", "OLD", NOW - 61 * day),
+    awaitingItem("young", "NEW", NOW - 10 * day),
+  ]);
+  const { calls, source } = recordingCandles();
+  const res = await scoreFunnelOutcomes({ candles: source, memory: store.memory, now: () => NOW, sleepImpl: noSleep, logger: quiet });
+  assert.deepEqual(calls.map((c) => c.symbol), ["X"]);
+  assert.equal(calls[0]?.fromISO, new Date(NOW - 20 * day).toISOString().slice(0, 10));
+  assert.deepEqual(store.outcomes.map((o) => o.id), ["x-ripe"]);
+  assert.equal(res.scored, 1);
 });
 
 test("an item without a full window yet stays pending and records nothing", async () => {
