@@ -7,11 +7,18 @@ import {
   heartbeatUtcDay,
   lastExpectedCycleDay,
 } from "../agent/lib/cron-watchdog.ts";
+import { redact } from "../agent/lib/redact.ts";
 
 // Dead-man's-switch for the "cycle" cron. Vercel Hobby purges runtime logs in ~1h, so a
 // cron that never fires leaves no trace. This runs on a schedule outside Vercel (GitHub
 // Actions) and alerts to Slack if today's heartbeat never showed up in Convex.
 
+
+// Log a redacted, truncated message, never the error object: it can carry the request
+// arguments, and the Convex secret is one of them. This log is public.
+function errorText(err) {
+  return redact(err instanceof Error ? err.message : String(err)).slice(0, 500);
+}
 
 async function postSlackAlert(webhookUrl, text) {
   try {
@@ -21,7 +28,7 @@ async function postSlackAlert(webhookUrl, text) {
       body: JSON.stringify({ text }),
     });
   } catch (err) {
-    console.error("[cron-watchdog] failed to post Slack alert:", err);
+    console.error("[cron-watchdog] failed to post Slack alert:", errorText(err));
   }
 }
 
@@ -72,7 +79,7 @@ async function main() {
 
     console.log(`[cron-watchdog] OK: cycle heartbeat found for ${expectedDay} UTC`);
   } catch (err) {
-    console.error("[cron-watchdog] check failed:", err);
+    console.error("[cron-watchdog] check failed:", errorText(err));
     process.exit(1);
   }
 }
