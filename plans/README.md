@@ -24,7 +24,7 @@ instrument announces itself.
 
 | Plan | Title | Priority | Effort | Depends on | Status |
 |------|-------|----------|--------|------------|--------|
-| 001 | Reinstall the dependency tree so local runs are evidence | P1 | S |, | TODO |
+| 001 | Reinstall the dependency tree so local runs are evidence | P1 | S |, | DONE |
 | 002 | Arm the trailing stop off the peak, at breakeven | P1 | S | 001 | DONE (#83) |
 | 003 | Stop failure payloads carrying the shared secret to Slack | P1 | S | 001 | TODO |
 | 004 | Stop `.env.example` reinstating the pre-#76 risk gate | P1 | S | 001 | TODO |
@@ -39,8 +39,8 @@ instrument announces itself.
 | 014 | Collapse the duplicated Jev news screener | P3 | S | 001 | TODO |
 | 015 | SPIKE: replay real trades through the backtest harness | P2 | M | 001, 002 | TODO |
 | 016 | SPIKE: re-derive the exit ladder from the real win distribution | P3 | M | 015 | TODO |
-| 017 | Hold the index with every pound not in a stock | P1 | L | 001 | IN PROGRESS |
-| 018 | Stop telling the agent to trade when it has no reason to | P1 | S | 017 (same release) | IN PROGRESS |
+| 017 | Hold the index with every pound not in a stock | P1 | L | 001 | DONE (#84) |
+| 018 | Stop telling the agent to trade when it has no reason to | P1 | S | 017 (same release) | DONE (#84) |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (one-line reason) | REJECTED (one-line rationale)
 
