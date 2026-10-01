@@ -7,7 +7,7 @@
 > `plans/README.md`.
 >
 > **Drift check (run first)**:
-> `git diff --stat 0859c96..HEAD -- agent/lib/funnel.ts agent/lib/funnel.test.ts agent/lib/funnel-schedule.ts agent/lib/tiingo.ts agent/lib/data.ts`
+> `git diff --stat ad33f28..HEAD -- agent/lib/funnel.ts agent/lib/funnel.test.ts agent/lib/funnel-schedule.ts agent/lib/tiingo.ts agent/lib/data.ts agent/lib/memory.ts convex/memory.ts convex/schema.ts`
 > If any of those changed since this plan was written, compare the "Current
 > state" excerpts against the live code before proceeding; on a mismatch, treat
 > it as a STOP condition.
@@ -15,11 +15,12 @@
 ## Status
 
 - **Priority**: P1
-- **Effort**: S
+- **Effort**: M (was S; the 2026-10-01 amendment moved scoring to one request per ticker)
 - **Risk**: LOW
 - **Depends on**: plans/001-reinstall-dependency-tree.md (so a green test run is evidence)
 - **Category**: bug
 - **Planned at**: commit `0859c96`, 2026-09-30
+- **Amended at**: commit `ad33f28`, 2026-10-01 (see "Volume and quota")
 
 ## Why this matters
 
@@ -33,8 +34,8 @@ outcomes. Measuring it is the job of `scoreFunnelOutcomes`.
 `scoreFunnelOutcomes` cannot measure anything, because the endpoint it calls
 returns HTTP 403 on this account's Finnhub tier. Every item it tries to score
 throws, gets counted as a failure, and is logged and swallowed. More than a
-hundred `funnelItems` rows sit with `outcomeAt` unset and zero scored, and have
-done since the feature shipped. The repo already knows this. The doc comment on
+hundred `funnelItems` rows sit with `outcomeAt` unset and zero scored (about
+1,600 by 2026-10-01), and have done since the feature shipped. The repo already knows this. The doc comment on
 the Finnhub client at `agent/lib/data.ts:192-196` says so in writing:
 
 ```
@@ -54,6 +55,44 @@ This is the only measurement path that exists. Of 55 live BUYs, three carry a
 trading record will take months. The funnel produces hundreds of scoreable items
 a day. Turn it on and the calibration experiment has data within two weeks;
 leave it off and the shadow forecaster stays unfalsifiable indefinitely.
+
+### Volume and quota (amended 2026-10-01)
+
+The first version of this plan assumed "a backlog of 100+ items" and scored one
+item per Tiingo request. Production data says otherwise. Read on 2026-10-01 with
+`npx convex data funnelItems --prod`:
+
+- the funnel writes about **700 items a day across about 268 distinct tickers**
+  (2026-09-30: 705 items / 268 tickers; 2026-10-01: 700 / 268);
+- **1,603 rows are unscored**, and 314 distinct tickers appeared in the first
+  three days;
+- the S&P 500 universe is 503 names.
+
+Tiingo's free tier, read from tiingo.com/about/pricing the same day: **50
+requests per hour, 1,000 per day, 500 unique symbols per month**. Hobby cron
+jitter can land all four funnel fires inside one hour (on 2026-10-01 they ran
+between 12:53 and 13:28 UTC).
+
+So one request per item cannot work. 40 items per fire across four fires is 160
+requests in an hour, three times the hourly cap. The 429 retry in
+`agent/lib/tiingo.ts` waits at most 10 s, three times, so every call past the cap
+burns about 30 s and then fails, which runs the fire past its 300 s budget. And
+160 items a day against 700 new ones means the backlog grows forever.
+
+The fix is to **score by ticker, not by item.** One `getCandles` call returns a
+ticker's full daily history over a date range, which scores every matured item
+for that ticker in one go, across every day it appeared. Each fire picks at most
+10 tickers (4 fires x 10 = 40 requests per hour, inside the 50 cap with headroom
+for local backtests on the same key). The rotation reaches each of roughly
+300-450 tickers every 8-11 days, so every item is eventually scored, about 1-2
+weeks after its 10-trading-day window closes. That is full coverage with a lag,
+which is what calibration and a rank-IC study need.
+
+The 500-unique-symbols-a-month cap is the one limit this cannot rule out: the
+funnel may touch close to the whole universe in a month. If it is hit, Tiingo
+refuses new symbols, the scorer stops its batch on the 429 (step 3), and the
+affected items simply wait until the month rolls over. Nothing is lost unless an
+item ages past the 60-day window (step 3).
 
 ## Current state
 
@@ -156,6 +195,43 @@ and the batch bound, `agent/lib/funnel.ts:42`:
 export const FUNNEL_OUTCOMES_PER_RUN = 40;
 ```
 
+The memory interface the scorer uses, `agent/lib/funnel.ts:49-53`:
+
+```ts
+export interface FunnelMemory {
+  upsertFunnelItems(items: FunnelItemRecord[]): Promise<{ inserted: number; skipped: number }>;
+  funnelItemsAwaitingOutcome(screenedBefore: number, limit: number): Promise<StoredFunnelItem[]>;
+  recordFunnelOutcome(input: { id: string; outcomeAt: number; outcomeUp: boolean; outcomePct: number }): Promise<unknown>;
+}
+```
+
+implemented by `agent/lib/memory.ts:405-410` against these Convex functions,
+`convex/memory.ts:1381-1408`:
+
+```ts
+export const funnelItemsAwaitingOutcome = query({
+  args: { token: v.string(), screenedBefore: v.number(), limit: v.number() },
+  handler: async (ctx, args) => {
+    assertSecret(args.token);
+    const limit = Math.min(Math.max(args.limit, 1), 100);
+    return await ctx.db
+      .query("funnelItems")
+      .withIndex("by_outcome_and_screened", (q) =>
+        q.eq("outcomeAt", undefined).lt("screenedAt", args.screenedBefore),
+      )
+      .take(limit);
+  },
+});
+```
+
+`recordFunnelOutcome` patches one row per call. The only index today is
+`convex/schema.ts:417`: `.index("by_outcome_and_screened", ["outcomeAt", "screenedAt"])`.
+Nothing outside these files calls `funnelItemsAwaitingOutcome`,
+`recordFunnelOutcome` or `FUNNEL_OUTCOMES_PER_RUN`; confirm with
+`grep -rn -e FUNNEL_OUTCOMES_PER_RUN -e recordFunnelOutcome -e funnelItemsAwaitingOutcome agent convex scripts evals`.
+`TiingoError` (`agent/lib/tiingo.ts:11-21`) carries a numeric `status` and a
+boolean `rateLimited`.
+
 `Candle` shapes match exactly. `agent/lib/data.ts:28-36` defines the type, and
 `agent/lib/tiingo.ts:2` imports that very type, so `TiingoProvider.getCandles`
 returns `Candle[]` by construction. `mapTiingoPrices` (line 90) truncates the ISO
@@ -215,8 +291,13 @@ prefix will silently match nothing.
 **In scope** (the only files you should modify):
 
 - `agent/lib/funnel.ts`: split the candle dependency out of `FunnelNewsSource`;
-  rename the pacing constant used by the scorer
+  rewrite `scoreFunnelOutcomes` to work per ticker; replace
+  `FUNNEL_OUTCOMES_PER_RUN` with the constants in step 4; extend `FunnelMemory`
 - `agent/lib/funnel-schedule.ts`: construct and inject the Tiingo candle source
+- `agent/lib/memory.ts`: the client methods behind the new `FunnelMemory` shape
+- `convex/schema.ts`: one new index on `funnelItems`, nothing else
+- `convex/memory.ts`: the per-ticker query, the windowed head query, the batch
+  outcome mutation
 - `agent/lib/funnel.test.ts`: tests
 - `.env.example`: line 28 only, the `TIINGO_API_KEY` comment
 - `README.md`: line 77 only, the "only needed locally" claim
@@ -224,160 +305,201 @@ prefix will silently match nothing.
 **Out of scope** (do NOT touch, even though they look related):
 
 - `agent/lib/data.ts`. Finnhub stays the news source and its `getCandles` stays
-  where it is. It is still the right implementation for a tier that serves
-  candles, it is tested (`agent/lib/data.test.ts:142`), and deleting it would
-  break `MarketDataProvider`. Leave the 403 comment in place; it is now accurate
-  history rather than a live problem.
-- `agent/lib/tiingo.ts`. It works and is tested. Do not add a wrapper, a
-  retry policy or a rate limiter to it here; plan 011 owns shared rate limiting.
+  where it is. It is the right implementation for a tier that serves candles, it
+  is tested (`agent/lib/data.test.ts:142`), and deleting it would break
+  `MarketDataProvider`. Leave the 403 comment in place.
+- `agent/lib/tiingo.ts`. It works and is tested. Do not add a wrapper, a retry
+  policy or a rate limiter to it; plan 011 owns shared rate limiting. The scorer
+  reacts to a 429 itself (step 4).
 - `outcomeFromCandles` (`agent/lib/funnel.ts:241`). The scoring maths is correct
-  and tested. This plan changes where candles come from, nothing about what is
-  done with them. If you find yourself editing it, you have gone off-plan.
-- `FUNNEL_OUTCOMES_PER_RUN`. Raising it is tempting once scoring works (there is
-  a backlog of 100+ unscored items) but it is the only bound on how many Tiingo
-  symbols a fire touches, and the free tier's binding constraint is unique
-  symbols, not requests per second. Changing it is a separate decision with data
-  behind it; see Maintenance notes.
-- `.env.example` lines 42-53. Plan 004 edits that block. Do not touch it, so the
-  two plans do not collide in the same file.
+  and tested. This plan changes where candles come from and how many items one
+  request scores, nothing about what is done with them.
+- Any new field on `funnelItems`. The table holds about 1,600 live rows. This plan
+  adds an index only, which needs no backfill decision. If you think you need a
+  field, STOP.
+- `.env.example` lines 42-53. Plan 004 edits that block.
 - Anything about the screening path (`runFunnelChunk`, `screenFunnelItem`,
   `funnel-score.ts`). Scoring runs after it and must not disturb it.
+- Running `npx convex deploy` in any form, or any command against production
+  other than the read-only `npx vercel env ls production` and step 6's one
+  Tiingo read. The reviewer runs the production schema dry run.
 
 ## Git workflow
 
 - Branch: `advisor/008-score-funnel-outcomes-via-tiingo`
-- One commit. Message style from `git log`: conventional commits, subject in the
+- One or more commits, conventional style from `git log`, subject in the
   imperative, body explaining the mechanism. For example:
-  `fix(funnel): score outcomes through Tiingo, not a 403 Finnhub endpoint`
+  `fix(funnel): score outcomes per ticker through Tiingo, not a 403 Finnhub endpoint`
+- Stage explicit paths only. Never `git add -A`.
 - Do NOT push or open a PR unless the operator instructed it.
 
 ## Steps
 
-### Step 1: Check the production environment before writing any code
+### Step 0: Prepare the worktree
 
-This wiring runs on Vercel, not locally. `tiingoFromEnv()` throws
-`TIINGO_API_KEY is not set` when the variable is missing, and as of this plan's
-writing `TIINGO_API_KEY` is **not present in the Vercel production
-environment**. Every other key the funnel needs is (`FINNHUB_API_KEY`,
-`TYPESAFE_API_KEY`, `CONVEX_URL`, `CONVEX_APP_SECRET`). A green deploy proves the
-build, not the configuration, so check before building on the assumption.
+`convex/_generated` is gitignored, so a fresh worktree has none and the Convex
+typecheck fails for reasons unrelated to your change. Copy it in from the main
+checkout before anything else:
+
+```
+/bin/cp -R /Users/lucien/src/luciengeorge/poof/convex/_generated convex/
+```
+
+Read `convex/_generated/ai/guidelines.md` before writing any Convex code. Its
+rules override what you may remember about Convex.
+
+**Verify**: `npx tsc -p convex/tsconfig.json` exits 0 on the untouched tree.
+
+### Step 1: Check the production environment
+
+This wiring runs on Vercel. `tiingoFromEnv()` throws `TIINGO_API_KEY is not set`
+when the variable is missing. It was added to Production on 2026-09-30; confirm
+rather than assume.
 
 ```
 npx vercel env ls production
 ```
 
-**Verify**: read the output. If `TIINGO_API_KEY` is listed for Production,
-record that and continue to step 2.
-
-If it is **not** listed, that is expected, and it means this plan cannot finish
-without an operator action you may not be able to perform. Continue building
-(step 4 and the design in step 3 make the missing key a clean skip rather than a
-crash), but treat step 7 as a hard gate and report the gap explicitly in your
-final message. Do not invent, guess or paste a key, and do not print the value
-of any environment variable at any point in this plan.
+**Verify**: `TIINGO_API_KEY` is listed for Production. If it is not, continue
+building (the design makes a missing key a logged skip) but treat step 8 as a hard
+gate. Never print the value of any environment variable.
 
 ### Step 2: Write the failing wiring test first
 
-Add to `agent/lib/funnel.test.ts` a structural test that fails against today's
-code, modelled on the existing one at `agent/lib/funnel.test.ts:282` (which
-reads schedule files as text and asserts on their contents).
-
-The test reads `agent/lib/funnel-schedule.ts` as source text and asserts:
+Add to `agent/lib/funnel.test.ts` a structural test modelled on the existing ones
+near line 282 (they read schedule files as text). It reads
+`agent/lib/funnel-schedule.ts` and asserts:
 
 1. it imports from `./tiingo.ts`;
 2. the call to `scoreFunnelOutcomes(` is passed a candle source, not the Finnhub
    `news` client;
-3. `finnhubFromEnv()` is still what feeds `runFunnelChunk`, so this change did
-   not quietly swap the news provider too.
+3. `finnhubFromEnv()` is still what feeds `runFunnelChunk`.
 
-Why structural and not behavioural: the unit tests below inject a fake candle
-source and would stay green even if `funnel-schedule.ts` kept passing the 403
-Finnhub client forever. That is exactly the failure that shipped here. The
-comment on `agent/lib/hold-floor.test.ts:82-84` records the same lesson in the
-same words; write a comment in that spirit above your test.
+Put a comment above it in the spirit of `agent/lib/hold-floor.test.ts:82-84`:
+every unit test injects a fake candle source, so all of them stay green if the
+schedule keeps passing the Finnhub client whose `/stock/candle` 403s. That is the
+bug that shipped; only this file's source shows the wiring.
+
+**Verify**: `node --test --experimental-strip-types agent/lib/funnel.test.ts` →
+the new test FAILS, everything else passes.
+
+### Step 3: Convex: one index, a windowed head query, a per-ticker query, a batch mutation
+
+In `convex/schema.ts`, add to `funnelItems` (keep the existing indexes):
 
 ```ts
-test("the funnel schedule scores outcomes from Tiingo, not from the Finnhub news client (structural)", () => {
-  // Every unit test below injects a fake candle source, so all of them stay green if
-  // funnel-schedule keeps passing the Finnhub client whose /stock/candle 403s on our tier.
-  // That is precisely the bug: the scorer has never scored anything in production. The wiring
-  // is only observable in this file's source, so it is asserted here.
-  const src = readFileSync(new URL("./funnel-schedule.ts", import.meta.url), "utf8");
-  // ... assertions
-});
+    .index("by_ticker_and_outcome", ["ticker", "outcomeAt", "screenedAt"]),
 ```
 
-**Verify**: `node --test --experimental-strip-types agent/lib/funnel.test.ts`
-→ the new test FAILS, everything else passes. A new test that passes before the
-fix is not testing the fix.
+In `convex/memory.ts`:
 
-### Step 3: Split the candle dependency out of `FunnelNewsSource`
+1. Change `funnelItemsAwaitingOutcome` to take `screenedAfter` as well, and
+   bound the range on both sides:
+   `q.eq("outcomeAt", undefined).gt("screenedAt", args.screenedAfter).lt("screenedAt", args.screenedBefore)`.
+   Why: an item whose ticker never yields a full window (renamed, delisted, a
+   spelling Tiingo rejects) would otherwise sit at the head of the queue for
+   ever and take one of the fire's ten ticker slots every time. The lower bound
+   lets it age out after 60 days instead of starving the rotation.
+2. Add `funnelItemsAwaitingOutcomeForTicker` with args
+   `{ token, ticker, screenedAfter, screenedBefore, limit }`, using the new index:
+   `q.eq("ticker", args.ticker).eq("outcomeAt", undefined).gt("screenedAt", args.screenedAfter).lt("screenedAt", args.screenedBefore)`,
+   `limit` clamped to 1..200, `.take(limit)`.
+3. Replace `recordFunnelOutcome` with `recordFunnelOutcomes`, args
+   `{ token, outcomes: v.array(v.object({ id: v.id("funnelItems"), outcomeAt: v.number(), outcomeUp: v.boolean(), outcomePct: v.number() })) }`,
+   which patches each row. One call per ticker instead of one per item: a busy
+   ticker can have 30+ matured items, and 300 single-row HTTP mutations would eat
+   the fire's budget.
+
+Every function keeps `assertSecret(args.token)` as its first line, matching the
+rest of the file.
+
+In `agent/lib/memory.ts`, update the client to match: `funnelItemsAwaitingOutcome(screenedAfter, screenedBefore, limit)`,
+add `funnelItemsAwaitingOutcomeForTicker(ticker, screenedAfter, screenedBefore, limit)`,
+and replace `recordFunnelOutcome` with `recordFunnelOutcomes(outcomes)`. Follow
+the existing one-line `this.query(...)` / `this.mutation(...)` style at
+`agent/lib/memory.ts:405-410`.
+
+**Verify**: `npx tsc -p convex/tsconfig.json` → exit 0. `pnpm typecheck` is
+expected to fail at this point, pointing at `funnel.ts` and the test fake; that
+is step 4's job.
+
+### Step 4: Rewrite the scorer to work per ticker
 
 In `agent/lib/funnel.ts`:
 
-1. Remove `getCandles` from `FunnelNewsSource` (line 46). Nothing else uses it:
-   `runFunnelChunk` (line 165) calls only `getCompanyNews`. Verify with
-   `grep -n "getCandles" agent/lib/funnel.ts` before and after.
-2. Add a separate one-method interface beside it:
+1. Remove `getCandles` from `FunnelNewsSource`; `runFunnelChunk` only calls
+   `getCompanyNews` (check with `grep -n "getCandles" agent/lib/funnel.ts`). Add:
 
 ```ts
 /**
- * Daily candles for outcome scoring. Deliberately separate from FunnelNewsSource: the news
- * provider and the price provider are different services here, because Finnhub's /stock/candle
- * is gated on our tier and 403s, which is why no funnel outcome was ever scored. Tiingo serves
- * adjusted end-of-day bars on the free tier and returns the same Candle shape.
+ * Daily candles for outcome scoring. Deliberately separate from FunnelNewsSource: news comes
+ * from Finnhub, whose /stock/candle is gated on our tier and 403s, which is why no funnel outcome
+ * was ever scored. Tiingo serves adjusted end-of-day bars on the free tier in the same Candle shape.
  */
 export interface FunnelCandleSource {
   getCandles(symbol: string, fromISO: string, toISO: string): Promise<Candle[]>;
 }
 ```
 
-3. In `scoreFunnelOutcomes`, replace the `news: FunnelNewsSource` dependency with
-   `candles: FunnelCandleSource`, and change the call site from
-   `deps.news.getCandles(...)` to `deps.candles.getCandles(...)`. Keep the local
-   variable name `candles` for the fetched array or rename it to avoid shadowing;
-   either is fine, be consistent.
-4. Rename the pacing constant used inside the scorer's loop. Leave
-   `FUNNEL_FINNHUB_INTERVAL_MS` in place for the screening loop, which is still
-   Finnhub, and add:
+2. Update `FunnelMemory` to the three methods from step 3.
+
+3. Replace `FUNNEL_OUTCOMES_PER_RUN` with:
 
 ```ts
 /**
- * Pause between outcome-scoring calls. Same 1,050 ms as the screening loop, so throughput is
- * unchanged by this switch, but it paces a different provider and so gets its own name. Note
- * that a per-second pause is NOT what protects us on Tiingo: its free tier is bounded by unique
- * symbols per hour and per month rather than by requests per minute, so the real control is
- * FUNNEL_OUTCOMES_PER_RUN (40 per fire, four fires a day, so at most 160 symbol-requests and
- * 160 unique symbols in a day). Raise that only with the quota in front of you.
+ * Tickers whose candles one fire fetches for outcome scoring. Tiingo's free tier allows 50
+ * requests an hour, and Hobby jitter can land all four fires inside one hour, so 4 x 10 = 40
+ * leaves headroom for local backtests on the same key. One request scores every matured item for
+ * its ticker, so this bounds requests, not items.
  */
+export const FUNNEL_OUTCOME_TICKERS_PER_RUN = 10;
+/** Oldest awaiting items read to choose this fire's tickers. */
+export const FUNNEL_OUTCOME_HEAD_ITEMS = 100;
+/** Most awaiting items scored for one ticker in one fire. */
+export const FUNNEL_OUTCOME_ITEMS_PER_TICKER = 200;
+/** Items older than this are left unscored rather than retried for ever; see funnelItemsAwaitingOutcome. */
+export const FUNNEL_OUTCOME_MAX_AGE_DAYS = 60;
+/** Courtesy pause between ticker requests. Not the quota control: FUNNEL_OUTCOME_TICKERS_PER_RUN is. */
 export const FUNNEL_OUTCOME_INTERVAL_MS = 1_050;
 ```
 
-and use it in the scorer's `await pause(...)` at line 289. Leave the identical
-call at line 192 alone: that one paces the Finnhub screening loop and is
-correctly named.
+Leave `FUNNEL_FINNHUB_INTERVAL_MS` and its use in the screening loop alone.
 
-Preserve two properties exactly:
+4. Rewrite `scoreFunnelOutcomes`. Dependencies become
+   `{ candles: FunnelCandleSource; memory: FunnelMemory; now?; sleepImpl?; logger? }`.
+   Behaviour, in order:
+   - `at = now()`, `screenedBefore = at - 16 days` (keep the existing comment),
+     `screenedAfter = at - FUNNEL_OUTCOME_MAX_AGE_DAYS days`.
+   - Read the head: `funnelItemsAwaitingOutcome(screenedAfter, screenedBefore, FUNNEL_OUTCOME_HEAD_ITEMS)`.
+   - Tickers = distinct tickers of the head **in head order** (oldest first),
+     first `FUNNEL_OUTCOME_TICKERS_PER_RUN` of them.
+   - For each ticker, inside its own try/catch:
+     - read its items with `funnelItemsAwaitingOutcomeForTicker(ticker, screenedAfter, screenedBefore, FUNNEL_OUTCOME_ITEMS_PER_TICKER)`;
+       skip the ticker if empty;
+     - ONE `candles.getCandles(ticker, utcDay(oldest screenedAt among them), utcDay(at))`;
+     - for each item, `outcomeFromCandles(bars, utcDay(item.screenedAt))`; null
+       counts as `pending`, otherwise collect `{ id, outcomeAt: at, ...outcome }`;
+     - if any were collected, ONE `recordFunnelOutcomes(collected)`; add the
+       count to `scored`.
+     - On a throw: `failures += 1` (per ticker). If the error has a numeric
+       `status === 429` (check the property, do not import `TiingoError` into
+       this pure module), set `rateLimited = true`, log once, and `break`: the
+       hourly or monthly cap is reached and every further call would wait about
+       30 s and fail. Any other error: log with the ticker and continue.
+   - `await pause(FUNNEL_OUTCOME_INTERVAL_MS)` between tickers.
+   - Return `{ tickers, scored, pending, failures, rateLimited }`, where
+     `tickers` is how many tickers were actually fetched.
+     `funnel-schedule.ts` logs it verbatim, so the new fields reach the logs with
+     no other change.
 
-- Per-item best-effort. A throw on one item increments `failures`, logs, and the
-  loop continues. Do not let a provider error abort the batch.
-- The returned shape `{ scored, pending, failures }` is unchanged, and
-  `funnel-schedule.ts` logs it verbatim.
+**Verify**: `pnpm typecheck` → exit 0 once step 5 is also done (it will point
+at `funnel-schedule.ts` until then; fix it there, never with a cast).
 
-**Verify**: `pnpm typecheck` → exit 0. Expect the compiler to point at
-`funnel-schedule.ts` if you have not done step 4 yet; that is the intended
-signal, not an error to work around with a cast.
+### Step 5: Inject the Tiingo candle source at the IO edge
 
-### Step 4: Inject the Tiingo candle source at the IO edge
-
-In `agent/lib/funnel-schedule.ts`:
-
-1. Import `tiingoFromEnv` from `./tiingo.ts`.
-2. Leave the `finnhubFromEnv()` construction at line 50 exactly where it is.
-   News still comes from Finnhub.
-3. Build the candle source inside the existing outcome-scoring `try` block at
-   lines 82-87, so an unset key is a logged skip and never a crash, and so it
-   still cannot eat the 300-second budget. Target shape:
+In `agent/lib/funnel-schedule.ts`, import `tiingoFromEnv` from `./tiingo.ts`,
+leave `finnhubFromEnv()` at line 50 untouched, and build the candle source
+inside the existing scoring `try` block so a missing key is a logged skip:
 
 ```ts
   // Outcome scoring for the directional shadow. Best-effort and last, so it can never eat into
@@ -393,28 +515,17 @@ In `agent/lib/funnel-schedule.ts`:
   }
 ```
 
-`tiingoFromEnv()` throwing on a missing key lands in the existing catch, so a
-deployment without the variable logs one warning per fire and keeps screening.
-That is the correct degradation and it is also how you will notice the variable
-is missing: the log line names it.
+**Verify**: `pnpm typecheck` → exit 0, and
+`node --test --experimental-strip-types agent/lib/funnel.test.ts` → all pass,
+including step 2's test.
 
-**Verify**:
+### Step 6: Prove it against the live API, once, locally
 
-- `pnpm typecheck` → exit 0
-- `node --test --experimental-strip-types agent/lib/funnel.test.ts` → all pass,
-  including step 2's test, which should now be green
-
-### Step 5: Prove it against the live API, once, locally
-
-Unit tests with fake candle sources cannot tell you whether Tiingo actually
-answers for these symbols on this account's tier. Run one real call.
-
-Write a throwaway script outside the repo, for example at
-`/tmp/check-tiingo.ts`, that imports the real provider and prints shapes only,
-never the key:
+Write a throwaway script outside the repo (for example `/tmp/check-tiingo.ts`)
+that prints shapes only, never the key:
 
 ```ts
-import { tiingoFromEnv } from "/absolute/path/to/poof/agent/lib/tiingo.ts";
+import { tiingoFromEnv } from "/absolute/path/to/your/worktree/agent/lib/tiingo.ts";
 
 for (const symbol of ["AAPL", "BRK-B"]) {
   const c = await tiingoFromEnv().getCandles(symbol, "2026-09-01", "2026-09-30");
@@ -422,169 +533,111 @@ for (const symbol of ["AAPL", "BRK-B"]) {
 }
 ```
 
-Run it with Node's own env loader rather than the `export $(grep ...)` shell
-trick, which mangles values containing spaces or `#`:
+Run it with `node --env-file=/Users/lucien/src/luciengeorge/poof/.env.local --experimental-strip-types /tmp/check-tiingo.ts`.
+That is 2 of the 50 hourly requests; do not run it in a loop.
 
-```
-node --env-file=.env.local --experimental-strip-types /tmp/check-tiingo.ts
-```
+**Verify**: both symbols print at least 15 candles, each `date` `YYYY-MM-DD`,
+each `close` positive. If `BRK-B` fails while `AAPL` works, record the exact error
+and STOP; do not add a symbol-mapping layer. Delete the script afterwards.
 
-**Verify**: both symbols print at least 15 candles, each `date` matching
-`YYYY-MM-DD`, each `close` a positive number. `BRK-B` matters specifically: it
-is one of only two punctuated tickers in the 503-name universe, and it is the
-one that would silently fail if Tiingo wanted a different spelling.
+### Step 7: Correct the two places that call `TIINGO_API_KEY` local-only
 
-If `BRK-B` returns an error or zero candles while `AAPL` works, do not paper over
-it with a symbol-mapping table. Record the exact error and STOP: two names out of
-503 failing is a known, bounded, loggable condition and the right response is a
-decision, not an unreviewed mapping layer.
+`.env.example:28` ends with `# LOCAL ONLY: live candles for the backtest harness
+(agent/lib/tiingo.ts). Not used by the live trading cycle or CI evals.` Change
+that comment so it says the funnel's outcome scorer uses it in production
+(`agent/lib/funnel-schedule.ts`) as well as the local backtest harness, and that
+without it the scorer skips and logs. Touch nothing else in the file.
 
-Delete `/tmp/check-tiingo.ts` afterwards. It must not be committed.
+`README.md:77` says `TIINGO_API_KEY` "is only needed locally for backtests".
+Correct it the same way: still not needed by the trading cycle or CI evals, now
+required by the funnel schedules in production.
 
-### Step 6: Correct the two places that call `TIINGO_API_KEY` local-only
+**Verify**: `grep -n "LOCAL ONLY" .env.example` → no output.
 
-Both statements become false the moment this lands, and a stale "you do not need
-this in production" note is how the variable stays missing.
+### Step 8: Gate on the production variable
 
-`.env.example:28` currently reads:
+Re-run `npx vercel env ls production`. If `TIINGO_API_KEY` is not listed for
+Production, do not mark this plan DONE: set its `plans/README.md` row to
+`BLOCKED (TIINGO_API_KEY not set on Vercel production)` and say so in your report.
 
-```
-TIINGO_API_KEY=your-tiingo-api-key-here     # LOCAL ONLY: live candles for the backtest harness (agent/lib/tiingo.ts). Not used by the live trading cycle or CI evals.
-```
+### Step 9: Mutation-check your own tests
 
-Change the trailing comment so it says the funnel's outcome scorer uses it in
-production (`agent/lib/funnel-schedule.ts`) as well as the local backtest
-harness, and that without it the scorer skips and logs. Touch nothing else on
-that line and no other line in the file.
+For each mutation: back up with `/bin/cp -f <file> /tmp/<name>.bak`, make the
+change, **confirm it landed with grep and read the line** (`cp` is aliased to
+`cp -i` here and has silently refused before), run the funnel tests, restore
+with `/bin/cp -f`, then **confirm the restore** with `git diff <file>` and a green
+run.
 
-`README.md:77` currently claims `TIINGO_API_KEY` "is only needed locally for
-backtests. The live trading cycle and CI evals do..." Read the full sentence and
-correct it the same way: still not needed by the trading cycle or CI evals,
-but now required by the funnel schedules in production.
+- **A, the wiring.** In `funnel-schedule.ts` pass the Finnhub client again:
+  `scoreFunnelOutcomes({ candles: news, memory, now, logger })` (it still
+  typechecks). Step 2's structural test must go RED.
+- **B, one request per ticker.** In `scoreFunnelOutcomes`, move the
+  `getCandles` call inside the per-item loop. The "one request per ticker" test
+  must go RED.
+- **C, the 429 stop.** Replace the `break` on a 429 with `continue`. The "stops
+  on a 429" test must go RED.
+- **D, the recording.** Change the `scored +=` line to add 0. The existing
+  "records finished items and leaves the rest pending" test must go RED.
 
-**Verify**: `grep -n "LOCAL ONLY" .env.example` → no output, exit 1. And
-`grep -n "TIINGO_API_KEY" README.md .env.example` → the remaining mentions
-describe production use.
+**Verify**: all four went red and everything is green after each restore. A
+mutation that leaves the suite green is a STOP condition.
 
-### Step 7: Gate on the production variable
-
-Re-run step 1's check.
-
-```
-npx vercel env ls production
-```
-
-**Verify**: `TIINGO_API_KEY` appears in the Production list.
-
-If it does not, the code is correct and the feature is still dead in production.
-Do not mark this plan DONE. Set its `plans/README.md` row to
-`BLOCKED (TIINGO_API_KEY not set on Vercel production)` and say so plainly in
-your final report, naming the command the operator needs to run
-(`npx vercel env add TIINGO_API_KEY production`) without any value in it. A
-merged change that silently does nothing in production is the exact pattern this
-whole plan set exists to break.
-
-### Step 8: Mutation-check your own tests
-
-This repo has shipped vacuous tests four times: a constant compared against
-itself, a mutation that landed in the wrong function, and unit tests with no
-wiring test. Prove the new tests bite. Two mutations, because the structural
-test and the unit tests guard different failures.
-
-**Mutation A, the wiring.** In `agent/lib/funnel-schedule.ts`, revert step 4 by
-hand: pass the Finnhub client as the candle source again
-(`scoreFunnelOutcomes({ candles: news, memory, now, logger })`, which still
-typechecks because `FinnhubProvider` structurally satisfies `FunnelCandleSource`).
-
-1. Back up first: `/bin/cp -f agent/lib/funnel-schedule.ts /tmp/funnel-schedule.bak`
-2. Make the change.
-3. **Confirm the mutation actually landed**:
-   `grep -n "scoreFunnelOutcomes" agent/lib/funnel-schedule.ts` and read the
-   line. Do not skip this. `cp` is aliased to `cp -i` in this environment and
-   has silently refused to overwrite before, producing a false green off a
-   change that never happened.
-4. Run `node --test --experimental-strip-types agent/lib/funnel.test.ts`
-   → step 2's structural test must go RED.
-5. Restore: `/bin/cp -f /tmp/funnel-schedule.bak agent/lib/funnel-schedule.ts`
-6. **Verify the restore**: `git diff agent/lib/funnel-schedule.ts` shows only
-   your intended change, and the tests pass again. A restore that silently
-   no-ops turns an unrelated failure into false proof that the test works.
-
-**Mutation B, the scorer.** In `agent/lib/funnel.ts`, break the scorer's
-recording path: change `scored += 1;` to `scored += 0;`.
-
-1. **Confirm it landed**: `grep -n "scored +=" agent/lib/funnel.ts`.
-2. Run the funnel tests → the existing test at `agent/lib/funnel.test.ts:260`
-   ("outcome scoring records finished items and leaves the rest pending") plus
-   your new unit tests must go RED.
-3. Restore and re-verify with `git diff` plus a passing run.
-
-**Verify**: you observed the structural test go red under mutation A, the unit
-tests go red under mutation B, and everything green after both restores. If a
-mutation leaves the suite green, the test is not testing what it claims and that
-is a STOP condition.
-
-### Step 9: Confirm nothing else moved
-
-**Verify**:
+### Step 10: Confirm nothing else moved
 
 - `pnpm typecheck` → exit 0
 - `npx tsc -p convex/tsconfig.json` → exit 0
-- `pnpm test` → exit 0, `ℹ fail 0`, and 3 or more new tests versus the plan-001
-  baseline
-- `git status --short` lists only the five in-scope files
+- `pnpm test` → exit 0 with `ℹ fail 0` and at least 5 more tests than before you
+  started (record the count in step 0)
+- `git status --short` lists only the in-scope files
 
 ## Test plan
 
-All new tests in `agent/lib/funnel.test.ts`, modelled on the tests already there
-(`node:test`, `node:assert/strict`, plain fixtures, and the `readFileSync`
-structural pattern at line 282):
+All new tests in `agent/lib/funnel.test.ts`, using `node:test`,
+`node:assert/strict` and the existing `fakeMemory()` (extend it for the new
+`FunnelMemory` methods: it should hold awaiting items, answer the head query
+oldest-first and the per-ticker query by ticker, and record batches). The
+existing test "outcome scoring records finished items and leaves the rest
+pending" keeps its assertions; change only `news:` to `candles:` and whatever the
+fake needs.
 
-1. **The wiring** (step 2, structural): `funnel-schedule.ts` imports
-   `./tiingo.ts`, passes a candle source to `scoreFunnelOutcomes`, and still
-   builds the Finnhub client for `runFunnelChunk`. This is the regression test
-   for the actual bug.
-2. **The scorer uses the candle source, not the news source.** Call
-   `scoreFunnelOutcomes` with a candle source whose `getCandles` records the
-   symbols it was asked for, and assert the recorded symbols are the items'
-   tickers. Adapt the fixture at `agent/lib/funnel.test.ts:260`, which already
-   builds exactly this shape with `store.setAwaiting([...])`.
-3. **A provider error on one item does not abort the batch.** Two awaiting
-   items; `getCandles` throws for the first and returns a full window for the
-   second. Assert `{ scored: 1, failures: 1 }` and that the second item's
-   outcome reached `recordFunnelOutcome`. This is the property that let a total
-   403 outage look like nothing at all, so it is worth pinning explicitly.
-4. **Pacing is honoured.** Pass a `sleepImpl` that records its argument and
-   assert it was called with `FUNNEL_OUTCOME_INTERVAL_MS` once per item. Cheap,
-   and it pins that the rename did not drop the pause.
+1. **The wiring** (step 2, structural).
+2. **One request per ticker.** Three awaiting items for ticker X on two
+   different screening days plus one for Y; the candle source records its calls.
+   Assert exactly two `getCandles` calls (X once, Y once), that X's call starts at
+   X's oldest screening day, and that all four outcomes reached
+   `recordFunnelOutcomes` in two batches.
+3. **At most `FUNNEL_OUTCOME_TICKERS_PER_RUN` tickers per fire.** Give the head
+   12 distinct tickers; assert 10 `getCandles` calls, chosen in head order.
+4. **A non-429 error on one ticker does not abort the batch.** X throws a plain
+   `Error`, Y returns a full window. Assert `failures: 1`, Y's outcome recorded,
+   `rateLimited: false`.
+5. **The batch stops on a 429.** X throws an error object with `status: 429`;
+   Y would succeed. Assert Y was never requested, `rateLimited: true`,
+   `failures: 1`, `scored: 0`.
+6. **Young items stay pending.** A window shorter than
+   `FUNNEL_OUTCOME_TRADING_DAYS + 1` candles counts as `pending` and records
+   nothing for that item.
 
-Do not rewrite the existing test at line 260; update its `news:` dependency to
-`candles:` and leave its assertions alone. If its assertions need changing to
-pass, something in step 3 changed behaviour that should not have.
-
-Verification: `pnpm test` → all pass, 3 or more new tests.
+Verification: `pnpm test` → all pass.
 
 ## Done criteria
 
-Machine-checkable. ALL must hold:
+ALL must hold:
 
 - [ ] `pnpm typecheck` exits 0
 - [ ] `npx tsc -p convex/tsconfig.json` exits 0
-- [ ] `pnpm test` exits 0 with `ℹ fail 0` and at least 3 more tests than the plan-001 baseline
-- [ ] `grep -n "getCandles" agent/lib/funnel.ts` shows it only on
-      `FunnelCandleSource` and at the `deps.candles.getCandles` call site, not on
-      `FunnelNewsSource`
-- [ ] `grep -n "tiingoFromEnv" agent/lib/funnel-schedule.ts` matches
-- [ ] `grep -n "finnhubFromEnv" agent/lib/funnel-schedule.ts` still matches: news
-      did not change provider
-- [ ] `grep -n "LOCAL ONLY" .env.example` returns no output (exit 1)
-- [ ] Step 5's live check printed real candles for both `AAPL` and `BRK-B`
-- [ ] You observed both mutations turn the intended tests red, and green after restore
-- [ ] `TIINGO_API_KEY` is listed for Production by `npx vercel env ls production`,
-      or the `plans/README.md` row says `BLOCKED` with that reason
-- [ ] `git status --short` shows only `agent/lib/funnel.ts`,
-      `agent/lib/funnel-schedule.ts`, `agent/lib/funnel.test.ts`, `.env.example`
-      and `README.md`
+- [ ] `pnpm test` exits 0 with `ℹ fail 0` and at least 5 more tests than at step 0
+- [ ] `grep -n "getCandles" agent/lib/funnel.ts` shows it on `FunnelCandleSource`
+      and the scorer's single call site, not on `FunnelNewsSource`
+- [ ] `grep -rn FUNNEL_OUTCOMES_PER_RUN agent` returns nothing
+- [ ] `grep -n "tiingoFromEnv" agent/lib/funnel-schedule.ts` matches, and
+      `grep -n "finnhubFromEnv" agent/lib/funnel-schedule.ts` still matches
+- [ ] `grep -n "by_ticker_and_outcome" convex/schema.ts convex/memory.ts` matches in both
+- [ ] `grep -n "LOCAL ONLY" .env.example` returns no output
+- [ ] Step 6 printed real candles for both `AAPL` and `BRK-B`
+- [ ] All four mutations observed red, and green after restore
+- [ ] `TIINGO_API_KEY` is listed for Production, or the README row says `BLOCKED`
+- [ ] `git status --short` shows only the in-scope files
 - [ ] `plans/README.md` status row updated
 
 ## STOP conditions
@@ -592,20 +645,15 @@ Machine-checkable. ALL must hold:
 Stop and report back (do not improvise) if:
 
 - The "Current state" excerpts do not match the live files.
-- Step 5's live call fails for `AAPL`. That means the Tiingo credential itself is
-  dead or the tier does not serve this endpoint, and the entire premise of the
-  plan is wrong. Report the HTTP status and the error body, with no key in it.
-- Step 5 works for `AAPL` but not for `BRK-B`. Do not add a symbol-mapping layer
-  on your own judgement; report the failure and let it be decided.
-- A mutation in step 8 does not turn its test red.
-- You conclude `outcomeFromCandles`, `FUNNEL_OUTCOMES_PER_RUN` or anything in
-  `agent/lib/data.ts` must change to make this work. None of them does.
-- Typecheck pushes you toward an `any`, a `@ts-ignore` or a double cast to make
-  the provider fit. There are zero of each in non-test source today and this
-  change does not need the first one. The shapes genuinely match; if they do not
-  appear to, re-read `agent/lib/tiingo.ts:2`.
+- Step 6's live call fails for `AAPL` (report the HTTP status and error body,
+  with no key in it), or works for `AAPL` but not for `BRK-B`.
+- A mutation in step 9 does not turn its test red.
+- You conclude `outcomeFromCandles`, anything in `agent/lib/data.ts`, or
+  anything in `agent/lib/tiingo.ts` must change, or that `funnelItems` needs a
+  new field.
+- Typecheck pushes you toward an `any`, a `@ts-ignore` or a double cast.
 - You find yourself about to print, echo or commit the value of any environment
-  variable.
+  variable, or to run `npx convex deploy`.
 
 ## Maintenance notes
 
@@ -613,21 +661,29 @@ For whoever owns this next:
 
 - **This turns on a data flow that has never run in production.** Watch the first
   day's logs for the `[funnel-a] outcomes: {...}` lines. `scored` should be
-  non-zero and `failures` should be near zero. If `failures` equals the batch
-  size, the provider is rejecting every call and you are back where you started,
-  only louder. If `pending` is high, that is normal for recently screened items:
+  non-zero and `failures` should be near zero (it counts tickers, not items). If
+  `failures` equals `tickers`, the provider is rejecting every call and you are
+  back where you started, only louder. If `pending` is high, that is normal for recently screened items:
   `outcomeFromCandles` returns `null` until a full 10-trading-day window exists.
-- **There is a backlog.** Over a hundred items are sitting unscored, and at 40
-  per fire across four fires the backlog clears in under a day. Resist raising
-  `FUNNEL_OUTCOMES_PER_RUN` to clear it faster: Tiingo's free tier is bounded by
-  unique symbols per hour and per month, and 160 symbol-requests a day already
-  sits inside a monthly unique-symbol budget that a larger batch would blow.
-  `funnelItemsAwaitingOutcome` is ordered so the backlog drains on its own.
-- A reviewer should check three things: that `finnhubFromEnv()` still feeds
+- **There is a backlog, and it drains on its own.** About 1,600 items were
+  unscored on 2026-10-01 and about 700 arrive a day. Scoring per ticker clears a
+  ticker's whole history in one request, so 40 requests a day keep up: each ticker
+  comes round every 8-11 days. Do not raise `FUNNEL_OUTCOME_TICKERS_PER_RUN` past
+  12: four fires can land in one hour, and Tiingo's free tier stops at 50 requests
+  an hour, 1,000 a day and 500 unique symbols a month.
+- **`rateLimited: true` in the logs** means Tiingo answered 429 and the fire
+  stopped scoring early. Once in a while is fine (someone ran a backtest in the
+  funnel hour). Every fire, for days, near the end of a month, means the
+  500-unique-symbol cap: scoring resumes when the month rolls over, and only items
+  older than 60 days are lost. If it persists into a new month, the key itself is
+  the problem.
+- A reviewer should check four things: that `finnhubFromEnv()` still feeds
   `runFunnelChunk` (news provider unchanged), that the scoring block is still the
   last thing in `runFunnelSchedule` and still inside its own try/catch (so it
-  cannot eat the 300-second budget or fail the fire), and that the structural
-  test would actually fail if the wiring were reverted.
+  cannot eat the 300-second budget or fail the fire), that the structural test
+  would actually fail if the wiring were reverted, and that
+  `npx convex deploy --dry-run -y` against production reports "Schema validation
+  complete" with the new index (the reviewer runs it, never the executor).
 - Deliberately deferred: a shared rate limiter and a request timeout across all
   HTTP providers, which is plan 011. Tiingo's client already retries 429 with
   `Retry-After` (`agent/lib/tiingo.ts:60-63`) but has no timeout, so a hung
