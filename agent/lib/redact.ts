@@ -9,7 +9,7 @@
  *
  * Two layers. The literal value of every secret env var this process can hold, read on every
  * call (not at import) so a value set later is still caught. Then a generic `token` field
- * pattern, for a process that does not hold the env var at all, like the watchdog.
+ * pattern, for a process that is missing the env var, or a token that is not one of ours.
  */
 
 const SECRET_ENV_NAMES = [
