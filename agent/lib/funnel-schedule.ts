@@ -2,6 +2,7 @@ import { finnhubFromEnv } from "./data.ts";
 import { FUNNEL_CHUNKS, runFunnelChunk, scoreFunnelOutcomes } from "./funnel.ts";
 import { jevFromEnv } from "./jev.ts";
 import { memoryFromEnv } from "./memory.ts";
+import { tiingoFromEnv } from "./tiingo.ts";
 import { loadUniverse, universeChunk } from "./universe.ts";
 
 /**
@@ -79,8 +80,11 @@ export async function runFunnelSchedule(
 
   // Outcome scoring for the directional shadow. Best-effort and last, so it can never eat into
   // the screening budget; if the function is short on time this is the part that gets cut.
+  // Candles come from Tiingo, not from the Finnhub client above: Finnhub's /stock/candle is
+  // gated on our tier and 403s on every call, which is why this scored nothing for months.
   try {
-    const scored = await scoreFunnelOutcomes({ news, memory, now, logger });
+    const candles = tiingoFromEnv();
+    const scored = await scoreFunnelOutcomes({ candles, memory, now, logger });
     logger.log(`[${schedule}] outcomes: ${JSON.stringify(scored)}`);
   } catch (err) {
     logger.warn(`[${schedule}] outcome scoring failed (non-fatal):`, err);

@@ -1377,32 +1377,68 @@ export const funnelChunksForDay = query({
   },
 });
 
-/** Items old enough to be scored and not yet scored. `outcomeAt` unset sorts first on the index. */
+/**
+ * Items old enough to be scored and not yet scored. `outcomeAt` unset sorts first on the index.
+ * The lower bound lets an item whose ticker never yields a full window (renamed, delisted, a
+ * spelling the candle provider rejects) age out, instead of sitting at the head for ever and
+ * taking one of every fire's ticker slots.
+ */
 export const funnelItemsAwaitingOutcome = query({
-  args: { token: v.string(), screenedBefore: v.number(), limit: v.number() },
+  args: { token: v.string(), screenedAfter: v.number(), screenedBefore: v.number(), limit: v.number() },
   handler: async (ctx, args) => {
     assertSecret(args.token);
     const limit = Math.min(Math.max(args.limit, 1), 100);
     return await ctx.db
       .query("funnelItems")
       .withIndex("by_outcome_and_screened", (q) =>
-        q.eq("outcomeAt", undefined).lt("screenedAt", args.screenedBefore),
+        q.eq("outcomeAt", undefined).gt("screenedAt", args.screenedAfter).lt("screenedAt", args.screenedBefore),
       )
       .take(limit);
   },
 });
 
-export const recordFunnelOutcome = mutation({
+/** One ticker's awaiting items, so a single candle request can score all of them. */
+export const funnelItemsAwaitingOutcomeForTicker = query({
   args: {
     token: v.string(),
-    id: v.id("funnelItems"),
-    outcomeAt: v.number(),
-    outcomeUp: v.boolean(),
-    outcomePct: v.number(),
+    ticker: v.string(),
+    screenedAfter: v.number(),
+    screenedBefore: v.number(),
+    limit: v.number(),
   },
   handler: async (ctx, args) => {
     assertSecret(args.token);
-    const { token, id, ...rest } = args;
-    await ctx.db.patch(id, rest);
+    const limit = Math.min(Math.max(args.limit, 1), 200);
+    return await ctx.db
+      .query("funnelItems")
+      .withIndex("by_ticker_and_outcome_and_screened", (q) =>
+        q
+          .eq("ticker", args.ticker)
+          .eq("outcomeAt", undefined)
+          .gt("screenedAt", args.screenedAfter)
+          .lt("screenedAt", args.screenedBefore),
+      )
+      .take(limit);
+  },
+});
+
+/** One call per ticker, not per item: a busy ticker can have dozens of matured items. */
+export const recordFunnelOutcomes = mutation({
+  args: {
+    token: v.string(),
+    outcomes: v.array(
+      v.object({
+        id: v.id("funnelItems"),
+        outcomeAt: v.number(),
+        outcomeUp: v.boolean(),
+        outcomePct: v.number(),
+      }),
+    ),
+  },
+  handler: async (ctx, args) => {
+    assertSecret(args.token);
+    for (const { id, ...rest } of args.outcomes) {
+      await ctx.db.patch("funnelItems", id, rest);
+    }
   },
 });

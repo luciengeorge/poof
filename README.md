@@ -74,7 +74,7 @@ a naive equal-weight basket would have done vs SPY on real prices. Candles come 
 daily-prices endpoint and use the ADJUSTED OHLC (`adjOpen`/`adjHigh`/`adjLow`/`adjClose`) so
 splits and dividends are already handled (`agent/lib/tiingo.ts`).
 
-`TIINGO_API_KEY` is only needed locally for backtests. The live trading cycle and CI evals do
+`TIINGO_API_KEY` is needed locally for backtests, and in production by the funnel schedules to score outcomes. The live trading cycle and CI evals do
 not use it. Without `--tickers` the CLI stays in offline fixture mode, so nothing here touches
 the network by default.
 
