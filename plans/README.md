@@ -27,7 +27,7 @@ instrument announces itself.
 | 001 | Reinstall the dependency tree so local runs are evidence | P1 | S |, | DONE |
 | 002 | Arm the trailing stop off the peak, at breakeven | P1 | S | 001 | DONE (#83) |
 | 003 | Stop failure payloads carrying the shared secret to Slack | P1 | S | 001 | DONE |
-| 004 | Stop `.env.example` reinstating the pre-#76 risk gate | P1 | S | 001 | TODO |
+| 004 | Stop `.env.example` reinstating the pre-#76 risk gate | P1 | S | 001 | DONE |
 | 005 | Never place an order twice, never lose one that filled | P1 | M | 001 | TODO |
 | 007 | Guard orphan reconciliation against an empty portfolio read | P1 | M | 001 | TODO |
 | 008 | Score funnel outcomes through Tiingo, not a 403 endpoint | P1 | M | 001 | DONE |
