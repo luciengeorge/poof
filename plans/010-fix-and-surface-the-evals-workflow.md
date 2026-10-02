@@ -27,6 +27,41 @@
 - **Category**: dx
 - **Planned at**: commit `0859c96`, 2026-09-30
 
+## Amendment 2026-10-02 (read before the steps; it overrides them where they conflict)
+
+Planned against `0859c96`; amended against `ba5b0d2`. The drift check shows only `.env.example` changed
+(PR #88 commented out the `TRADING_*` overrides); none of the plan's excerpts are affected. Not a STOP.
+The premise still holds: the evals workflow failed again on 2026-10-01 (and every night before it).
+
+**A1. The fake must also answer `GET /equity/orders` (pending orders), with `[]`.** The endpoint table
+in "What the evals need from the broker" is out of date. Since PRs #84, #89 and #90 the cycle also
+reads pending orders, through `T212Client.getPendingOrders()`:
+- `agent/tools/manage_positions.ts` `loadExitScope` (fails soft: a failed read only makes orphan
+  reconciliation refuse);
+- `agent/lib/orders.ts` `evaluateAndExecute`, in a `Promise.all` with the fresh broker snapshot, with NO
+  fallback: if the fake rejected this path, every `submit_orders` call would throw and
+  `cycle/buy-path-guards` would fail for a new reason;
+- `agent/lib/core-orders.ts` `readCore` (the index-core sweep in `record_cycle` and the funding sale).
+Also `getPortfolio({ fresh: true })` is used now; the fake ignores the option (it is client-side caching).
+Unrecognised paths must still fail loudly (step 2, test 3). Add a test that `GET .../equity/orders`
+resolves 200 with an empty array. Re-grep `agent/` for every `client.get*` / `getPendingOrders` /
+`getBrokerSnapshot` / `getPortfolio` call before finalising the fake, and list them in your report.
+
+**A2. Include the index core in `FAKE_POSITIONS`.** Production now always holds a small amount of
+`VUAGl_EQ` (Vanguard S&P 500, priced in GBP; see `agent/lib/core.ts`), and `manage_positions`,
+`review_performance`, the risk gate and the sweep all treat it specially. Add one `VUAGl_EQ` position
+(e.g. quantity 0.4, prices around 111 GBP) beside two or three US stocks from `agent/data/universe.ts`,
+so the eval cycle exercises the same core paths production does. In DRY_RUN the sweep only simulates.
+
+**A3. GitHub secrets.** Removing the `TRADING212_*` lines from the workflow stops CI using them, but the
+repository secrets themselves still exist. Do NOT delete them (that is the owner's call); name them in
+your report so the orchestrator can ask.
+
+**A4. Environment.** Run `source ~/.nvm/nvm.sh` and `nvm use` as separate commands in every shell (Node
+24; check test output says `ℹ tests N`). Copy the gitignored `convex/_generated` from the main checkout
+if it is missing. Step 8 (run the real workflow) needs the branch pushed: do NOT push; stop after step 7
+and report, and the orchestrator will push and run step 8.
+
 ## Why this matters
 
 poof is an autonomous agent trading a REAL Trading 212 UK ISA with about £250
