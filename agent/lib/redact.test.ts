@@ -18,6 +18,7 @@ const SECRET_ENV_NAMES = [
   "TYPESAFE_API_KEY",
   "SLACK_ALERT_WEBHOOK_URL",
   "ROUTE_AUTH_BASIC_PASSWORD",
+  "AI_GATEWAY_API_KEY",
 ];
 
 const fakeValue = (name: string): string => `FAKE-${name}-not-a-real-value`;

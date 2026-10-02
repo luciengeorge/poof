@@ -25,6 +25,9 @@ const SECRET_ENV_NAMES = [
   "TYPESAFE_API_KEY",
   "SLACK_ALERT_WEBHOOK_URL",
   "ROUTE_AUTH_BASIC_PASSWORD",
+  // Held by the evals job and read by the model gateway client, never by name in this code, so
+  // the structural scan in redact.test.ts cannot catch its absence. Listed by hand.
+  "AI_GATEWAY_API_KEY",
 ];
 
 // An empty value would match between every character and destroy the message, and a short one

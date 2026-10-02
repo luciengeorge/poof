@@ -1,4 +1,7 @@
 import { sleep, retryDelayMs } from "./http-backoff.ts";
+import { isDryRun } from "./state.ts";
+import { tradingEnv } from "./risk-runtime.ts";
+import { fakeT212Fetch } from "./t212-fake.ts";
 
 export type T212Env = "demo" | "live";
 export type TimeValidity = "DAY" | "GTC";
@@ -253,19 +256,69 @@ export class T212Client {
 // a fresh client.
 let singleton: T212Client | null = null;
 
+/** Test hook: forget the per-process client, so the next t212FromEnv() reads the env afresh. */
+export function resetT212Singleton(): void {
+  singleton = null;
+}
+
+/**
+ * The client every tool uses. `BROKER_FAKE=true` swaps the network for the canned wire in
+ * t212-fake.ts. It exists for the CI eval suite, which ran for months against a live credential
+ * the demo host could not authenticate, so every broker read returned 401 and the suite never
+ * reached an order. A public repo's nightly job should not hold a live brokerage key
+ * for work that only needs a few canned GETs, so CI now carries no broker credential at all.
+ *
+ * The fake is refused unless DRY_RUN is on AND the memory scope is demo. The second condition is
+ * because the broker host is not the only thing TRADING212_ENV decides: tradingEnv() also picks
+ * which Convex rows a cycle reads and writes. With the scope on live, a fake balance would reach
+ * the live riskState baseline (peakEquity, day-start equity, and so the drawdown breaker), and
+ * manage_positions would reconcile live open BUYs against a fake portfolio and book them closed.
+ * The check calls tradingEnv() itself, so it and the memory scope can never disagree.
+ */
 export function t212FromEnv(fetchImpl?: typeof fetch): T212Client {
-  if (!fetchImpl && singleton) return singleton;
-  const apiKey = process.env.TRADING212_API_KEY;
-  // Accept either name: TRADING212_API_SECRET (docs) or TRADING212_SECRET_KEY.
-  const apiSecret =
-    process.env.TRADING212_API_SECRET ?? process.env.TRADING212_SECRET_KEY;
-  const env = (process.env.TRADING212_ENV ?? "demo") as T212Env;
-  if (!apiKey || !apiSecret) {
+  const useFake = !fetchImpl && process.env.BROKER_FAKE === "true";
+  // THE INTERLOCK. A fake broker reports a balance that does not exist. If it were ever reachable
+  // with real order placement armed, the risk gate and the position sizer would size a REAL order
+  // off fantasy cash. So the fake is refused outright unless the kill switch is on, rather than
+  // being quietly ignored: a silent downgrade to the real broker in CI would reintroduce the exact
+  // failure this exists to remove. Both checks run before the memoised client is returned, so a
+  // fake built earlier in the process is never handed out once either condition stops holding.
+  if (useFake && !isDryRun()) {
     throw new Error(
-      "TRADING212_API_KEY and TRADING212_API_SECRET (or TRADING212_SECRET_KEY) must be set",
+      "BROKER_FAKE=true requires DRY_RUN=true. Refusing to serve a fake broker " +
+        "balance while real order placement is armed.",
     );
   }
-  const client = new T212Client({ apiKey, apiSecret, env, fetchImpl });
+  // Anything but exactly "demo" is refused, not only "live": fail closed on a scope we do not know.
+  if (useFake && tradingEnv() !== "demo") {
+    throw new Error(
+      "BROKER_FAKE=true requires TRADING212_ENV=demo (or unset). Refusing to let a fake broker " +
+        "balance reach non-demo risk state or reconcile non-demo positions.",
+    );
+  }
+  if (!fetchImpl && singleton) return singleton;
+  let client: T212Client;
+  if (useFake) {
+    // Demo host, forced rather than read, so even a URL the fake ignores is never live.
+    client = new T212Client({
+      apiKey: "broker-fake",
+      apiSecret: "broker-fake",
+      env: "demo",
+      fetchImpl: fakeT212Fetch(),
+    });
+  } else {
+    const apiKey = process.env.TRADING212_API_KEY;
+    // Accept either name: TRADING212_API_SECRET (docs) or TRADING212_SECRET_KEY.
+    const apiSecret =
+      process.env.TRADING212_API_SECRET ?? process.env.TRADING212_SECRET_KEY;
+    const env = (process.env.TRADING212_ENV ?? "demo") as T212Env;
+    if (!apiKey || !apiSecret) {
+      throw new Error(
+        "TRADING212_API_KEY and TRADING212_API_SECRET (or TRADING212_SECRET_KEY) must be set",
+      );
+    }
+    client = new T212Client({ apiKey, apiSecret, env, fetchImpl });
+  }
   if (!fetchImpl) singleton = client;
   return client;
 }
