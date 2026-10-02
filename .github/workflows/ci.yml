@@ -34,3 +34,8 @@ jobs:
 
       - name: Build
         run: pnpm run build
+
+      # Checks the built bundle, not the source: the funnel threw ENOENT in production for 13 days
+      # while typecheck, tests and build all passed.
+      - name: Smoke-test the build
+        run: pnpm run smoke:build
