@@ -3,9 +3,18 @@ name: Evals
 # Behavioral evals run the REAL agent against a live model, so they cost tokens and need
 # credentials. Manual-trigger, plus a nightly run so a safety-behavior regression (e.g. the
 # agent skipping the earnings guard or red-team review) surfaces within a day. They run in
-# DRY_RUN + demo so no real orders are ever placed. Required repo secrets: AI_GATEWAY_API_KEY
-# (model access), FINNHUB_API_KEY, EXA_API_KEY, CONVEX_URL, TRADING212_API_KEY,
-# TRADING212_SECRET_KEY (demo keys).
+# DRY_RUN so no real orders are ever placed. Required repo secrets: AI_GATEWAY_API_KEY
+# (model access), FINNHUB_API_KEY, EXA_API_KEY, CONVEX_URL, CONVEX_APP_SECRET.
+#
+# NO BROKER CREDENTIAL, ON PURPOSE. The broker is a canned wire (agent/lib/t212-fake.ts), selected
+# by BROKER_FAKE, which t212FromEnv refuses unless DRY_RUN is on. This comment used to list the
+# Trading 212 keys as "(demo keys)". They were the live account's, the demo host rejected them,
+# and every broker read 401'd for months while the suite either went red unnoticed or passed
+# vacuously. A public repo's nightly job should not hold a live brokerage key for work that needs
+# a few canned GETs.
+#
+# A failed SCHEDULED run posts to Slack (SLACK_ALERT_WEBHOOK_URL; skipped if that secret is unset).
+# Manual runs do not alert: whoever started one is already watching.
 on:
   workflow_dispatch:
   schedule:
@@ -20,14 +29,13 @@ jobs:
     runs-on: ubuntu-latest
     env:
       DRY_RUN: "true" # never place real orders in evals
-      TRADING212_ENV: "demo" # hit the demo account only
+      BROKER_FAKE: "true" # canned broker wire; refused unless DRY_RUN=true
+      TRADING212_ENV: "demo" # memory rows are scoped to demo, never live
       AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
       FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
       EXA_API_KEY: ${{ secrets.EXA_API_KEY }}
       CONVEX_URL: ${{ secrets.CONVEX_URL }}
       CONVEX_APP_SECRET: ${{ secrets.CONVEX_APP_SECRET }}
-      TRADING212_API_KEY: ${{ secrets.TRADING212_API_KEY }}
-      TRADING212_SECRET_KEY: ${{ secrets.TRADING212_SECRET_KEY }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -38,10 +46,37 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Run evals
         run: pnpm eval --strict --junit .eve/junit.xml
+      # upload-artifact@v4 skips dot-directories unless include-hidden-files is set, so every
+      # upload of .eve/ was silently empty.
       - name: Upload eval artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: eval-artifacts
-          path: .eve/
+          path: |
+            .eve/evals/
+            .eve/junit.xml
+          include-hidden-files: true
           if-no-files-found: ignore
+
+  alert:
+    needs: eval
+    if: failure() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      # The webhook is a secret and this repo is public: it reaches the shell only as an env var,
+      # is never echoed, and the response body is discarded. The message carries the run URL and
+      # nothing from the eval output.
+      - name: Post to Slack
+        env:
+          SLACK_ALERT_WEBHOOK_URL: ${{ secrets.SLACK_ALERT_WEBHOOK_URL }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$SLACK_ALERT_WEBHOOK_URL" ]; then
+            echo "SLACK_ALERT_WEBHOOK_URL is not set; skipping the Slack alert."
+            exit 0
+          fi
+          payload=$(jq -n --arg run "$RUN_URL" '{text: ":rotating_light: poof: the nightly evals FAILED. \($run)"}')
+          curl --silent --show-error --fail --output /dev/null \
+            -X POST -H "content-type: application/json" \
+            --data "$payload" "$SLACK_ALERT_WEBHOOK_URL"
