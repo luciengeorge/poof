@@ -14,9 +14,15 @@
  *     implementation ignores the signal.
  * Layer 2 is what turns "hangs forever" into "throws, gets caught, logs a warning".
  *
- * NOT applied to the trading path. `memoryFromEnv()` keeps its untimed client by default: a
- * timeout there would convert a slow-but-healthy Convex into a fail-closed halt and could
- * block a legitimate trade, which is precisely the class of change observability must not make.
+ * Also used for the Finnhub and Tiingo market-data reads (`FinnhubProvider`, `TiingoProvider`),
+ * where a deadline fails closed. A BUY whose live Finnhub price cannot be fetched in time is
+ * rejected and can be proposed again next cycle. Exits use the broker's own prices and are
+ * unaffected. The funnel counts a timed-out ticker as a failure and moves on.
+ *
+ * Still NOT applied to the Convex memory client. `memoryFromEnv()` keeps its untimed client by
+ * default: a timeout there would convert a slow-but-healthy Convex into a fail-closed halt and
+ * could block a legitimate trade, which is precisely the class of change observability must not
+ * make.
  */
 
 export type FetchLike = typeof globalThis.fetch;
