@@ -1,11 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { evaluateAndExecute, type OrderExecClient, type Proposal } from "./orders.ts";
 import { T212Error, type CashBalance, type T212Position, type T212Order } from "./t212.ts";
 import { etDateString } from "./clock.ts";
 import { DEFAULT_LIMITS } from "./risk.ts";
 import type { TradeRecord } from "./memory.ts";
 import { submitOrders } from "../tools/submit_orders.ts";
+import { exitIntentKey } from "../tools/manage_positions.ts";
 
 // Order-mechanics tests size at 5% of a 10,000 equity. The live floor is a sizing POLICY
 // (pinned in risk.test.ts); these tests are about execution, so they state their own limits.
@@ -491,6 +493,77 @@ test("a throw while saving the intent marker does not stop an accepted order", a
   assert.equal(res.placed.length, 1);
   assert.ok(res.placed[0].order && !res.placed[0].skipped);
   assert.deepEqual(res.rejected, []);
+});
+
+test("manage_positions passes the intent guard and its exit key to the executor (structural)", () => {
+  // The executor guards on `if (hasOrderIntent && ...)`, so a caller that omits the callbacks
+  // gets no guard and no error. Unit tests on the executor stay green with the wiring missing;
+  // only the tool's source can show it is there.
+  const src = readFileSync(new URL("../tools/manage_positions.ts", import.meta.url), "utf8");
+  const call = /evaluateAndExecute\(proposals, \{([\s\S]*?)\n\s*\}\)/.exec(src)?.[1] ?? "";
+  assert.ok(call, "manage_positions must call evaluateAndExecute(proposals, { ... })");
+  assert.match(
+    call,
+    /hasOrderIntent: \(key\) => memory\.hasOrderIntent\(tradingEnv\(\), key\)/,
+    "exits must check the durable intent marker",
+  );
+  assert.match(
+    call,
+    /recordOrderIntent: async \(key\) => \{\s*await memory\.recordOrderIntent\(tradingEnv\(\), key\);/,
+    "exits must record the durable intent marker",
+  );
+  assert.match(
+    call,
+    /intentKeyOf: exitIntentKey/,
+    "exits must use a key that ignores the live-priced notional, or the guard can never match",
+  );
+});
+
+function held(ticker: string, quantity: number): T212Position {
+  return {
+    ticker,
+    quantity,
+    averagePrice: 100,
+    currentPrice: 100,
+    ppl: 0,
+    maxBuy: 0,
+    maxSell: quantity,
+    pieQuantity: 0,
+  };
+}
+
+function exit(ticker: string, notional: number): Proposal {
+  return { ticker, side: "SELL", notional, price: 100, thesis: "exit: stop-loss" };
+}
+
+test("exit intent: a second exit for the same ticker on the same day is suppressed, even at a new notional", async () => {
+  // An exit's notional is the live market value, so it moves between runs. The exit key leaves it
+  // out: one exit per ticker per ET day. A different ticker is still free to exit.
+  const store = intentStore();
+  const run = async (proposals: Proposal[]) => {
+    const { client, placed } = fakeClient({
+      positions: [held("AAPL_US_EQ", 10), held("MSFT_US_EQ", 10)],
+    });
+    const res = await evaluateAndExecute(proposals, {
+      client,
+      fx: FX,
+      dryRun: false,
+      resolveRiskState: async () => noState,
+      hasOrderIntent: store.hasOrderIntent,
+      recordOrderIntent: store.recordOrderIntent,
+      intentKeyOf: exitIntentKey,
+    });
+    return { res, placed };
+  };
+
+  const first = await run([exit("AAPL_US_EQ", 300)]);
+  assert.deepEqual(first.placed, [{ ticker: "AAPL_US_EQ", quantity: -3 }]);
+  assert.deepEqual([...store.keys], [`${etDateString(new Date())}:AAPL_US_EQ:EXIT`]);
+
+  const second = await run([exit("AAPL_US_EQ", 310), exit("MSFT_US_EQ", 200)]);
+  assert.deepEqual(second.placed, [{ ticker: "MSFT_US_EQ", quantity: -2 }]);
+  const aapl = second.res.placed.find((p) => p.proposal.ticker === "AAPL_US_EQ");
+  assert.match(aapl?.skipped ?? "", /duplicate: order intent already recorded/);
 });
 
 test("BUY rejected fail-closed when resolvePrice throws", async () => {

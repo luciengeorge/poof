@@ -19,6 +19,7 @@ import {
 } from "../lib/order-bookkeeping.ts";
 import { isCore } from "../lib/core.ts";
 import { alert } from "../lib/alert.ts";
+import { etDateString } from "../lib/clock.ts";
 
 /**
  * The positions the exit engine may sell and the open BUYs it may reconcile: never the index core.
@@ -57,6 +58,15 @@ export async function loadExitScope(
     (b) => !isCore(b.ticker),
   );
   return { positions, rawPositions, openBuys, pendingTickers };
+}
+
+/**
+ * The exit path's intent key: one exit per ticker per ET day. The executor's default key carries
+ * the notional, and an exit's notional is the live market value, so two runs would never match.
+ * Safe because every exit sells the whole position and the cycle runs once a day.
+ */
+export function exitIntentKey(p: Proposal): string {
+  return `${etDateString(new Date())}:${p.ticker}:EXIT`;
 }
 
 export type ReconciliationResult =
@@ -154,6 +164,11 @@ export default defineTool({
             dryRun,
             resolveRiskState,
             limits: resolveLimits(),
+            hasOrderIntent: (key) => memory.hasOrderIntent(tradingEnv(), key),
+            recordOrderIntent: async (key) => {
+              await memory.recordOrderIntent(tradingEnv(), key);
+            },
+            intentKeyOf: exitIntentKey,
           })
         : { placed: [], rejected: [] };
 

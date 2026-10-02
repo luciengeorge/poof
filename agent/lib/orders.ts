@@ -154,6 +154,16 @@ export interface ExecuteOpts {
    */
   hasOrderIntent?: (key: string) => Promise<boolean>;
   recordOrderIntent?: (key: string) => Promise<void>;
+  /**
+   * The intent key for a proposal. Defaults to `${etDate}:${ticker}:${side}:${notional}`. A
+   * caller whose notional moves between runs (an exit sized from the live market value) must
+   * leave the notional out, or two runs never share a key and the guard can never fire.
+   */
+  intentKeyOf?: (p: Proposal) => string;
+}
+
+function defaultIntentKey(p: Proposal): string {
+  return `${etDateString(new Date())}:${p.ticker}:${p.side}:${p.notional}`;
 }
 
 /** Max allowed fractional deviation between the model's price and the server-fetched price. */
@@ -170,8 +180,16 @@ export async function evaluateAndExecute(
   proposals: Proposal[],
   opts: ExecuteOpts,
 ): Promise<ExecutionResult> {
-  const { client, fx, dryRun, resolveRiskState, resolvePrice, hasOrderIntent, recordOrderIntent } =
-    opts;
+  const {
+    client,
+    fx,
+    dryRun,
+    resolveRiskState,
+    resolvePrice,
+    hasOrderIntent,
+    recordOrderIntent,
+    intentKeyOf = defaultIntentKey,
+  } = opts;
   const fxRate = fx.rate;
   const limits = opts.limits ?? DEFAULT_LIMITS;
 
@@ -219,7 +237,7 @@ export async function evaluateAndExecute(
         continue;
       }
 
-      const intentKey = `${etDateString(new Date())}:${proposal.ticker}:${proposal.side}:${proposal.notional}`;
+      const intentKey = intentKeyOf(proposal);
       if (hasOrderIntent && (await hasOrderIntent(intentKey))) {
         result.placed.push({
           proposal,
