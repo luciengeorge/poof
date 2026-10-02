@@ -13,9 +13,11 @@ import { fileURLToPath } from "node:url";
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const OUTPUT = join(ROOT, ".output");
 const TICKER = '"NVDA"';
-// `new URL("./x", import.meta.url)` resolves against the bundle file at runtime. The bundler does not
-// copy the file it names, so in production it points at a path that does not exist.
-const RELATIVE_FILE_READ = /new URL\(\s*(["'`])\.{1,2}\/[^"'`]+\1\s*,\s*import\.meta\.url\s*\)/g;
+// `new URL("x", import.meta.url)` resolves against the bundle file at runtime. This matches any
+// relative specifier (with or without a leading ./ or ../) and skips URLs with a scheme (https:,
+// node:, file:) and absolute / paths. The bundler does not copy the file it names, so in production
+// it points at a path that does not exist.
+const RELATIVE_FILE_READ = /new URL\(\s*(["'`])(?![a-zA-Z][a-zA-Z0-9+.-]*:|\/)[^"'`]+\1\s*,\s*import\.meta\.url\s*\)/g;
 
 function fail(lines) {
   console.error(["[smoke-build] FAIL", ...lines.map((line) => `  - ${line}`)].join("\n"));
