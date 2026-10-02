@@ -8,6 +8,7 @@
   },
   "scripts": {
     "build": "eve build",
+    "smoke:build": "node scripts/smoke-build.mjs",
     "dev": "eve dev",
     "start": "eve start",
     "typecheck": "tsc",
