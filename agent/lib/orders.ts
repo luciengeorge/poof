@@ -269,11 +269,16 @@ export async function evaluateAndExecute(
       continue;
     }
 
+    // The marker goes down BEFORE the order is sent. Written after, a process killed between
+    // the broker accepting a market order and the marker landing leaves neither a pending order
+    // nor a marker, and a re-run places the trade twice. Written first, the worst case is
+    // over-blocking: an order that then fails keeps its marker and cannot be retried until the
+    // next ET day. That is the right way for this path to fail.
+    if (recordOrderIntent) await recordOrderIntent(intentKey);
     const outcome = await placeWithPrecision(client, proposal.ticker, magnitude, sign);
     if ("skipped" in outcome) {
       result.placed.push({ proposal, quantity: 0, dryRun: false, skipped: outcome.skipped });
     } else {
-      if (recordOrderIntent) await recordOrderIntent(intentKey);
       result.placed.push({
         proposal,
         quantity: outcome.quantity,

@@ -290,6 +290,84 @@ test("order intent: dry-run never records an intent marker", async () => {
   assert.deepEqual(recorded, []);
 });
 
+// A durable intent store shared across runs, the way Convex is shared across a re-fired step.
+function intentStore() {
+  const keys = new Set<string>();
+  return {
+    keys,
+    hasOrderIntent: async (key: string) => keys.has(key),
+    recordOrderIntent: async (key: string) => {
+      keys.add(key);
+    },
+  };
+}
+
+const MIN_POSITION_REJECTION = new T212Error(
+  400,
+  '{"type":"/api-errors/min-opened-position-exceeded","title":"Error while placing the order","status":400,"detail":"must have opened position at least 1.00"}',
+);
+
+test("order intent: the marker is written BEFORE the order is sent, not after", async () => {
+  // Ordering, not presence: a process killed between the broker accepting the order and the
+  // marker landing must still leave the marker, or a re-run places the trade twice.
+  const events: string[] = [];
+  const { client } = fakeClient();
+  const logging: OrderExecClient = {
+    ...client,
+    async placeMarketOrder(input) {
+      events.push(`place:${input.ticker}`);
+      return client.placeMarketOrder(input);
+    },
+  };
+  await evaluateAndExecute([buy(500)], {
+    client: logging,
+    fx: FX,
+    dryRun: false,
+    limits: TEST_LIMITS,
+    resolveRiskState: async () => noState,
+    resolvePrice: async () => 100,
+    hasOrderIntent: async () => false,
+    recordOrderIntent: async (key) => {
+      events.push(`intent:${key}`);
+    },
+  });
+  assert.deepEqual(events, [
+    `intent:${etDateString(new Date())}:AAPL_US_EQ:BUY:500`,
+    "place:AAPL_US_EQ",
+  ]);
+});
+
+test("order intent: a failed placement still blocks a same-day retry (the accepted trade-off)", async () => {
+  // Writing the marker first can only over-block: an order the broker refused keeps its marker,
+  // so the same order cannot be retried until the next ET day. That is deliberate. The other
+  // way round fails by placing a duplicate position on a real account.
+  const store = intentStore();
+  const { client } = fakeClient();
+  const refusing: OrderExecClient = {
+    ...client,
+    async placeMarketOrder() {
+      throw MIN_POSITION_REJECTION;
+    },
+  };
+  const opts = {
+    fx: FX,
+    dryRun: false,
+    limits: TEST_LIMITS,
+    resolveRiskState: async () => noState,
+    resolvePrice: async () => 100,
+    hasOrderIntent: store.hasOrderIntent,
+    recordOrderIntent: store.recordOrderIntent,
+  };
+  const first = await evaluateAndExecute([buy(500)], { ...opts, client: refusing });
+  assert.match(first.placed[0].skipped ?? "", /T212 rejected/);
+  assert.deepEqual([...store.keys], [`${etDateString(new Date())}:AAPL_US_EQ:BUY:500`]);
+
+  const { client: working, placed } = fakeClient();
+  const retry = await evaluateAndExecute([buy(500)], { ...opts, client: working });
+  assert.equal(placed.length, 0);
+  assert.match(retry.placed[0].skipped ?? "", /duplicate: order intent already recorded/);
+});
+
 test("BUY rejected fail-closed when resolvePrice throws", async () => {
   const { client, placed } = fakeClient();
   const res = await evaluateAndExecute([buy(500)], {
