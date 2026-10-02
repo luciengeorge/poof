@@ -29,6 +29,16 @@ jobs:
       - name: Typecheck
         run: pnpm run typecheck
 
+      # convex/ is outside the root tsconfig; this is the stricter config Convex deploys with.
+      # convex/_generated/ is committed and refreshed whenever a local `npx convex dev` or `deploy`
+      # regenerates it; a stale api.d.ts shows up as a diff.
+      # Schema vs stored rows is not checked in CI (no production deploy key in GitHub): the reviewer
+      # runs `npx convex deploy --dry-run -y` against production on any PR that changes
+      # convex/schema.ts. A failure at deploy time fails the Vercel build and leaves the previous
+      # deployment serving.
+      - name: Typecheck Convex
+        run: npx tsc -p convex/tsconfig.json
+
       - name: Test
         run: pnpm test
 
