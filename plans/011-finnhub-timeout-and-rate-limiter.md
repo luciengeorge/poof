@@ -51,6 +51,30 @@ So: build the timeout, build the shared instance, and leave the limiter to a
 follow-up plan that can measure its own effect against a working baseline. Say
 this in your final report.
 
+## Amendment 2026-10-02 (read before the steps; it overrides them where they conflict)
+
+Planned against `0859c96`; amended against `cab1f14`. The drift check shows `agent/lib/funnel.ts`
+changed: that is PR #86 (plan 008), which moved funnel OUTCOME SCORING onto Tiingo and added constants
+near the top of the file, so the line numbers in the funnel excerpts are shifted. The news loop this
+plan cares about (`runFunnelChunk`, its per-ticker `getCompanyNews` call, its try/catch and pause) is
+unchanged in substance. Compare by content, not line number. Not a STOP.
+
+**A1. Reuse the existing deadline helper.** `agent/lib/fetch-timeout.ts` already exports
+`timeoutFetch(timeoutMs)` (an AbortSignal-backed wrapper used by the alert path). Use it for the Finnhub
+deadline rather than writing a second implementation, unless it genuinely cannot serve (then say why).
+
+**A2. Also bound Tiingo, in the same change.** Plan 008's maintenance note deferred this here:
+`agent/lib/tiingo.ts` `TiingoProvider.get` also issues a bare `fetch` with no deadline, and the funnel's
+outcome scorer calls it (last in each fire, after `finishFunnelChunk`, so a hang costs that fire's
+scoring rather than the chunk status, but it still burns the 300 s budget). Apply the same deadline to
+the Tiingo client (same constant or its own, with a comment), keep its existing 429 retry behaviour,
+and add a test like the Finnhub one. In scope: `agent/lib/tiingo.ts`, `agent/lib/tiingo.test.ts`.
+
+**Environment.** Run `source ~/.nvm/nvm.sh` and `nvm use` as separate commands in every shell, never
+chained after a command that can fail (test output must show `ℹ tests N`, i.e. Node 24).
+`convex/_generated` is now committed (PR #91), so no copy is needed. Never call live services, place
+orders or run `npx convex deploy`. Stage explicit paths only.
+
 ## Why this matters
 
 poof runs on Vercel Hobby. One cron fire gets a **300 second function wall**,
