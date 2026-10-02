@@ -1,11 +1,23 @@
 import { sleep, retryDelayMs } from "./http-backoff.ts";
+import { timeoutFetch } from "./fetch-timeout.ts";
 import type { Candle } from "./data.ts";
 
 const TIINGO_BASE = "https://api.tiingo.com/tiingo/daily";
 
+/**
+ * Deadline for one Tiingo HTTP attempt, the same value and reasoning as FINNHUB_TIMEOUT_MS. The
+ * funnel's outcome scorer reads FUNNEL_OUTCOME_TICKERS_PER_RUN tickers in sequence, last in each
+ * fire inside the 300 s wall, so a read that hangs would spend the rest of the budget and end in a
+ * kill rather than a counted failure. Per attempt only: the 429 retry loop is unchanged, so a call that keeps getting
+ * 429s can still take four attempts plus three 10 s backoffs (62 s at worst).
+ */
+export const TIINGO_TIMEOUT_MS = 8_000;
+
 export interface TiingoConfig {
   apiKey: string;
   fetchImpl?: typeof fetch;
+  /** Per-attempt deadline; defaults to TIINGO_TIMEOUT_MS. Tests pass a short one. */
+  timeoutMs?: number;
 }
 
 export class TiingoError extends Error {
@@ -41,7 +53,8 @@ export class TiingoProvider {
 
   constructor(cfg: TiingoConfig) {
     this.apiKey = cfg.apiKey;
-    this.fetchImpl = cfg.fetchImpl ?? fetch;
+    // Wrapped once here so every attempt in `get`, retries included, carries the deadline.
+    this.fetchImpl = timeoutFetch(cfg.timeoutMs ?? TIINGO_TIMEOUT_MS, cfg.fetchImpl ?? fetch);
   }
 
   private async get<T>(

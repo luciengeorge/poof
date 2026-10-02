@@ -8,11 +8,13 @@ import {
 } from "./tiingo.ts";
 
 function fakeFetch(
-  handler: (url: string) => { status?: number; body?: unknown },
+  handler: (url: string) => { status?: number; body?: unknown; headers?: Record<string, string> },
 ) {
   const calls: string[] = [];
-  const fn = async (input: RequestInfo | URL) => {
+  const inits: (RequestInit | undefined)[] = [];
+  const fn = async (input: RequestInfo | URL, init?: RequestInit) => {
     calls.push(String(input));
+    inits.push(init);
     const r = handler(String(input));
     const bodyText =
       r.body === undefined
@@ -20,9 +22,22 @@ function fakeFetch(
         : typeof r.body === "string"
           ? r.body
           : JSON.stringify(r.body);
-    return new Response(bodyText, { status: r.status ?? 200 });
+    return new Response(bodyText, { status: r.status ?? 200, headers: r.headers });
   };
-  return { fn: fn as unknown as typeof fetch, calls };
+  return { fn: fn as unknown as typeof fetch, calls, inits };
+}
+
+/** A fetch that never resolves on its own; it settles only when aborted. */
+function hangingFetch() {
+  let aborted = false;
+  const fn = async (_input: RequestInfo | URL, init?: RequestInit) =>
+    new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => {
+        aborted = true;
+        reject(new DOMException("The operation was aborted.", "AbortError"));
+      });
+    });
+  return { fn: fn as unknown as typeof fetch, wasAborted: () => aborted };
 }
 
 // --- getCandles: URL / params ---
@@ -144,6 +159,30 @@ test("non-429 error throws TiingoError immediately without retrying", async () =
     },
   );
   assert.equal(f.calls.length, 1);
+});
+
+// --- deadline ---
+
+test("a hanging Tiingo read is aborted at the deadline instead of waiting for ever", async () => {
+  const h = hangingFetch();
+  const p = new TiingoProvider({ apiKey: "KEY", fetchImpl: h.fn, timeoutMs: 25 });
+  const startedAt = Date.now();
+  await assert.rejects(() => p.getCandles("AAPL", "2024-01-01", "2024-01-31"), /timed out after 25ms/);
+  assert.ok(h.wasAborted(), "the AbortSignal must have fired");
+  assert.ok(Date.now() - startedAt < 2_000, "must not have waited anywhere near the default");
+});
+
+test("every Tiingo attempt, the 429 retry included, carries an abort signal", async () => {
+  let n = 0;
+  const f = fakeFetch(() => {
+    n++;
+    if (n === 1) return { status: 429, body: "limit", headers: { "retry-after": "0.01" } };
+    return { body: [] };
+  });
+  const p = new TiingoProvider({ apiKey: "KEY", fetchImpl: f.fn });
+  await p.getCandles("AAPL", "2024-01-01", "2024-01-31");
+  assert.equal(f.inits.length, 2);
+  for (const init of f.inits) assert.ok(init?.signal instanceof AbortSignal);
 });
 
 // --- env factory ---
