@@ -41,7 +41,7 @@ instrument announces itself.
 | 016 | SPIKE: re-derive the exit ladder from the real win distribution | P3 | M | 015 | TODO |
 | 017 | Hold the index with every pound not in a stock | P1 | L | 001 | DONE (#84) |
 | 018 | Stop telling the agent to trade when it has no reason to | P1 | S | 017 (same release) | DONE (#84) |
-| 020 | Redact Convex errors at the memory boundary | P1 | S | 003 | IN PROGRESS |
+| 020 | Redact Convex errors at the memory boundary | P1 | S | 003 | DONE |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (one-line reason) | REJECTED (one-line rationale)
 
