@@ -21,6 +21,26 @@
 - **Category**: security
 - **Planned at**: commit `0859c96`, 2026-09-30
 
+## Amendment 2026-10-02 (read before the steps; it overrides them where they conflict)
+
+Planned against `0859c96`; amended against `942206f`. The drift check WILL show changes; all are expected:
+- `agent/lib/risk.ts` (PR #84, index core): the `DEFAULT_LIMITS` VALUES are unchanged, now at lines 79-90.
+  What changed is the meaning of two limits: `maxDeployedPct` now caps the STOCK SLEEVE (stocks may be at
+  most 90% of equity; the rest sits in the index core, VUAG, which keeps its own small cash buffer), and
+  stock limits (including `maxConcurrentPositions`) no longer count the index core.
+- `.env.example:28` and `README.md:77` (PR #86, Tiingo) changed. Both stay out of scope.
+- `agent/instructions.md:8` no longer carries the stale 2% floor (fixed by PR #84). Drop that item from
+  Maintenance notes.
+
+Two lines of the step 1 replacement block must change to match the new meanings:
+```
+# TRADING_MAX_DEPLOYED_PCT=0.9               # ceiling on the stock sleeve, as a fraction of equity; the rest sits in the index core
+# TRADING_MAX_CONCURRENT_POSITIONS=4         # open stock positions at once; the index core does not count
+```
+Everything else in step 1 stands. Run `source ~/.nvm/nvm.sh && nvm use` in every shell (Node 24).
+Never place orders or call the live broker; the only external command allowed is step 0's read-only
+`npx vercel env ls production` (print only the count, never a value).
+
 ## Why this matters
 
 poof trades a real Trading 212 UK ISA with roughly £250 of real money. The risk

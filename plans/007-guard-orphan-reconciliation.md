@@ -20,6 +20,72 @@
 - **Category**: bug
 - **Planned at**: commit `0859c96`, 2026-09-30
 
+## Amendment 2026-10-02 (read before the steps; it overrides them where they conflict)
+
+Planned against `0859c96`; amended against `942206f`. The drift check WILL show `agent/tools/manage_positions.ts`
+changed: that is PR #84 (index core), expected, and described here. It is not a STOP.
+
+**What #84 changed.** `manage_positions.ts` now loads its inputs through an exported
+`loadExitScope(client, memory, env)` that FILTERS OUT the index core (`VUAGl_EQ`, see `agent/lib/core.ts`
+`isCore`) from both the portfolio and the open BUYs, so the exit engine never sells the index. The orphan
+call is now around line 113: `const orphans = orphanedOpenBuys(openBuys, positions);` using the filtered
+lists. `agent/lib/core-exits.test.ts` also calls `orphanedOpenBuys(scope.openBuys, scope.positions)` and
+must be updated to the new return shape (it is in scope). The account now holds four stocks (VRT, ALK,
+LLY, GE) plus the index core.
+
+**A1. The empty-read guard must test the UNFILTERED portfolio.** If it tested the filtered list, an
+account where every stock was sold outside poof while the index core is still held would look empty, be
+refused every cycle, alert every cycle, and never reconcile. Since #84 the core is always held (a small
+floor is never sold), so an empty RAW broker read is an even clearer sign of a failed read. Change
+`loadExitScope` to also return the raw portfolio (for example `rawPositions`, or a `brokerHeldAnything:
+boolean`), keep returning the filtered `positions` and `openBuys` exactly as now, and pass the raw
+portfolio (or its emptiness) into the guard. Refuse only when the raw portfolio is empty AND there is at
+least one open (non-core) BUY.
+
+**A2. Pending orders: you are authorised to add ONE broker call.** `client.getPendingOrders()` (uncached,
+read-only, `agent/lib/t212.ts`) is not otherwise called in `manage_positions` before reconciliation
+(`evaluateAndExecute` calls it only when there are exit proposals). Call it once in `manage_positions`
+(alongside or inside `loadExitScope`). Pass the set of tickers with a pending order into
+`orphanedOpenBuys`; an open BUY whose ticker has a pending order is NOT an orphan. If
+`getPendingOrders()` throws, do not reconcile this cycle: treat it as not reconcilable with a reason such
+as "pending orders could not be read", close nothing, alert. Do not add any other broker call. (This
+replaces the step 2 STOP condition.)
+
+**A3. Make the caller testable, and test it behaviourally.** Extract the reconciliation step from the
+tool body into an exported function in `manage_positions.ts`, next to `loadExitScope` and in the same
+style, e.g. `reconcileOrphans({ openBuys, rawPositions, pendingTickers, fxRate, closeTrade, alert })`
+returning `{ status: "reconciled", closed: number } | { status: "refused", reason: string }`. It calls
+`orphanedOpenBuys`, books each orphan through `buildOrphanCloseTradeArgs` + `closeTrade` exactly as now,
+and on refusal closes nothing and calls `alert` (from `agent/lib/alert.ts`, which never throws) with the
+reason. The tool calls it and adds its result to the returned object as `reconciliation`, so the cycle
+report shows it. Keep it inside the existing try/catch so a memory failure stays non-fatal.
+
+**A4. Tests (replace the "Test plan" list).** In `agent/lib/positions.test.ts`:
+1. 3 open BUYs, empty raw portfolio -> refused, zero orphans (the regression).
+2. Empty raw portfolio, zero open BUYs -> reconcilable, no orphans, no refusal.
+3. Raw portfolio holds only the index core, 2 open stock BUYs -> reconcilable, both orphaned (proves A1).
+4. 2 held, 3 recorded -> exactly the missing one is orphaned.
+5. A recorded BUY whose ticker has a pending order and is not held -> not an orphan (A2).
+In a test file for the tool seam (extend `agent/lib/core-exits.test.ts` or add
+`agent/lib/reconcile-orphans.test.ts`), using plain fakes:
+6. `reconcileOrphans` on a refused read calls `closeTrade` zero times and `alert` once with the reason.
+7. `reconcileOrphans` on a good read closes exactly the orphan and does not alert.
+8. `reconcileOrphans` when pending orders could not be read closes nothing and alerts.
+Update the existing `core-exits.test.ts` assertion to the new return shape without weakening it.
+
+**A5. Mutation checks (replace step 4).** For each: back up with `/bin/cp -f`, change, confirm with grep
+that it landed, run the tests, restore with `/bin/cp -f`, confirm `git diff` shows only intended changes
+and the suite is green. (a) Remove the empty-read guard: test 1 must go red. (b) Make the guard use the
+filtered list: test 3 must go red. (c) Drop the pending-ticker exclusion: test 5 must go red. (d) Make
+`reconcileOrphans` close even when refused: test 6 must go red.
+
+**A6. Environment.** Run `source ~/.nvm/nvm.sh && nvm use` in every shell (the repo needs Node 24; the
+default shell is 22). `convex/_generated` is gitignored: copy it from the main checkout
+(`/bin/cp -R /Users/lucien/src/luciengeorge/poof/convex/_generated convex/`) before the convex typecheck.
+In-scope files are now: `agent/lib/positions.ts`, `agent/lib/positions.test.ts`,
+`agent/tools/manage_positions.ts`, `agent/lib/core-exits.test.ts`, and optionally a new
+`agent/lib/reconcile-orphans.test.ts`. Never place orders or call the live broker.
+
 ## Why this matters
 
 `orphanedOpenBuys` answers "which BUYs do we have a record of that the broker
