@@ -311,7 +311,7 @@ const MIN_POSITION_REJECTION = new T212Error(
   '{"type":"/api-errors/min-opened-position-exceeded","title":"Error while placing the order","status":400,"detail":"must have opened position at least 1.00"}',
 );
 
-test("order intent: the marker is written BEFORE the order is sent, not after", async () => {
+test("order intent: a BUY's marker is written BEFORE the order is sent, not after", async () => {
   // Ordering, not presence: a process killed between the broker accepting the order and the
   // marker landing must still leave the marker, or a re-run places the trade twice.
   const events: string[] = [];
@@ -341,8 +341,8 @@ test("order intent: the marker is written BEFORE the order is sent, not after", 
   ]);
 });
 
-test("order intent: a failed placement still blocks a same-day retry (the accepted trade-off)", async () => {
-  // Writing the marker first can only over-block: an order the broker refused keeps its marker,
+test("order intent: a failed BUY still blocks a same-day retry (the accepted trade-off)", async () => {
+  // Writing the marker first can only over-block: a BUY the broker refused keeps its marker,
   // so the same order cannot be retried until the next ET day. That is deliberate. The other
   // way round fails by placing a duplicate position on a real account.
   const store = intentStore();
@@ -414,9 +414,47 @@ test("a throw mid-batch keeps the order already filled and stops the batch", asy
   assert.deepEqual(
     res.rejected.map((r) => [r.proposal.ticker, r.reason]),
     [
-      ["MSFT_US_EQ", "not placed: broker error: fetch failed"],
+      ["MSFT_US_EQ", "outcome unknown: broker error: fetch failed"],
       ["NVDA_US_EQ", "not placed: batch stopped after a broker error on MSFT_US_EQ"],
     ],
+  );
+});
+
+test("a throw from the send is reported as outcome unknown, a throw before it as not placed", async () => {
+  // The broker may have accepted an order whose send threw, so "not placed" would be a false
+  // claim in the cycle report. A throw before the send is a known non-placement.
+  const { client: base } = fakeClient();
+  const dropping: OrderExecClient = {
+    ...base,
+    async placeMarketOrder() {
+      throw new Error("socket hang up");
+    },
+  };
+  const opts = {
+    fx: FX,
+    dryRun: false,
+    limits: TEST_LIMITS,
+    resolveRiskState: async () => noState,
+    resolvePrice: async () => 100,
+  };
+  const sendThrew = await evaluateAndExecute([buy(500)], { ...opts, client: dropping });
+  assert.deepEqual(
+    sendThrew.rejected.map((r) => r.reason),
+    ["outcome unknown: broker error: socket hang up"],
+  );
+
+  const { client, placed } = fakeClient();
+  const keyThrew = await evaluateAndExecute([buy(500)], {
+    ...opts,
+    client,
+    intentKeyOf: () => {
+      throw new Error("bad key");
+    },
+  });
+  assert.equal(placed.length, 0);
+  assert.deepEqual(
+    keyThrew.rejected.map((r) => r.reason),
+    ["not placed: broker error: bad key"],
   );
 });
 
@@ -449,7 +487,7 @@ test("submit_orders books the filled order in trades when a later order throws",
   );
   assert.match(
     res.rejected.find((r) => r.proposal.ticker === "MSFT_US_EQ")?.reason ?? "",
-    /^not placed: broker error: /,
+    /^outcome unknown: broker error: /,
   );
 });
 
@@ -524,6 +562,91 @@ test("exit intent: a second exit for the same ticker on the same day is suppress
   assert.match(aapl?.skipped ?? "", /duplicate: order intent already recorded/);
 });
 
+const EXIT_OPTS = {
+  fx: FX,
+  dryRun: false,
+  resolveRiskState: async () => noState,
+  intentKeyOf: exitIntentKey,
+};
+
+test("exit intent: a SELL the broker refuses records no marker, so a same-day retry sends it", async () => {
+  // A marker written before the send would turn this refusal into a "duplicate" on the agent's
+  // next manage_positions call, and the stop-loss would never go out that day.
+  const store = intentStore();
+  const { client } = fakeClient({ positions: [held("AAPL_US_EQ", 10)] });
+  const refusing: OrderExecClient = {
+    ...client,
+    async placeMarketOrder() {
+      throw MIN_POSITION_REJECTION;
+    },
+  };
+  const first = await evaluateAndExecute([exit("AAPL_US_EQ", 300)], {
+    ...EXIT_OPTS,
+    hasOrderIntent: store.hasOrderIntent,
+    recordOrderIntent: store.recordOrderIntent,
+    client: refusing,
+  });
+  assert.match(first.placed[0].skipped ?? "", /T212 rejected/);
+  assert.deepEqual([...store.keys], []);
+
+  const { client: working, placed } = fakeClient({ positions: [held("AAPL_US_EQ", 10)] });
+  const retry = await evaluateAndExecute([exit("AAPL_US_EQ", 300)], {
+    ...EXIT_OPTS,
+    hasOrderIntent: store.hasOrderIntent,
+    recordOrderIntent: store.recordOrderIntent,
+    client: working,
+  });
+  assert.deepEqual(placed, [{ ticker: "AAPL_US_EQ", quantity: -3 }]);
+  assert.ok(retry.placed[0].order && !retry.placed[0].skipped);
+  assert.deepEqual([...store.keys], [`${etDateString(new Date())}:AAPL_US_EQ:EXIT`]);
+});
+
+test("exit intent: a SELL whose send throws records no marker", async () => {
+  const store = intentStore();
+  const { client } = fakeClient({ positions: [held("AAPL_US_EQ", 10)] });
+  const dropping: OrderExecClient = {
+    ...client,
+    async placeMarketOrder() {
+      throw new Error("fetch failed");
+    },
+  };
+  const res = await evaluateAndExecute([exit("AAPL_US_EQ", 300)], {
+    ...EXIT_OPTS,
+    hasOrderIntent: store.hasOrderIntent,
+    recordOrderIntent: store.recordOrderIntent,
+    client: dropping,
+  });
+  assert.deepEqual(
+    res.rejected.map((r) => r.reason),
+    ["outcome unknown: broker error: fetch failed"],
+  );
+  assert.deepEqual([...store.keys], []);
+});
+
+test("exit intent: a placed SELL records its marker AFTER the order is sent", async () => {
+  const events: string[] = [];
+  const { client } = fakeClient({ positions: [held("AAPL_US_EQ", 10)] });
+  const logging: OrderExecClient = {
+    ...client,
+    async placeMarketOrder(input) {
+      events.push(`place:${input.ticker}`);
+      return client.placeMarketOrder(input);
+    },
+  };
+  await evaluateAndExecute([exit("AAPL_US_EQ", 300)], {
+    ...EXIT_OPTS,
+    client: logging,
+    hasOrderIntent: async () => false,
+    recordOrderIntent: async (key) => {
+      events.push(`intent:${key}`);
+    },
+  });
+  assert.deepEqual(events, [
+    "place:AAPL_US_EQ",
+    `intent:${etDateString(new Date())}:AAPL_US_EQ:EXIT`,
+  ]);
+});
+
 // Convex's argument validator prints the whole argument object, token included, into its error.
 const CONVEX_TOKEN_ERROR = 'ArgumentValidationError: {token: "s3cr3t-shared-value", env: "live"}';
 
@@ -579,9 +702,11 @@ test("intent guard: a BUY whose marker cannot be read is not sent, and the batch
   assert.match(res.rejected[0].reason, /\[REDACTED\]/);
 });
 
-test("intent guard: a SELL whose marker cannot be saved is still sent", async () => {
+test("intent guard: a SELL whose marker cannot be saved after the sale is still reported placed", async (t) => {
   // Fail open for SELLs: an ISA cannot short and Trading 212 rejects selling shares not held, so
-  // a duplicate SELL cannot oversell, while a blocked stop-loss is the worse failure.
+  // a duplicate SELL cannot oversell, while a blocked stop-loss is the worse failure. The sale
+  // already happened, so the failed write is logged, redacted, and changes nothing.
+  const warn = t.mock.method(console, "warn", () => {});
   const { client, placed } = fakeClient({ positions: [held("AAPL_US_EQ", 10)] });
   const res = await evaluateAndExecute([exit("AAPL_US_EQ", 300)], {
     client,
@@ -595,6 +720,11 @@ test("intent guard: a SELL whose marker cannot be saved is still sent", async ()
   });
   assert.deepEqual(placed, [{ ticker: "AAPL_US_EQ", quantity: -3 }]);
   assert.deepEqual(res.rejected, []);
+  assert.equal(res.placed.length, 1);
+  assert.ok(res.placed[0].order && !res.placed[0].skipped);
+  const logged = warn.mock.calls.map((c) => c.arguments.join(" ")).join("\n");
+  assert.match(logged, /intent write failed for SELL AAPL_US_EQ after it was placed/);
+  assert.doesNotMatch(logged, /s3cr3t-shared-value/);
 });
 
 test("intent guard: a SELL whose marker cannot be read is still sent, and later orders still run", async () => {
@@ -731,7 +861,7 @@ test("non-T212 / 5xx errors are reported as broker errors: infra failures aren't
   assert.equal(res.placed.length, 0);
   assert.deepEqual(
     res.rejected.map((r) => r.reason),
-    ["not placed: broker error: Trading 212 API error 500: internal server error"],
+    ["outcome unknown: broker error: Trading 212 API error 500: internal server error"],
   );
 });
 
