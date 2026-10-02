@@ -46,18 +46,36 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Run evals
         run: pnpm eval --strict --junit .eve/junit.xml
-      # upload-artifact@v4 skips dot-directories unless include-hidden-files is set, so every
-      # upload of .eve/ was silently empty.
-      - name: Upload eval artifacts
+      # PUBLIC REPO, AND ARTIFACTS ARE NOT MASKED. GitHub masks secrets in this job's log but never
+      # inside an uploaded file, and any signed-in GitHub user can download this repo's artifacts.
+      # So the full transcripts (.eve/evals/<run>/evals/: every tool call's inputs and outputs, and
+      # error text that has carried the Convex secret before) stay on the runner. Only the verdicts
+      # leave: the newest run's summary.json and the junit report, each passed through redact() in
+      # this job, which holds the secrets, so the exact-value layer sees them. Why an eval failed
+      # is in the job log above, which GitHub does mask.
+      - name: Redact eval verdicts
+        id: redact
         if: always()
+        run: |
+          latest=$(ls -d .eve/evals/*/ 2>/dev/null | sort | tail -n 1 || true)
+          if [ -n "$latest" ] && [ -f "${latest}summary.json" ]; then
+            cp "${latest}summary.json" .eve/summary.json
+          fi
+          node scripts/redact-files.mjs .eve/summary.json .eve/junit.xml
+      # Skipped if redaction failed, so an unredacted file is never uploaded. upload-artifact@v4
+      # skips dot-directories unless include-hidden-files is set, which is why every earlier upload
+      # of .eve/ was silently empty.
+      - name: Upload redacted eval verdicts
+        if: always() && steps.redact.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: eval-artifacts
           path: |
-            .eve/evals/
+            .eve/summary.json
             .eve/junit.xml
           include-hidden-files: true
           if-no-files-found: ignore
+          retention-days: 7
 
   alert:
     needs: eval
