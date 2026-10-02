@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { getFunctionName } from "convex/server";
 import {
   Memory,
   memoryFromEnv,
@@ -45,6 +46,26 @@ test("recordTrade issues a mutation with the trade args and the token", async ()
   assert.deepEqual(calls[0].args, { token: TOKEN, ...trade });
 });
 
+test("closedBuys issues a query to memory:closedBuys with the token and env", async () => {
+  // Records the function name too: the shared fake ignores the ref, so a facade pointing at a
+  // misspelt function would pass there and fail only against a real deployment.
+  const calls: { kind: "mutation" | "query"; name: string; args: Record<string, unknown> }[] = [];
+  const client: ConvexLike = {
+    async mutation(ref, args) {
+      calls.push({ kind: "mutation", name: getFunctionName(ref), args });
+      return null;
+    },
+    async query(ref, args) {
+      calls.push({ kind: "query", name: getFunctionName(ref), args });
+      return [];
+    },
+  };
+  await new Memory(client, TOKEN).closedBuys("live");
+  assert.deepEqual(calls, [
+    { kind: "query", name: "memory:closedBuys", args: { token: TOKEN, env: "live", limit: undefined } },
+  ]);
+});
+
 test("recordCycle and saveRiskState are mutations; getRiskState/recallRecent are queries", async () => {
   const { client, calls } = fakeClient();
   const m = new Memory(client, TOKEN);
@@ -80,6 +101,7 @@ test("every Memory method includes the token in its args", async () => {
   await m.recordTrade(trade);
   await m.closeTrade({ tradeId: "t1", pnl: 1 });
   await m.openBuys("demo");
+  await m.closedBuys("demo");
   await m.saveBenchmark({
     env: "demo",
     inceptionEquity: 50,

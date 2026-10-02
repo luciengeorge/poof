@@ -75,29 +75,32 @@ export default defineTool({
 
     const memory = memoryFromEnv();
     const env = tradingEnv();
-    const [openBuysRaw, recall] = await Promise.all([
+    const [openBuysRaw, closedBuysRaw, benchmarkRaw] = await Promise.all([
       memory.openBuys(env),
-      memory.recallRecent(env, { tradeLimit: 50 }),
+      // The WHOLE closed record, not a recency window. Every figure below (realised stats,
+      // per-tag expectancy, failure attribution, calibration) is only as honest as its sample,
+      // and a mixed 50-row window shrank that sample every time the account traded.
+      memory.closedBuys(env),
+      memory.getBenchmark(env),
     ]);
     const openBuys = (openBuysRaw ?? []) as OpenBuyTrade[];
     // Full trade rows, not a narrow projection: attribution needs the entry price, the timestamps
     // and the exit levels to tell a stop-loss exit from a time exit, and calibration needs the
     // confidence claimed at entry. These come straight from Convex, so the fields are present.
-    const closedTrades =
-      ((recall as { trades?: unknown[] })?.trades ?? []) as {
-        ticker: string;
-        status: string;
-        price: number;
-        createdAt: number;
-        closedAt?: number;
-        pnl?: number;
-        strategyTag?: string;
-        redTeamVerdict?: string;
-        exitPrice?: number;
-        stopLossPct?: number;
-        maxHoldDays?: number;
-        predictedConfidence?: number;
-      }[];
+    const closedTrades = (closedBuysRaw ?? []) as {
+      ticker: string;
+      status: string;
+      price: number;
+      createdAt: number;
+      closedAt?: number;
+      pnl?: number;
+      strategyTag?: string;
+      redTeamVerdict?: string;
+      exitPrice?: number;
+      stopLossPct?: number;
+      maxHoldDays?: number;
+      predictedConfidence?: number;
+    }[];
 
     const now = Date.now();
     const rawManaged = buildManagedPositions(positions, openBuys, fxRate);
@@ -135,7 +138,7 @@ export default defineTool({
     // Benchmark vs SPY. Seed the baseline once (current equity + SPY price at inception).
     let spyPrice: number | null = null;
     let alpha: ReturnType<typeof computeAlpha> | null = null;
-    let benchmark = (recall as { benchmark?: Benchmark | null })?.benchmark ?? null;
+    let benchmark = (benchmarkRaw ?? null) as Benchmark | null;
     if (benchmark && isCoreBenchmark(benchmark)) {
       // Against the index core itself, priced from the broker's own read of the held core: no
       // SPY quote and no FX rate. Set by scripts/rebase-benchmark.ts, never seeded here.

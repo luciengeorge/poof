@@ -21,6 +21,27 @@
 - **Category**: tests
 - **Planned at**: commit `0859c96`, 2026-09-30
 
+## Amendment 2026-10-02 (read before the steps; it overrides them where they conflict)
+
+Planned against `0859c96`; amended against `cab1f14`. The drift check shows `agent/tools/submit_orders.ts`
+changed: PR #84 moved the tool body into an exported `submitOrders(proposals, deps)` (with injectable
+`client`, `memory`, `env`, `fx`, `dryRun`). The fail-closed external-holdings branch is unchanged in
+substance and now sits around lines 122-139; the `approval` predicate with the raw
+`process.env.DRY_RUN === "false"` read is around line 255. Not a STOP.
+
+**A1. Prefer a behavioural test for the fail-closed branch.** Because `submitOrders` is now exported
+with injected dependencies, test the policy directly: a fake `memory` whose `listExternalHoldings`
+throws, with `env: "live"`, must skip every BUY (reported as skipped with the fail-closed reason) and
+still let SELLs through; with `env: "demo"`, BUYs proceed. Model the fakes on the existing
+`submitOrders` tests in `agent/lib/orders.test.ts` (they drive the real `submitOrders` with fakes).
+Keep a structural assertion only if it pins something the behavioural test cannot. Mutation-check:
+make the catch set `blockAllBuys = false` on live; the live test must go red.
+
+**Environment.** Run `source ~/.nvm/nvm.sh` and `nvm use` as separate commands in every shell, never
+chained after a command that can fail (test output must show `ℹ tests N`, i.e. Node 24).
+`convex/_generated` is now committed (PR #91), so no copy is needed. Never call live services, place
+orders or run `npx convex deploy`. Stage explicit paths only.
+
 ## Why this matters
 
 poof places real orders on a Trading 212 UK ISA holding roughly £250. Two

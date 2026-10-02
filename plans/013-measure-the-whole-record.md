@@ -21,6 +21,31 @@
 - **Category**: bug
 - **Planned at**: commit `0859c96`, 2026-09-30
 
+## Amendment 2026-10-02 (read before the steps; it overrides them where they conflict)
+
+Planned against `0859c96`; amended against `cab1f14`. The drift check shows changes in
+`review_performance.ts`, `memory.ts`, `positions.ts`, `convex/memory.ts`, `convex/schema.ts` (PRs #84,
+#86, #89). The targeted code is unchanged in substance; line numbers moved: the `recallRecent(env, {
+tradeLimit: 50 })` fetch is now around `agent/tools/review_performance.ts:80` with the `closedTrades`
+binding at ~86; `convex/memory.ts` `openBuys` is at ~653 and `recallRecent` at ~1212. `by_env_side_status`
+still exists (`convex/schema.ts:86`). Compare by content. Not a STOP.
+
+**Correction to "Why this matters".** Since PR #84 (plan 018) the instructions no longer tell the agent
+to bias sizing off these stats: `agent/instructions.md` step 3 now says per-tag and overall stats are
+"too small to act on" and "must not drive sizing". So the stakes are measurement accuracy (the record
+the agent and the owner read, and the attribution/calibration verdicts), not live sizing. Still worth
+doing; do not change the instructions.
+
+**Note.** Index-core (VUAG) orders never reach the `trades` table (they go to `coreOrders`), so the
+closed record is stocks only. Adding a query to `convex/memory.ts` needs no `convex/_generated`
+regeneration (`api.d.ts` types modules via `typeof`), and no schema change is expected; if you find you
+need one, STOP.
+
+**Environment.** Run `source ~/.nvm/nvm.sh` and `nvm use` as separate commands in every shell, never
+chained after a command that can fail (test output must show `ℹ tests N`, i.e. Node 24).
+`convex/_generated` is now committed (PR #91), so no copy is needed. Never call live services, place
+orders or run `npx convex deploy`. Stage explicit paths only.
+
 ## Why this matters
 
 poof trades a real Trading 212 UK ISA holding roughly £250. Once a cycle it

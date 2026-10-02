@@ -312,6 +312,10 @@ export class Memory {
   openBuys(env: Env): Promise<unknown> {
     return this.query("openBuys", { env });
   }
+  /** The whole closed BUY record, newest first. Bounded server-side; see convex/memory.ts. */
+  closedBuys(env: Env, limit?: number): Promise<unknown> {
+    return this.query("closedBuys", { env, limit });
+  }
   saveBenchmark(b: BenchmarkRecord): Promise<unknown> {
     return this.mutation("saveBenchmark", { ...b });
   }

@@ -663,6 +663,58 @@ export const openBuys = query({
   },
 });
 
+/**
+ * Statuses that mean a BUY is no longer open. All three exist and all three matter:
+ * `closed` is an exit we executed and priced, `closed-estimated` was reconciled from the last
+ * price actually observed, and `closed-unknown` closed with no outcome at all. realizedStats
+ * reports the latter two as separate counts, so returning only `closed` would silently zero
+ * them. The meaning of each is defined once, in outcomeKind (agent/lib/positions.ts).
+ */
+const CLOSED_BUY_STATUSES = ["closed", "closed-estimated", "closed-unknown"] as const;
+
+/** Upper bound on rows returned. See the comment in the handler for why this number. */
+const CLOSED_BUYS_LIMIT = 500;
+
+/**
+ * The whole closed BUY record for an account, newest first.
+ *
+ * WHY THIS EXISTS RATHER THAN A BIGGER tradeLimit. review_performance used to take the 50 most
+ * recent rows of ANY kind from recallRecent and call them closed trades. BUYs still open, SELLs,
+ * skipped proposals and dry-run rows all consumed slots, so the closed record it could actually
+ * see shrank every time the account traded, while every figure it reported looked normal. Raising
+ * a limit only moves that cliff further out; filtering at the index removes it.
+ */
+export const closedBuys = query({
+  args: { token: v.string(), env: v.string(), limit: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    assertSecret(args.token);
+    // Bounded on purpose. Convex caps how many documents one query may read, and this repo's own
+    // guideline (convex/_generated/ai/guidelines.md) is to bound a growing table with .take(n)
+    // rather than .collect(). Three index reads of 500 is at most 1,500 documents, comfortably
+    // inside that cap. 500 closed BUYs is about two years at the pace the account has actually
+    // traded, but only about six months of trading days at the risk gate's default ceiling of four
+    // new positions a day, so this is a bound to revisit, not to forget. Past it, this returns the
+    // 500 most recent closed BUYs: a sample that stops growing but, unlike the old window, never
+    // shrinks. If it is ever reached, the right answer is pagination, not a bigger number.
+    const limit = Math.min(Math.max(1, Math.floor(args.limit ?? CLOSED_BUYS_LIMIT)), CLOSED_BUYS_LIMIT);
+    const rows: Doc<"trades">[] = [];
+    for (const status of CLOSED_BUY_STATUSES) {
+      const batch = await ctx.db
+        .query("trades")
+        .withIndex("by_env_side_status", (q) =>
+          q.eq("env", args.env).eq("side", "BUY").eq("status", status),
+        )
+        .order("desc")
+        .take(limit);
+      rows.push(...batch);
+    }
+    // Merge the three status streams back into one chronology. closedAt is absent on rows that
+    // were never given one, so fall back to createdAt rather than dropping them.
+    rows.sort((a, b) => (b.closedAt ?? b.createdAt) - (a.closedAt ?? a.createdAt));
+    return rows.slice(0, limit);
+  },
+});
+
 export const latestCronRun = query({
   args: { token: v.string(), schedule: v.string() },
   handler: async (ctx, args) => {
