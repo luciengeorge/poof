@@ -24,6 +24,59 @@ This plan covers three defects in one file's order loop. They are bundled
 because they edit the same lines and splitting them would only manufacture a
 merge conflict and two reviews of the same code.
 
+## Amendment 2026-10-02 (read before the steps; it overrides them where they conflict)
+
+Planned against `0859c96`; amended against `a7513da`. The drift check WILL show `orders.ts`,
+`submit_orders.ts` and `manage_positions.ts` changed. All expected; none is a STOP:
+- `orders.ts`: `placeWithPrecision` is now exported (the index core uses it) and the result carries
+  `cashShortfall`. The per-order loop (now about lines 207-286) is unchanged: `recordOrderIntent` still
+  runs AFTER `placeWithPrecision`, exactly as the excerpt shows.
+- `submit_orders.ts` (PR #84): the tool body is now an exported `submitOrders(proposals, deps)`. The
+  unwrapped `evaluateAndExecute(...)` call is around line 157. Between it and the `recordTrade` block
+  now sit `fundFromCore(...)` (sells some index core to fund a cash-short BUY) and the Jev shadow
+  (`shadowConfidence`). Both are verified never to throw (each catches everything internally), so the
+  invariant "anything the broker accepted reaches `recordTrade`" depends only on `evaluateAndExecute`
+  not throwing after the first placement. Do not move or restructure those two steps.
+- `manage_positions.ts` (PRs #84, #89): `loadExitScope` and `reconcileOrphans` were added. The exit
+  call to `evaluateAndExecute` still passes no intent callbacks. `agent/lib/core-exits.test.ts` has
+  structural regexes over this file; keep them passing (update them only if your wiring change
+  requires it, without weakening them).
+- There are exactly two callers of `evaluateAndExecute`: `submit_orders.ts` and `manage_positions.ts`.
+
+**Correction to "Why this matters" (b).** A filled position with no `trades` row is NOT left with no
+stop-loss: `buildManagedPositions` manages every broker position, so it gets the DEFAULT stop-loss,
+take-profit and trailing stop from its average price. What it loses: the agent's chosen levels, the
+max-hold (skipped when `openedAt` is 0, `agent/lib/exits.ts:159`), durable peak tracking for the
+trailing stop (the peak is persisted on the BUY row), and its place in the trade record and every
+performance statistic. Still worth fixing; judge it at that size.
+
+**Step 3 clarification.** Contain throws only inside the per-order loop. A throw BEFORE the loop
+(broker snapshot, pending read, risk state) means nothing was placed, so it may still propagate. Record
+the throwing proposal in `result.rejected` with a reason starting `"not placed: broker error: "` and
+stop the batch (do not try later orders after an infra failure). This keeps the tool's return shape, so
+no prompt or description change is needed. Note in a code comment that a throw from
+`placeWithPrecision` is ambiguous (the broker may have accepted the order before the connection
+failed): the intent recorded first (step 1) stops a duplicate on a re-run, and the rejected entry makes
+the ambiguity visible in the cycle report.
+
+**Step 4 decision (replaces the STOP).** The intent key is `${etDate}:${ticker}:${side}:${notional}`.
+For an exit the notional is derived from the live market value, so two runs never match and wiring the
+callbacks alone would be decorative. Add an optional `intentKeyOf?: (p: Proposal) => string` to
+`ExecuteOpts`, defaulting to the current format (so `submit_orders` is unchanged). `manage_positions`
+passes the callbacks plus `intentKeyOf: (p) => \`${etDateString(new Date())}:${p.ticker}:EXIT\``: one
+exit per ticker per ET day. That is safe because exits are full-position sells and the cycle runs once
+a day. Tests: (5) structural, `manage_positions.ts` passes `hasOrderIntent`, `recordOrderIntent` and
+`intentKeyOf`; (6) behavioural, a second exit for the same ticker on the same day is suppressed even
+when its notional differs, and a different ticker is not suppressed.
+
+**Mutation checks (step 5) become four:** intent moved back after the send (test 1 red); per-order
+containment removed (test 3 red); exit callbacks removed from `manage_positions.ts` (test 5 red);
+`intentKeyOf` ignored so the default key is used (test 6 red).
+
+**Environment.** `source ~/.nvm/nvm.sh && nvm use` in every shell (Node 24; default is 22; check the
+`ℹ` prefix in test output). Copy the gitignored `convex/_generated` from the main checkout before the
+convex typecheck. Never place orders or call any live service.
+
 ## Why this matters
 
 poof places real orders against a real Trading 212 ISA. Three separate defects
