@@ -32,7 +32,7 @@ instrument announces itself.
 | 007 | Guard orphan reconciliation against an empty portfolio read | P1 | M | 001 | DONE |
 | 008 | Score funnel outcomes through Tiingo, not a 403 endpoint | P1 | M | 001 | DONE |
 | 009 | Make CI catch the two outages that shipped green | P1 | M | 001 | DONE (step 3 not adopted: no prod deploy key in GitHub, so the reviewer runs `npx convex deploy --dry-run -y` on any PR touching `convex/schema.ts`) |
-| 010 | Fix the evals workflow and make its failure loud | P1 | M | 001, 009 | TODO |
+| 010 | Fix the evals workflow and make its failure loud | P1 | M | 001, 009 | IN PROGRESS (steps 1-7 done; 8-9 need the branch pushed) |
 | 011 | Give the Finnhub client a timeout and a shared client | P2 | S | 001 | TODO |
 | 012 | Pin the fail-closed branches that tests do not reach | P2 | S | 001 | TODO |
 | 013 | Measure performance over the whole record, not 50 mixed rows | P2 | S | 001 | TODO |
