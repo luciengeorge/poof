@@ -16,6 +16,8 @@ import { validateOrders, DEFAULT_LIMITS } from "./risk.ts";
 const TEST_LIMITS = { ...DEFAULT_LIMITS, minTradePct: 0.02, maxConcurrentPositions: 10 };
 import { evaluateAndExecute, type OrderExecClient, type Proposal } from "./orders.ts";
 import type { CashBalance, T212Position, T212Order } from "./t212.ts";
+import type { Env, TradeRecord } from "./memory.ts";
+import { submitOrders } from "../tools/submit_orders.ts";
 
 const LIVE_FX = { rate: 0.75094, source: "live" } as const;
 const UNITY_FX = { rate: 1, source: "live" } as const;
@@ -301,6 +303,99 @@ test("guard blocks every BUY when told to fail closed, still allowing SELLs", ()
     allowed.map((p) => p.ticker),
     ["AAPL_US_EQ"],
   );
+});
+
+// The test above passes blockAllBuys in by hand, so it stays green even if nothing ever sets
+// it: changing `env === "live"` to `env === "demo"` in submit_orders left all 771 tests
+// passing. These drive the real submitOrders through a holdings-lookup outage, so the
+// live/demo split is pinned where it takes effect, and so is the flag reaching the partition.
+async function submitDuringHoldingsOutage(env: Env) {
+  const sent: { ticker: string; quantity: number }[] = [];
+  const trades: TradeRecord[] = [];
+  const client: OrderExecClient = {
+    async getBrokerSnapshot() {
+      return {
+        cash: cash({ total: 10000, free: 10000 }),
+        positions: [pos({ quantity: 10, averagePrice: 100, currentPrice: 100, maxSell: 10 })],
+        takenAt: 0,
+        cashReadAt: 0,
+        positionsReadAt: 0,
+      };
+    },
+    async getPendingOrders() {
+      return [];
+    },
+    async placeMarketOrder(input) {
+      sent.push(input);
+      return { id: sent.length, ...input } as T212Order;
+    },
+  };
+  const result = await submitOrders(
+    [
+      { ticker: "NKE_US_EQ", side: "BUY", notional: 500, price: 100, thesis: "t", maxHoldDays: 20 },
+      { ticker: "AAPL_US_EQ", side: "SELL", notional: 300, price: 100, thesis: "t" },
+    ],
+    {
+      client,
+      memory: {
+        listExternalHoldings: async () => {
+          throw new Error("Convex unreachable");
+        },
+        hasOrderIntent: async () => false,
+        recordOrderIntent: async () => {},
+        recordTrade: async (t) => {
+          trades.push(t);
+        },
+        recordCoreOrder: async () => {},
+      },
+      env,
+      fx: UNITY_FX,
+      dryRun: false,
+      resolveRiskState: async () => ({
+        peakEquity: 0,
+        dayPnl: 0,
+        newPositionsToday: 0,
+        consecutiveLossDays: 0,
+      }),
+      resolvePrice: async () => 100,
+      limits: TEST_LIMITS,
+      jev: null,
+    },
+  );
+  return { sent, trades, result };
+}
+
+test("submit_orders fails closed on LIVE when the holdings lookup throws: no BUY sent, SELLs still go", async (t) => {
+  t.mock.method(console, "warn", () => {});
+  const { sent, trades, result } = await submitDuringHoldingsOutage("live");
+  // With the exclusion list blind, no new exposure reaches the broker; de-risking still does.
+  assert.deepEqual(sent, [{ ticker: "AAPL_US_EQ", quantity: -3 }]);
+  const nke = result.placed.find((p) => p.proposal.ticker === "NKE_US_EQ");
+  assert.ok(nke, "the blocked BUY must be reported, not swallowed");
+  assert.equal(nke.quantity, 0);
+  assert.equal(nke.skipped, EXTERNAL_HOLDING_SKIP_REASON);
+  assert.deepEqual(result.rejected, []);
+  assert.deepEqual(
+    trades.map((tr) => [tr.ticker, tr.status]),
+    [
+      ["AAPL_US_EQ", "placed"],
+      ["NKE_US_EQ", "skipped"],
+    ],
+  );
+});
+
+test("submit_orders fails open on DEMO when the holdings lookup throws: BUYs proceed", async (t) => {
+  t.mock.method(console, "warn", () => {});
+  const { sent, result } = await submitDuringHoldingsOutage("demo");
+  assert.deepEqual(
+    sent.map((o) => o.ticker).sort(),
+    ["AAPL_US_EQ", "NKE_US_EQ"],
+  );
+  assert.deepEqual(
+    result.placed.filter((p) => p.skipped).map((p) => p.proposal.ticker),
+    [],
+  );
+  assert.deepEqual(result.rejected, []);
 });
 
 test("blocked external BUY is skipped with the reason while the rest of the batch executes", async () => {
