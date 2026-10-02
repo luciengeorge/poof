@@ -8,6 +8,7 @@ import {
   type T212Config,
 } from "./t212.ts";
 import { FAKE_CASH } from "./t212-fake.ts";
+import { tradingEnv } from "./risk-runtime.ts";
 
 // Records requests and returns a canned Response.
 function fakeFetch(
@@ -373,7 +374,7 @@ test("a fake memoised under DRY_RUN=true is refused once DRY_RUN=false", async (
   });
 });
 
-test("BROKER_FAKE=true with TRADING212_ENV=live is still the fake, and no live host is contacted", async () => {
+test("BROKER_FAKE=true with TRADING212_ENV=live THROWS even under DRY_RUN: no fake balance in live memory", async () => {
   await withBrokerEnv(
     {
       BROKER_FAKE: "true",
@@ -382,11 +383,31 @@ test("BROKER_FAKE=true with TRADING212_ENV=live is still the fake, and no live h
       TRADING212_API_KEY: "KEY",
       TRADING212_API_SECRET: "SECRET",
     },
-    () =>
+    () => {
+      assert.equal(tradingEnv(), "live");
+      assert.throws(() => t212FromEnv(), /TRADING212_ENV/);
+    },
+  );
+});
+
+test("BROKER_FAKE=true is refused for any memory scope but exactly demo", async () => {
+  for (const scope of ["LIVE", "paper", ""]) {
+    await withBrokerEnv({ BROKER_FAKE: "true", DRY_RUN: "true", TRADING212_ENV: scope }, () => {
+      assert.notEqual(tradingEnv(), "demo");
+      assert.throws(() => t212FromEnv(), /TRADING212_ENV/, `TRADING212_ENV=${JSON.stringify(scope)}`);
+    });
+  }
+});
+
+test("TRADING212_ENV unset or demo (memory scope demo) allows the fake", async () => {
+  for (const scope of [undefined, "demo"]) {
+    await withBrokerEnv({ BROKER_FAKE: "true", DRY_RUN: "true", TRADING212_ENV: scope }, () =>
       withNetworkTripwire(async () => {
+        assert.equal(tradingEnv(), "demo");
         assert.deepEqual(await t212FromEnv().getCash(), FAKE_CASH);
       }),
-  );
+    );
+  }
 });
 
 test("BROKER_FAKE unset with credentials is the real client, through the injected fetchImpl", async () => {

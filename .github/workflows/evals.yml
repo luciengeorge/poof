@@ -7,8 +7,8 @@ name: Evals
 # (model access), FINNHUB_API_KEY, EXA_API_KEY, CONVEX_URL, CONVEX_APP_SECRET.
 #
 # NO BROKER CREDENTIAL, ON PURPOSE. The broker is a canned wire (agent/lib/t212-fake.ts), selected
-# by BROKER_FAKE, which t212FromEnv refuses unless DRY_RUN is on. This comment used to list the
-# Trading 212 keys as "(demo keys)". They were the live account's, the demo host rejected them,
+# by BROKER_FAKE, which t212FromEnv refuses unless DRY_RUN is on and TRADING212_ENV is demo. This
+# comment used to list the Trading 212 keys as "(demo keys)". They were the live account's, the demo host rejected them,
 # and every broker read 401'd for months while the suite either went red unnoticed or passed
 # vacuously. A public repo's nightly job should not hold a live brokerage key for work that needs
 # a few canned GETs.
@@ -29,8 +29,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       DRY_RUN: "true" # never place real orders in evals
-      BROKER_FAKE: "true" # canned broker wire; refused unless DRY_RUN=true
-      TRADING212_ENV: "demo" # memory rows are scoped to demo, never live
+      BROKER_FAKE: "true" # canned broker wire; refused unless DRY_RUN=true and TRADING212_ENV=demo
+      TRADING212_ENV: "demo" # memory rows are scoped to demo, never live; the fake requires it
       AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
       FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
       EXA_API_KEY: ${{ secrets.EXA_API_KEY }}
