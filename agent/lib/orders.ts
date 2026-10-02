@@ -11,6 +11,7 @@ import {
 import { T212Error, type BrokerAccountSnapshot, type T212Order } from "./t212.ts";
 import type { RiskState } from "./state.ts";
 import { etDateString } from "./clock.ts";
+import { redact } from "./redact.ts";
 import type { FxResolution } from "./fx.ts";
 
 /**
@@ -204,87 +205,118 @@ export async function evaluateAndExecute(
     cashShortfall,
   };
 
-  for (const order of accepted) {
+  for (const [i, order] of accepted.entries()) {
     const proposal = order as Proposal;
 
-    if (pending.some((o) => o.ticker === proposal.ticker)) {
-      result.placed.push({
-        proposal,
-        quantity: 0,
-        dryRun,
-        skipped: "a pending order already exists for this ticker",
-      });
-      continue;
-    }
-
-    const intentKey = `${etDateString(new Date())}:${proposal.ticker}:${proposal.side}:${proposal.notional}`;
-    if (hasOrderIntent && (await hasOrderIntent(intentKey))) {
-      result.placed.push({
-        proposal,
-        quantity: 0,
-        dryRun,
-        skipped: "duplicate: order intent already recorded this cycle",
-      });
-      continue;
-    }
-
-    let sizingPrice = proposal.price;
-    if (proposal.side === "BUY") {
-      if (!resolvePrice) {
-        result.rejected.push({
+    try {
+      if (pending.some((o) => o.ticker === proposal.ticker)) {
+        result.placed.push({
           proposal,
-          reason: `no live price resolver configured for ${proposal.ticker}`,
+          quantity: 0,
+          dryRun,
+          skipped: "a pending order already exists for this ticker",
         });
         continue;
       }
-      let serverPrice: number;
-      try {
-        serverPrice = await resolvePrice(proposal.ticker);
-      } catch (err) {
-        result.rejected.push({
+
+      const intentKey = `${etDateString(new Date())}:${proposal.ticker}:${proposal.side}:${proposal.notional}`;
+      if (hasOrderIntent && (await hasOrderIntent(intentKey))) {
+        result.placed.push({
           proposal,
-          reason: `could not fetch live price for ${proposal.ticker}: ${
-            err instanceof Error ? err.message : String(err)
-          }`,
+          quantity: 0,
+          dryRun,
+          skipped: "duplicate: order intent already recorded this cycle",
         });
         continue;
       }
-      const deviation = Math.abs(proposal.price - serverPrice) / serverPrice;
-      if (deviation > PRICE_DEVIATION_TOLERANCE) {
-        result.rejected.push({
-          proposal,
-          reason: `price mismatch: model $${proposal.price} vs live $${serverPrice}`,
-        });
+
+      let sizingPrice = proposal.price;
+      if (proposal.side === "BUY") {
+        if (!resolvePrice) {
+          result.rejected.push({
+            proposal,
+            reason: `no live price resolver configured for ${proposal.ticker}`,
+          });
+          continue;
+        }
+        let serverPrice: number;
+        try {
+          serverPrice = await resolvePrice(proposal.ticker);
+        } catch (err) {
+          result.rejected.push({
+            proposal,
+            reason: `could not fetch live price for ${proposal.ticker}: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          });
+          continue;
+        }
+        const deviation = Math.abs(proposal.price - serverPrice) / serverPrice;
+        if (deviation > PRICE_DEVIATION_TOLERANCE) {
+          result.rejected.push({
+            proposal,
+            reason: `price mismatch: model $${proposal.price} vs live $${serverPrice}`,
+          });
+          continue;
+        }
+        sizingPrice = serverPrice;
+      }
+
+      const magnitude = notionalToShares(proposal.notional, sizingPrice, fxRate);
+      const sign = proposal.side === "SELL" ? -1 : 1;
+
+      if (dryRun) {
+        const qty = roundQuantity(magnitude, DEFAULT_QUANTITY_PRECISION);
+        result.placed.push({ proposal, quantity: sign * qty, dryRun: true });
         continue;
       }
-      sizingPrice = serverPrice;
-    }
 
-    const magnitude = notionalToShares(proposal.notional, sizingPrice, fxRate);
-    const sign = proposal.side === "SELL" ? -1 : 1;
-
-    if (dryRun) {
-      const qty = roundQuantity(magnitude, DEFAULT_QUANTITY_PRECISION);
-      result.placed.push({ proposal, quantity: sign * qty, dryRun: true });
-      continue;
-    }
-
-    // The marker goes down BEFORE the order is sent. Written after, a process killed between
-    // the broker accepting a market order and the marker landing leaves neither a pending order
-    // nor a marker, and a re-run places the trade twice. Written first, the worst case is
-    // over-blocking: an order that then fails keeps its marker and cannot be retried until the
-    // next ET day. That is the right way for this path to fail.
-    if (recordOrderIntent) await recordOrderIntent(intentKey);
-    const outcome = await placeWithPrecision(client, proposal.ticker, magnitude, sign);
-    if ("skipped" in outcome) {
-      result.placed.push({ proposal, quantity: 0, dryRun: false, skipped: outcome.skipped });
-    } else {
-      result.placed.push({
-        proposal,
-        quantity: outcome.quantity,
-        dryRun: false,
-        order: outcome.order,
-      });
+      // The marker goes down BEFORE the order is sent. Written after, a process killed between
+      // the broker accepting a market order and the marker landing leaves neither a pending order
+      // nor a marker, and a re-run places the trade twice. Written first, the worst case is
+      // over-blocking: an order that then fails keeps its marker and cannot be retried until the
+      // next ET day. That is the right way for this path to fail.
+      if (recordOrderIntent) {
+        // The read above already showed this order has not gone out, so a failed write only
+        // costs a later re-run its duplicate protection. Refusing the order instead would let a
+        // Convex blip block every order, exits included.
+        try {
+          await recordOrderIntent(intentKey);
+        } catch (err) {
+          console.warn(
+            `[orders] intent marker ${intentKey} not saved; placing without it:`,
+            redact(err instanceof Error ? err.message : String(err)),
+          );
+        }
+      }
+      const outcome = await placeWithPrecision(client, proposal.ticker, magnitude, sign);
+      if ("skipped" in outcome) {
+        result.placed.push({ proposal, quantity: 0, dryRun: false, skipped: outcome.skipped });
+      } else {
+        result.placed.push({
+          proposal,
+          quantity: outcome.quantity,
+          dryRun: false,
+          order: outcome.order,
+        });
+      }
+    } catch (err) {
+      // Per-order rejections were already turned into skips, so a throw here is an infra failure
+      // (network, 5xx, exhausted rate-limit backoff, a Convex read). It is contained so the orders
+      // already placed in this batch still reach the caller's recordTrade, then the batch stops:
+      // later orders would meet the same failure. A throw from placeWithPrecision is ambiguous,
+      // since the broker may have accepted the order before the connection failed. The intent
+      // marker written first stops a re-run from duplicating it, and this entry puts the doubt in
+      // the cycle report.
+      const detail = redact(err instanceof Error ? err.message : String(err));
+      result.rejected.push({ proposal, reason: `not placed: broker error: ${detail}` });
+      for (const rest of accepted.slice(i + 1)) {
+        result.rejected.push({
+          proposal: rest as Proposal,
+          reason: `not placed: batch stopped after a broker error on ${proposal.ticker}`,
+        });
+      }
+      break;
     }
   }
 

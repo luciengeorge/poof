@@ -4,6 +4,8 @@ import { evaluateAndExecute, type OrderExecClient, type Proposal } from "./order
 import { T212Error, type CashBalance, type T212Position, type T212Order } from "./t212.ts";
 import { etDateString } from "./clock.ts";
 import { DEFAULT_LIMITS } from "./risk.ts";
+import type { TradeRecord } from "./memory.ts";
+import { submitOrders } from "../tools/submit_orders.ts";
 
 // Order-mechanics tests size at 5% of a 10,000 equity. The live floor is a sizing POLICY
 // (pinned in risk.test.ts); these tests are about execution, so they state their own limits.
@@ -368,6 +370,129 @@ test("order intent: a failed placement still blocks a same-day retry (the accept
   assert.match(retry.placed[0].skipped ?? "", /duplicate: order intent already recorded/);
 });
 
+function proposal(ticker: string): Proposal {
+  return { ticker, side: "BUY", notional: 500, price: 100, thesis: "t" };
+}
+
+// Fills AAPL, then the connection drops on MSFT. Records every ticker it was asked to place.
+function failsOnSecondOrder(): { client: OrderExecClient; attempted: string[] } {
+  const attempted: string[] = [];
+  const { client } = fakeClient();
+  return {
+    attempted,
+    client: {
+      ...client,
+      async placeMarketOrder(input) {
+        attempted.push(input.ticker);
+        if (input.ticker === "MSFT_US_EQ") throw new Error("fetch failed");
+        return { id: attempted.length, ticker: input.ticker, quantity: input.quantity } as T212Order;
+      },
+    },
+  };
+}
+
+const THREE_BUYS = [proposal("AAPL_US_EQ"), proposal("MSFT_US_EQ"), proposal("NVDA_US_EQ")];
+
+test("a throw mid-batch keeps the order already filled and stops the batch", async () => {
+  const { client, attempted } = failsOnSecondOrder();
+  const res = await evaluateAndExecute(THREE_BUYS, {
+    client,
+    fx: FX,
+    dryRun: false,
+    limits: TEST_LIMITS,
+    resolveRiskState: async () => noState,
+    resolvePrice: async () => 100,
+  });
+  // The filled order is still reported, so the caller can book it.
+  assert.equal(res.placed.length, 1);
+  assert.equal(res.placed[0].proposal.ticker, "AAPL_US_EQ");
+  assert.ok(res.placed[0].order && !res.placed[0].skipped);
+  // The throwing order is surfaced, and nothing is tried after an infra failure.
+  assert.deepEqual(attempted, ["AAPL_US_EQ", "MSFT_US_EQ"]);
+  assert.deepEqual(
+    res.rejected.map((r) => [r.proposal.ticker, r.reason]),
+    [
+      ["MSFT_US_EQ", "not placed: broker error: fetch failed"],
+      ["NVDA_US_EQ", "not placed: batch stopped after a broker error on MSFT_US_EQ"],
+    ],
+  );
+});
+
+test("submit_orders books the filled order in trades when a later order throws", async () => {
+  // The invariant end to end: anything the broker accepted reaches recordTrade.
+  const { client } = failsOnSecondOrder();
+  const trades: TradeRecord[] = [];
+  const res = await submitOrders(THREE_BUYS, {
+    client,
+    memory: {
+      listExternalHoldings: async () => [],
+      hasOrderIntent: async () => false,
+      recordOrderIntent: async () => {},
+      recordTrade: async (t) => {
+        trades.push(t);
+      },
+      recordCoreOrder: async () => {},
+    },
+    env: "live",
+    fx: FX,
+    dryRun: false,
+    resolveRiskState: async () => noState,
+    resolvePrice: async () => 100,
+    limits: TEST_LIMITS,
+    jev: null,
+  });
+  assert.deepEqual(
+    trades.map((t) => [t.ticker, t.status]),
+    [["AAPL_US_EQ", "placed"]],
+  );
+  assert.match(
+    res.rejected.find((r) => r.proposal.ticker === "MSFT_US_EQ")?.reason ?? "",
+    /^not placed: broker error: /,
+  );
+});
+
+test("a Convex error caught mid-batch has its secret redacted before it reaches the report", async () => {
+  // Convex's argument validator prints the whole argument object, token included, into its error.
+  const { client, placed } = fakeClient();
+  const res = await evaluateAndExecute([buy(500)], {
+    client,
+    fx: FX,
+    dryRun: false,
+    limits: TEST_LIMITS,
+    resolveRiskState: async () => noState,
+    resolvePrice: async () => 100,
+    hasOrderIntent: async () => {
+      throw new Error('ArgumentValidationError: {token: "s3cr3t-shared-value", env: "live"}');
+    },
+  });
+  assert.equal(placed.length, 0);
+  assert.equal(res.rejected.length, 1);
+  assert.match(res.rejected[0].reason, /^not placed: broker error: /);
+  assert.doesNotMatch(res.rejected[0].reason, /s3cr3t-shared-value/);
+  assert.match(res.rejected[0].reason, /\[REDACTED\]/);
+});
+
+test("a throw while saving the intent marker does not stop an accepted order", async () => {
+  // Losing the marker costs this order its duplicate protection. Losing the order costs more.
+  const { client, placed } = fakeClient();
+  const res = await evaluateAndExecute([buy(500)], {
+    client,
+    fx: FX,
+    dryRun: false,
+    limits: TEST_LIMITS,
+    resolveRiskState: async () => noState,
+    resolvePrice: async () => 100,
+    hasOrderIntent: async () => false,
+    recordOrderIntent: async () => {
+      throw new Error("convex write failed");
+    },
+  });
+  assert.equal(placed.length, 1);
+  assert.equal(res.placed.length, 1);
+  assert.ok(res.placed[0].order && !res.placed[0].skipped);
+  assert.deepEqual(res.rejected, []);
+});
+
 test("BUY rejected fail-closed when resolvePrice throws", async () => {
   const { client, placed } = fakeClient();
   const res = await evaluateAndExecute([buy(500)], {
@@ -444,7 +569,7 @@ test("T212 per-order rejection: one bad order doesn't abort the rest of the batc
   assert.match(bad?.skipped ?? "", /T212 rejected/i);
 });
 
-test("non-T212 / 5xx errors still throw: infra failures aren't swallowed as skips", async () => {
+test("non-T212 / 5xx errors are reported as broker errors: infra failures aren't swallowed as skips", async () => {
   const { client } = fakeClient();
   const failing: OrderExecClient = {
     ...client,
@@ -452,15 +577,18 @@ test("non-T212 / 5xx errors still throw: infra failures aren't swallowed as skip
       throw new T212Error(500, "internal server error");
     },
   };
-  await assert.rejects(
-    evaluateAndExecute([buy(500)], {
-      client: failing,
-      fx: FX,
-      dryRun: false,
-      limits: TEST_LIMITS,
-      resolveRiskState: async () => noState,
-      resolvePrice: async () => 100,
-    }),
+  const res = await evaluateAndExecute([buy(500)], {
+    client: failing,
+    fx: FX,
+    dryRun: false,
+    limits: TEST_LIMITS,
+    resolveRiskState: async () => noState,
+    resolvePrice: async () => 100,
+  });
+  assert.equal(res.placed.length, 0);
+  assert.deepEqual(
+    res.rejected.map((r) => r.reason),
+    ["not placed: broker error: Trading 212 API error 500: internal server error"],
   );
 });
 
