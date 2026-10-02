@@ -333,3 +333,135 @@ test("memoryFromEnv uses an injected client when provided", () => {
     else delete process.env.CONVEX_APP_SECRET;
   }
 });
+
+// Convex's argument validator prints the whole argument object, token included. Captured on the
+// dev deployment with a fake token; this value is fake too.
+const FAKE_SECRET = "FAKE_TOKEN_abc123XYZ_not_a_real_secret";
+const VALIDATOR_ERROR = [
+  "ArgumentValidationError: Object is missing the required field `schedule`. Consider wrapping the field validator in `v.optional(...)` if this is expected.",
+  "",
+  `Object: {token: "${FAKE_SECRET}"}`,
+  "Validator: v.object({schedule: v.string(), token: v.string()})",
+].join("\n");
+
+class FakeConvexError extends Error {
+  readonly data: { code: string };
+  constructor(message: string, data: { code: string }) {
+    super(message);
+    this.name = "FakeConvexError";
+    this.data = data;
+  }
+}
+
+function failingClient(reason: unknown): ConvexLike {
+  return {
+    async mutation() {
+      throw reason;
+    },
+    async query() {
+      throw reason;
+    },
+  };
+}
+
+async function rejection(p: Promise<unknown>): Promise<unknown> {
+  try {
+    await p;
+  } catch (err) {
+    return err;
+  }
+  assert.fail("expected the call to reject");
+}
+
+function assertRedacted(err: unknown): void {
+  assert.ok(err instanceof Error, `expected an Error, got ${typeof err}`);
+  assert.equal(err.message.includes(FAKE_SECRET), false, err.message);
+  assert.match(err.message, /ArgumentValidationError/);
+  assert.match(err.message, /^Validator: v\.object/m);
+}
+
+async function withAppSecret(value: string | undefined, fn: () => Promise<void>): Promise<void> {
+  const prev = process.env.CONVEX_APP_SECRET;
+  if (value === undefined) delete process.env.CONVEX_APP_SECRET;
+  else process.env.CONVEX_APP_SECRET = value;
+  try {
+    await fn();
+  } finally {
+    if (prev !== undefined) process.env.CONVEX_APP_SECRET = prev;
+    else delete process.env.CONVEX_APP_SECRET;
+  }
+}
+
+test("a failing query rejects with the token redacted from the Convex validator error", async () => {
+  await withAppSecret(FAKE_SECRET, async () => {
+    const m = new Memory(failingClient(new Error(VALIDATOR_ERROR)), FAKE_SECRET);
+    assertRedacted(await rejection(m.openBuys("live")));
+  });
+});
+
+test("a failing query is redacted by the token-field pattern when CONVEX_APP_SECRET is unset", async () => {
+  await withAppSecret(undefined, async () => {
+    const m = new Memory(failingClient(new Error(VALIDATOR_ERROR)), FAKE_SECRET);
+    assertRedacted(await rejection(m.openBuys("live")));
+  });
+});
+
+test("a failing mutation rejects with the token redacted", async () => {
+  await withAppSecret(undefined, async () => {
+    const m = new Memory(failingClient(new Error(VALIDATOR_ERROR)), FAKE_SECRET);
+    assertRedacted(await rejection(m.recordTrade(trade)));
+  });
+});
+
+test("a redacted Convex error is the same object, class and fields intact, with its stack redacted too", async () => {
+  await withAppSecret(undefined, async () => {
+    const thrown = new FakeConvexError(VALIDATOR_ERROR, { code: "BadArgs" });
+    assert.ok(thrown.stack?.includes(FAKE_SECRET)); // or the stack check below proves nothing
+    const m = new Memory(failingClient(thrown), FAKE_SECRET);
+
+    const caught = await rejection(m.openBuys("live"));
+
+    assert.equal(caught, thrown);
+    assert.ok(caught instanceof FakeConvexError);
+    assert.deepEqual(caught.data, { code: "BadArgs" });
+    assertRedacted(caught);
+    assert.equal(typeof caught.stack, "string");
+    assert.equal(caught.stack?.includes(FAKE_SECRET), false, caught.stack);
+    assert.match(caught.stack ?? "", /ArgumentValidationError/);
+  });
+});
+
+test("a non-Error rejection is rethrown as an Error with the token redacted", async () => {
+  await withAppSecret(undefined, async () => {
+    const m = new Memory(failingClient(VALIDATOR_ERROR), FAKE_SECRET);
+    assertRedacted(await rejection(m.openBuys("live")));
+    assertRedacted(await rejection(m.recordTrade(trade)));
+  });
+});
+
+test("a successful call resolves with the client's value and sends { token, ...args } unchanged", async () => {
+  // The secret is set to the very token sent, so redacting args or results would show here.
+  await withAppSecret(TOKEN, async () => {
+    const queried = [{ _id: "t1", note: `token: "${TOKEN}"` }];
+    const calls: { kind: "mutation" | "query"; args: Record<string, unknown> }[] = [];
+    const client: ConvexLike = {
+      async mutation(_ref, args) {
+        calls.push({ kind: "mutation", args });
+        return TOKEN;
+      },
+      async query(_ref, args) {
+        calls.push({ kind: "query", args });
+        return queried;
+      },
+    };
+    const m = new Memory(client, TOKEN);
+
+    assert.equal(await m.openBuys("live"), queried);
+    assert.deepEqual(queried, [{ _id: "t1", note: `token: "${TOKEN}"` }]);
+    assert.equal(await m.recordTrade(trade), TOKEN);
+    assert.deepEqual(calls, [
+      { kind: "query", args: { token: TOKEN, env: "live" } },
+      { kind: "mutation", args: { token: TOKEN, ...trade } },
+    ]);
+  });
+});

@@ -3,6 +3,7 @@ import type { Edit, MemoryRow } from "../../convex/memoryPolicy.ts";
 import { anyApi, type FunctionReference } from "convex/server";
 import { timeoutFetch } from "./fetch-timeout.ts";
 import type { FxSource } from "./fx.ts";
+import { redact } from "./redact.ts";
 
 /** Minimal Convex client surface the memory layer needs (injectable for tests). */
 export interface ConvexLike {
@@ -273,6 +274,17 @@ const ref = (name: string) =>
   fns[name] as unknown as FunctionReference<"mutation"> &
     FunctionReference<"query">;
 
+// Convex's argument validator prints the whole argument object into its error, token included,
+// and eve hands a thrown tool error to the model as text. Every agent Convex call passes through
+// Memory.query and Memory.mutation, so this is the one place to redact. An Error is redacted in
+// place and rethrown as the same object, so its class and extra fields survive.
+function redacted(err: unknown): Error {
+  if (!(err instanceof Error)) return new Error(redact(String(err)));
+  err.message = redact(err.message);
+  if (typeof err.stack === "string") err.stack = redact(err.stack);
+  return err;
+}
+
 export class Memory {
   private readonly client: ConvexLike;
   private readonly token: string;
@@ -282,17 +294,25 @@ export class Memory {
     this.token = token;
   }
 
-  private mutation(
+  private async mutation(
     name: string,
     args: Record<string, unknown>,
   ): Promise<unknown> {
-    return this.client.mutation(ref(name), { token: this.token, ...args });
+    try {
+      return await this.client.mutation(ref(name), { token: this.token, ...args });
+    } catch (err) {
+      throw redacted(err);
+    }
   }
-  private query(
+  private async query(
     name: string,
     args: Record<string, unknown>,
   ): Promise<unknown> {
-    return this.client.query(ref(name), { token: this.token, ...args });
+    try {
+      return await this.client.query(ref(name), { token: this.token, ...args });
+    } catch (err) {
+      throw redacted(err);
+    }
   }
 
   recordTrade(t: TradeRecord): Promise<unknown> {
