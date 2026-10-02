@@ -1,6 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { T212Client, T212Error, type T212Config } from "./t212.ts";
+import {
+  T212Client,
+  T212Error,
+  resetT212Singleton,
+  t212FromEnv,
+  type T212Config,
+} from "./t212.ts";
+import { FAKE_CASH } from "./t212-fake.ts";
 
 // Records requests and returns a canned Response.
 function fakeFetch(
@@ -288,4 +295,122 @@ test("getPendingOrders is never cached: repeated calls always refetch", async ()
   await client.getPendingOrders();
   await client.getPendingOrders();
   assert.equal(f.calls.length, 2);
+});
+
+// --- t212FromEnv: BROKER_FAKE and its DRY_RUN interlock ---
+
+const BROKER_ENV_KEYS = [
+  "BROKER_FAKE",
+  "DRY_RUN",
+  "TRADING212_ENV",
+  "TRADING212_API_KEY",
+  "TRADING212_API_SECRET",
+  "TRADING212_SECRET_KEY",
+] as const;
+type BrokerEnv = Partial<Record<(typeof BROKER_ENV_KEYS)[number], string>>;
+
+/**
+ * Run `fn` with exactly `vars` set among the broker env keys (the rest deleted), restoring the
+ * prior values after. The client singleton is module-level, so it is cleared on the way in and
+ * out: a fake memoised here must never leak into a later test.
+ */
+async function withBrokerEnv(vars: BrokerEnv, fn: () => Promise<void> | void) {
+  const prev = BROKER_ENV_KEYS.map((k) => [k, process.env[k]] as const);
+  for (const k of BROKER_ENV_KEYS) {
+    const v = vars[k];
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
+  resetT212Singleton();
+  try {
+    await fn();
+  } finally {
+    for (const [k, v] of prev) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    resetT212Singleton();
+  }
+}
+
+/** Fail the test if anything reaches the global fetch while `fn` runs. */
+async function withNetworkTripwire(fn: () => Promise<void>) {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    throw new Error(`network reached: ${String(input)}`);
+  }) as typeof fetch;
+  try {
+    await fn();
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
+test("BROKER_FAKE=true with DRY_RUN=true serves the fake with no credential set, memoised", async () => {
+  await withBrokerEnv({ BROKER_FAKE: "true", DRY_RUN: "true" }, () =>
+    withNetworkTripwire(async () => {
+      const client = t212FromEnv();
+      assert.deepEqual(await client.getCash(), FAKE_CASH);
+      assert.equal(t212FromEnv(), client, "one client, one snapshot cache, per process");
+    }),
+  );
+});
+
+test("BROKER_FAKE=true with DRY_RUN=false THROWS: no fake balance while real orders are armed", async () => {
+  await withBrokerEnv(
+    { BROKER_FAKE: "true", DRY_RUN: "false", TRADING212_API_KEY: "KEY", TRADING212_API_SECRET: "SECRET" },
+    () => {
+      assert.throws(() => t212FromEnv(), /DRY_RUN/);
+    },
+  );
+});
+
+test("a fake memoised under DRY_RUN=true is refused once DRY_RUN=false", async () => {
+  await withBrokerEnv({ BROKER_FAKE: "true", DRY_RUN: "true" }, () => {
+    t212FromEnv();
+    process.env.DRY_RUN = "false";
+    assert.throws(() => t212FromEnv(), /DRY_RUN/);
+  });
+});
+
+test("BROKER_FAKE=true with TRADING212_ENV=live is still the fake, and no live host is contacted", async () => {
+  await withBrokerEnv(
+    {
+      BROKER_FAKE: "true",
+      DRY_RUN: "true",
+      TRADING212_ENV: "live",
+      TRADING212_API_KEY: "KEY",
+      TRADING212_API_SECRET: "SECRET",
+    },
+    () =>
+      withNetworkTripwire(async () => {
+        assert.deepEqual(await t212FromEnv().getCash(), FAKE_CASH);
+      }),
+  );
+});
+
+test("BROKER_FAKE unset with credentials is the real client, through the injected fetchImpl", async () => {
+  await withBrokerEnv(
+    { TRADING212_API_KEY: "KEY", TRADING212_SECRET_KEY: "SECRET", TRADING212_ENV: "demo" },
+    async () => {
+      const f = fakeFetch(() => ({ body: { free: 42 } }));
+      const cash = await t212FromEnv(f.fn).getCash();
+      assert.equal(cash.free, 42);
+      assert.equal(f.calls[0].url, "https://demo.trading212.com/api/v0/equity/account/cash");
+      const headers = f.calls[0].init.headers as Record<string, string>;
+      assert.equal(headers.Authorization, "Basic " + Buffer.from("KEY:SECRET").toString("base64"));
+    },
+  );
+});
+
+test("BROKER_FAKE unset, or anything but the exact string true, without credentials keeps the original error", async () => {
+  for (const flag of [undefined, "1", "TRUE", "yes"]) {
+    await withBrokerEnv({ BROKER_FAKE: flag, DRY_RUN: "true" }, () => {
+      assert.throws(
+        () => t212FromEnv(),
+        /TRADING212_API_KEY and TRADING212_API_SECRET \(or TRADING212_SECRET_KEY\) must be set/,
+        `BROKER_FAKE=${String(flag)}`,
+      );
+    });
+  }
 });
