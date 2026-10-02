@@ -151,6 +151,7 @@ export interface ExecuteOpts {
    * Durable per-cycle intent marker (Convex-backed), guarding against duplicate placement
    * when a step re-runs after a market order has already filled and vanished from pending.
    * Both optional: if absent, behaves exactly as today (no marker, no dedupe beyond pending).
+   * If either throws, a BUY is refused and a SELL goes ahead without the guard.
    */
   hasOrderIntent?: (key: string) => Promise<boolean>;
   recordOrderIntent?: (key: string) => Promise<void>;
@@ -223,6 +224,28 @@ export async function evaluateAndExecute(
     cashShortfall,
   };
 
+  // The duplicate guard itself failing (its Convex read or write throws) is handled by side; the
+  // comment on the intent write below says why. Returns true when the order must not be placed.
+  const refusedForGuardFailure = (
+    proposal: Proposal,
+    step: "read" | "write",
+    err: unknown,
+  ): boolean => {
+    const detail = redact(err instanceof Error ? err.message : String(err));
+    if (proposal.side === "BUY") {
+      result.rejected.push({
+        proposal,
+        reason: `not placed: duplicate guard unavailable: ${detail}`,
+      });
+      return true;
+    }
+    console.warn(
+      `[orders] intent ${step} failed for SELL ${proposal.ticker}; selling without the guard:`,
+      detail,
+    );
+    return false;
+  };
+
   for (const [i, order] of accepted.entries()) {
     const proposal = order as Proposal;
 
@@ -238,7 +261,15 @@ export async function evaluateAndExecute(
       }
 
       const intentKey = intentKeyOf(proposal);
-      if (hasOrderIntent && (await hasOrderIntent(intentKey))) {
+      let intentRecorded = false;
+      if (hasOrderIntent) {
+        try {
+          intentRecorded = await hasOrderIntent(intentKey);
+        } catch (err) {
+          if (refusedForGuardFailure(proposal, "read", err)) continue;
+        }
+      }
+      if (intentRecorded) {
         result.placed.push({
           proposal,
           quantity: 0,
@@ -263,9 +294,9 @@ export async function evaluateAndExecute(
         } catch (err) {
           result.rejected.push({
             proposal,
-            reason: `could not fetch live price for ${proposal.ticker}: ${
-              err instanceof Error ? err.message : String(err)
-            }`,
+            reason: `could not fetch live price for ${proposal.ticker}: ${redact(
+              err instanceof Error ? err.message : String(err),
+            )}`,
           });
           continue;
         }
@@ -294,17 +325,17 @@ export async function evaluateAndExecute(
       // nor a marker, and a re-run places the trade twice. Written first, the worst case is
       // over-blocking: an order that then fails keeps its marker and cannot be retried until the
       // next ET day. That is the right way for this path to fail.
+      //
+      // If the guard cannot be read or written, a BUY is refused and a SELL is sent without it.
+      // A duplicate BUY is the hazard this guard exists for, and a refused BUY just waits a cycle
+      // (the same rule as fundFromCore's "no marker, no sale"). A duplicate SELL cannot oversell,
+      // since an ISA cannot short and Trading 212 rejects selling shares not held, while a
+      // stop-loss blocked by a Convex blip is the worse failure.
       if (recordOrderIntent) {
-        // The read above already showed this order has not gone out, so a failed write only
-        // costs a later re-run its duplicate protection. Refusing the order instead would let a
-        // Convex blip block every order, exits included.
         try {
           await recordOrderIntent(intentKey);
         } catch (err) {
-          console.warn(
-            `[orders] intent marker ${intentKey} not saved; placing without it:`,
-            redact(err instanceof Error ? err.message : String(err)),
-          );
+          if (refusedForGuardFailure(proposal, "write", err)) continue;
         }
       }
       const outcome = await placeWithPrecision(client, proposal.ticker, magnitude, sign);
@@ -320,12 +351,12 @@ export async function evaluateAndExecute(
       }
     } catch (err) {
       // Per-order rejections were already turned into skips, so a throw here is an infra failure
-      // (network, 5xx, exhausted rate-limit backoff, a Convex read). It is contained so the orders
-      // already placed in this batch still reach the caller's recordTrade, then the batch stops:
-      // later orders would meet the same failure. A throw from placeWithPrecision is ambiguous,
-      // since the broker may have accepted the order before the connection failed. The intent
-      // marker written first stops a re-run from duplicating it, and this entry puts the doubt in
-      // the cycle report.
+      // (network, 5xx, exhausted rate-limit backoff). It is contained so the orders already placed
+      // in this batch still reach the caller's recordTrade, then the batch stops: later orders
+      // would meet the same failure. A throw from placeWithPrecision is ambiguous, since the
+      // broker may have accepted the order before the connection failed. The intent marker
+      // written first stops a re-run from duplicating it, and this entry puts the doubt in the
+      // cycle report.
       const detail = redact(err instanceof Error ? err.message : String(err));
       result.rejected.push({ proposal, reason: `not placed: broker error: ${detail}` });
       for (const rest of accepted.slice(i + 1)) {

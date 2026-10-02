@@ -453,48 +453,6 @@ test("submit_orders books the filled order in trades when a later order throws",
   );
 });
 
-test("a Convex error caught mid-batch has its secret redacted before it reaches the report", async () => {
-  // Convex's argument validator prints the whole argument object, token included, into its error.
-  const { client, placed } = fakeClient();
-  const res = await evaluateAndExecute([buy(500)], {
-    client,
-    fx: FX,
-    dryRun: false,
-    limits: TEST_LIMITS,
-    resolveRiskState: async () => noState,
-    resolvePrice: async () => 100,
-    hasOrderIntent: async () => {
-      throw new Error('ArgumentValidationError: {token: "s3cr3t-shared-value", env: "live"}');
-    },
-  });
-  assert.equal(placed.length, 0);
-  assert.equal(res.rejected.length, 1);
-  assert.match(res.rejected[0].reason, /^not placed: broker error: /);
-  assert.doesNotMatch(res.rejected[0].reason, /s3cr3t-shared-value/);
-  assert.match(res.rejected[0].reason, /\[REDACTED\]/);
-});
-
-test("a throw while saving the intent marker does not stop an accepted order", async () => {
-  // Losing the marker costs this order its duplicate protection. Losing the order costs more.
-  const { client, placed } = fakeClient();
-  const res = await evaluateAndExecute([buy(500)], {
-    client,
-    fx: FX,
-    dryRun: false,
-    limits: TEST_LIMITS,
-    resolveRiskState: async () => noState,
-    resolvePrice: async () => 100,
-    hasOrderIntent: async () => false,
-    recordOrderIntent: async () => {
-      throw new Error("convex write failed");
-    },
-  });
-  assert.equal(placed.length, 1);
-  assert.equal(res.placed.length, 1);
-  assert.ok(res.placed[0].order && !res.placed[0].skipped);
-  assert.deepEqual(res.rejected, []);
-});
-
 test("manage_positions passes the intent guard and its exit key to the executor (structural)", () => {
   // The executor guards on `if (hasOrderIntent && ...)`, so a caller that omits the callbacks
   // gets no guard and no error. Unit tests on the executor stay green with the wiring missing;
@@ -566,6 +524,100 @@ test("exit intent: a second exit for the same ticker on the same day is suppress
   assert.match(aapl?.skipped ?? "", /duplicate: order intent already recorded/);
 });
 
+// Convex's argument validator prints the whole argument object, token included, into its error.
+const CONVEX_TOKEN_ERROR = 'ArgumentValidationError: {token: "s3cr3t-shared-value", env: "live"}';
+
+test("intent guard: a BUY whose marker cannot be saved is not sent, and the batch carries on", async () => {
+  // Fail closed for BUYs: a duplicate BUY is the hazard the guard exists for, and a refused BUY
+  // just waits a cycle.
+  const { client, placed } = fakeClient();
+  const res = await evaluateAndExecute([proposal("AAPL_US_EQ"), proposal("MSFT_US_EQ")], {
+    client,
+    fx: FX,
+    dryRun: false,
+    limits: TEST_LIMITS,
+    resolveRiskState: async () => noState,
+    resolvePrice: async () => 100,
+    hasOrderIntent: async () => false,
+    recordOrderIntent: async (key) => {
+      if (key.includes(":AAPL_US_EQ:")) throw new Error(CONVEX_TOKEN_ERROR);
+    },
+  });
+  assert.deepEqual(
+    placed.map((o) => o.ticker),
+    ["MSFT_US_EQ"],
+  );
+  assert.equal(res.rejected.length, 1);
+  assert.equal(res.rejected[0].proposal.ticker, "AAPL_US_EQ");
+  assert.match(res.rejected[0].reason, /^not placed: duplicate guard unavailable: /);
+  assert.doesNotMatch(res.rejected[0].reason, /s3cr3t-shared-value/);
+});
+
+test("intent guard: a BUY whose marker cannot be read is not sent, and the batch carries on", async () => {
+  const { client, placed } = fakeClient();
+  const res = await evaluateAndExecute([proposal("AAPL_US_EQ"), proposal("MSFT_US_EQ")], {
+    client,
+    fx: FX,
+    dryRun: false,
+    limits: TEST_LIMITS,
+    resolveRiskState: async () => noState,
+    resolvePrice: async () => 100,
+    hasOrderIntent: async (key) => {
+      if (key.includes(":AAPL_US_EQ:")) throw new Error(CONVEX_TOKEN_ERROR);
+      return false;
+    },
+    recordOrderIntent: async () => {},
+  });
+  assert.deepEqual(
+    placed.map((o) => o.ticker),
+    ["MSFT_US_EQ"],
+  );
+  assert.equal(res.rejected.length, 1);
+  assert.equal(res.rejected[0].proposal.ticker, "AAPL_US_EQ");
+  assert.match(res.rejected[0].reason, /^not placed: duplicate guard unavailable: /);
+  assert.doesNotMatch(res.rejected[0].reason, /s3cr3t-shared-value/);
+  assert.match(res.rejected[0].reason, /\[REDACTED\]/);
+});
+
+test("intent guard: a SELL whose marker cannot be saved is still sent", async () => {
+  // Fail open for SELLs: an ISA cannot short and Trading 212 rejects selling shares not held, so
+  // a duplicate SELL cannot oversell, while a blocked stop-loss is the worse failure.
+  const { client, placed } = fakeClient({ positions: [held("AAPL_US_EQ", 10)] });
+  const res = await evaluateAndExecute([exit("AAPL_US_EQ", 300)], {
+    client,
+    fx: FX,
+    dryRun: false,
+    resolveRiskState: async () => noState,
+    hasOrderIntent: async () => false,
+    recordOrderIntent: async () => {
+      throw new Error(CONVEX_TOKEN_ERROR);
+    },
+  });
+  assert.deepEqual(placed, [{ ticker: "AAPL_US_EQ", quantity: -3 }]);
+  assert.deepEqual(res.rejected, []);
+});
+
+test("intent guard: a SELL whose marker cannot be read is still sent, and later orders still run", async () => {
+  const { client, placed } = fakeClient({
+    positions: [held("AAPL_US_EQ", 10), held("MSFT_US_EQ", 10)],
+  });
+  const res = await evaluateAndExecute([exit("AAPL_US_EQ", 300), exit("MSFT_US_EQ", 200)], {
+    client,
+    fx: FX,
+    dryRun: false,
+    resolveRiskState: async () => noState,
+    hasOrderIntent: async () => {
+      throw new Error(CONVEX_TOKEN_ERROR);
+    },
+    recordOrderIntent: async () => {},
+  });
+  assert.deepEqual(placed, [
+    { ticker: "AAPL_US_EQ", quantity: -3 },
+    { ticker: "MSFT_US_EQ", quantity: -2 },
+  ]);
+  assert.deepEqual(res.rejected, []);
+});
+
 test("BUY rejected fail-closed when resolvePrice throws", async () => {
   const { client, placed } = fakeClient();
   const res = await evaluateAndExecute([buy(500)], {
@@ -582,6 +634,24 @@ test("BUY rejected fail-closed when resolvePrice throws", async () => {
   assert.equal(res.rejected.length, 1);
   assert.match(res.rejected[0].reason, /could not fetch live price/i);
   assert.equal(placed.length, 0);
+});
+
+test("a price-fetch failure has the Finnhub key redacted from its rejected reason", async () => {
+  // Finnhub takes its key as `?token=`, so a fetch error that echoes the URL carries it.
+  const { client } = fakeClient();
+  const res = await evaluateAndExecute([buy(500)], {
+    client,
+    fx: FX,
+    dryRun: false,
+    limits: TEST_LIMITS,
+    resolveRiskState: async () => noState,
+    resolvePrice: async () => {
+      throw new Error("GET https://finnhub.io/api/v1/quote?token=FAKE123&symbol=AAPL failed: 503");
+    },
+  });
+  assert.equal(res.rejected.length, 1);
+  assert.match(res.rejected[0].reason, /^could not fetch live price for AAPL_US_EQ: /);
+  assert.doesNotMatch(res.rejected[0].reason, /FAKE123/);
 });
 
 test("T212 per-order rejection: skipped with the rejection reason, not thrown", async () => {
