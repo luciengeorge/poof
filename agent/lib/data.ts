@@ -149,8 +149,11 @@ export class FinnhubProvider implements MarketDataProvider {
 
   constructor(cfg: FinnhubConfig) {
     this.apiKey = cfg.apiKey;
-    // Wrapped once here so every attempt in `get`, retries included, carries the deadline.
-    this.fetchImpl = timeoutFetch(cfg.timeoutMs ?? FINNHUB_TIMEOUT_MS, cfg.fetchImpl ?? fetch);
+    // The default fetch is looked up per request, not captured: finnhubFromEnv memoises this
+    // provider, and one holding a captured fetch would ignore a stub installed after it was built
+    // and reach the live API. Wrapped once so every attempt, retries included, has the deadline.
+    const fetchImpl: typeof fetch = cfg.fetchImpl ?? ((input, init) => fetch(input, init));
+    this.fetchImpl = timeoutFetch(cfg.timeoutMs ?? FINNHUB_TIMEOUT_MS, fetchImpl);
     this.callBudgetMs = cfg.callBudgetMs ?? FINNHUB_CALL_BUDGET_MS;
   }
 
@@ -257,8 +260,25 @@ export function mapCandles(raw: RawCandles): Candle[] {
   return candles.sort((a, b) => a.date.localeCompare(b.date));
 }
 
+/**
+ * Per-process singleton so every tool in one serverless invocation shares one provider, mirroring
+ * t212FromEnv and frankfurterFromEnv. Finnhub is the most called external service here and was the
+ * only one still constructing a fresh client per call site, which left nowhere for a shared request
+ * budget to live. Only memoised on the default path; callers that inject a fetchImpl (tests) always
+ * get a fresh provider.
+ */
+let providerSingleton: FinnhubProvider | null = null;
+
 export function finnhubFromEnv(fetchImpl?: typeof fetch): FinnhubProvider {
+  if (!fetchImpl && providerSingleton) return providerSingleton;
   const apiKey = process.env.FINNHUB_API_KEY;
   if (!apiKey) throw new Error("FINNHUB_API_KEY is not set");
-  return new FinnhubProvider({ apiKey, fetchImpl });
+  const p = new FinnhubProvider({ apiKey, fetchImpl });
+  if (!fetchImpl) providerSingleton = p;
+  return p;
+}
+
+/** Test hook: drop the per-process provider. Mirrors resetT212Singleton and resetFxCache. */
+export function resetFinnhubProvider(): void {
+  providerSingleton = null;
 }
