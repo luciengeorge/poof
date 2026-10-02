@@ -8,6 +8,7 @@ import {
   type OpenBuyTrade,
 } from "./positions.ts";
 import type { T212Position } from "./t212.ts";
+import { CORE_TICKER } from "./core.ts";
 
 function t212pos(over: Partial<T212Position> = {}): T212Position {
   return {
@@ -111,11 +112,54 @@ test("realizedStatsByTag: missing/unknown tags bucket under 'other'", () => {
   assert.equal(Object.keys(byTag).sort().join(","), "momentum,other");
 });
 
-test("orphanedOpenBuys: open buys not held anymore", () => {
-  const orphans = orphanedOpenBuys(
-    [buy({ _id: "held", ticker: "AAPL_US_EQ" }), buy({ _id: "gone", ticker: "TSLA_US_EQ" })],
-    [t212pos({ ticker: "AAPL_US_EQ" })],
+test("orphanedOpenBuys: an empty portfolio read with open BUYs is refused, and orphans nothing", () => {
+  // The regression: a failed read used to orphan, and so book closed, the whole open book.
+  const result = orphanedOpenBuys(
+    [
+      buy({ _id: "a", ticker: "AAPL_US_EQ" }),
+      buy({ _id: "b", ticker: "TSLA_US_EQ" }),
+      buy({ _id: "c", ticker: "NVDA_US_EQ" }),
+    ],
+    [],
+    new Set(),
   );
-  assert.equal(orphans.length, 1);
-  assert.equal(orphans[0]._id, "gone");
+  assert.ok(!result.reconcilable, "an empty read with open BUYs must be refused");
+  assert.equal("orphans" in result, false);
+  assert.match(result.reason, /empty portfolio while 3 BUY\(s\)/);
+});
+
+test("orphanedOpenBuys: an empty portfolio with no open BUYs is consistent, not refused", () => {
+  assert.deepEqual(orphanedOpenBuys([], [], new Set()), { reconcilable: true, orphans: [] });
+});
+
+test("orphanedOpenBuys: a portfolio holding only the index core still reconciles every stock", () => {
+  // The guard reads the RAW portfolio. Read through the core filter this would look empty and be
+  // refused every cycle, so stocks sold outside poof would never be reconciled.
+  const vrt = buy({ _id: "vrt", ticker: "VRT_US_EQ" });
+  const alk = buy({ _id: "alk", ticker: "ALK_US_EQ" });
+  assert.deepEqual(
+    orphanedOpenBuys([vrt, alk], [t212pos({ ticker: CORE_TICKER })], new Set()),
+    { reconcilable: true, orphans: [vrt, alk] },
+  );
+});
+
+test("orphanedOpenBuys: 2 held, 3 recorded orphans exactly the missing one", () => {
+  const gone = buy({ _id: "gone", ticker: "TSLA_US_EQ" });
+  const result = orphanedOpenBuys(
+    [buy({ _id: "aapl", ticker: "AAPL_US_EQ" }), gone, buy({ _id: "ge", ticker: "GE_US_EQ" })],
+    [t212pos({ ticker: "AAPL_US_EQ" }), t212pos({ ticker: "GE_US_EQ" })],
+    new Set(),
+  );
+  assert.deepEqual(result, { reconcilable: true, orphans: [gone] });
+});
+
+test("orphanedOpenBuys: a BUY with a pending order is not an orphan, though it is not held yet", () => {
+  const gone = buy({ _id: "gone", ticker: "TSLA_US_EQ" });
+  const result = orphanedOpenBuys(
+    [buy({ _id: "aapl", ticker: "AAPL_US_EQ" }), buy({ _id: "pending", ticker: "LLY_US_EQ" }), gone],
+    [t212pos({ ticker: "AAPL_US_EQ" })],
+    new Set(["LLY_US_EQ"]),
+  );
+  // TSLA, missing with nothing pending, is still orphaned: the exclusion is per ticker.
+  assert.deepEqual(result, { reconcilable: true, orphans: [gone] });
 });

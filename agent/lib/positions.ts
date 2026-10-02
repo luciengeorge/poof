@@ -176,11 +176,54 @@ export function realizedStatsByTag(
   return out;
 }
 
-/** Open BUY trades whose ticker is no longer held -> the position was closed elsewhere. */
+export type OrphanReconciliation =
+  | { reconcilable: true; orphans: OpenBuyTrade[] }
+  | { reconcilable: false; reason: string };
+
+/**
+ * Open BUY trades whose ticker is no longer held -> the position was closed elsewhere, and the
+ * caller books each one closed. Or a refusal, when this read cannot tell "sold" from "not seen".
+ *
+ * WHY IT REFUSES RATHER THAN GUESSING. An empty portfolio with open BUYs means either "everything
+ * was sold" or "the read failed and returned nothing", and nothing in the arguments tells the two
+ * apart. Guessing "sold" books the whole book closed in one cycle while the shares are still held,
+ * and with no `placed` row left, no stop-loss, trailing stop or max-hold manages them again. Same
+ * rule as `snapshot-not-atomic` in execution.ts: when the instrument cannot measure, skip the
+ * conclusion rather than publish a wrong one. A refusal costs an alert, never a position.
+ *
+ * `brokerPositions` must be the UNFILTERED broker read. The index core is always held, so an empty
+ * raw read is a failed read, while a read holding only the core means every stock really was sold.
+ * Testing the core-filtered list instead would refuse that real sell-off every cycle, forever.
+ *
+ * A BUY with a pending order has not reached the portfolio yet, so it is not an orphan. When the
+ * pending orders could not be read (`null`), no missing ticker can be ruled pending, so it refuses.
+ */
 export function orphanedOpenBuys(
   openBuys: OpenBuyTrade[],
-  positions: T212Position[],
-): OpenBuyTrade[] {
-  const held = new Set(positions.map((p) => p.ticker));
-  return openBuys.filter((b) => !held.has(b.ticker));
+  brokerPositions: T212Position[],
+  pendingTickers: ReadonlySet<string> | null,
+): OrphanReconciliation {
+  // Nothing recorded open is nothing to reconcile, whatever the broker said, so an account that
+  // genuinely holds nothing does not alert every cycle.
+  if (openBuys.length === 0) return { reconcilable: true, orphans: [] };
+  if (brokerPositions.length === 0) {
+    return {
+      reconcilable: false,
+      reason:
+        `the broker returned an empty portfolio while ${openBuys.length} BUY(s) are recorded ` +
+        "open; refusing to book them all closed on what may be a failed read",
+    };
+  }
+  if (pendingTickers === null) {
+    return {
+      reconcilable: false,
+      reason:
+        "pending orders could not be read, so an unfilled BUY cannot be told from a closed one",
+    };
+  }
+  const held = new Set(brokerPositions.map((p) => p.ticker));
+  return {
+    reconcilable: true,
+    orphans: openBuys.filter((b) => !held.has(b.ticker) && !pendingTickers.has(b.ticker)),
+  };
 }

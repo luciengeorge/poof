@@ -15,8 +15,10 @@ import {
 import {
   buildCloseTradeArgs,
   buildOrphanCloseTradeArgs,
+  type CloseTradeArgs,
 } from "../lib/order-bookkeeping.ts";
 import { isCore } from "../lib/core.ts";
+import { alert } from "../lib/alert.ts";
 
 /**
  * The positions the exit engine may sell and the open BUYs it may reconcile: never the index core.
@@ -24,17 +26,66 @@ import { isCore } from "../lib/core.ts";
  * index every month and a 10% stop would sell it in every correction. Both lists are filtered, the
  * open BUYs too, so a core row can never be booked as an orphan once its position is filtered out.
  * Exported as the test seam that proves this tool, not just a helper, applies the filter.
+ *
+ * `rawPositions` is the same read before the filter, for the orphan guard (see orphanedOpenBuys).
+ * `pendingTickers` is null when the pending orders could not be read: exits do not need them, so
+ * that failure must not stop a stop-loss firing. Reconciliation refuses instead.
  */
 export async function loadExitScope(
-  client: Pick<T212Client, "getPortfolio">,
+  client: Pick<T212Client, "getPortfolio" | "getPendingOrders">,
   memory: Pick<Memory, "openBuys">,
   env: Env,
-): Promise<{ positions: T212Position[]; openBuys: OpenBuyTrade[] }> {
-  const positions = (await client.getPortfolio()).filter((p) => !isCore(p.ticker));
+): Promise<{
+  positions: T212Position[];
+  rawPositions: T212Position[];
+  openBuys: OpenBuyTrade[];
+  pendingTickers: Set<string> | null;
+}> {
+  // Pending orders before the portfolio, so a BUY that fills between the two reads is still seen
+  // in one of them. The portfolio read is fresh: the client's short cache could predate the
+  // pending read, and a BUY filling in that gap would be in neither.
+  const pendingTickers = await client
+    .getPendingOrders()
+    .then((orders) => new Set(orders.map((o) => o.ticker)))
+    .catch((err: unknown) => {
+      console.warn("[t212] getPendingOrders failed; orphan reconciliation will refuse:", err);
+      return null;
+    });
+  const rawPositions = await client.getPortfolio({ fresh: true });
+  const positions = rawPositions.filter((p) => !isCore(p.ticker));
   const openBuys = (((await memory.openBuys(env)) ?? []) as OpenBuyTrade[]).filter(
     (b) => !isCore(b.ticker),
   );
-  return { positions, openBuys };
+  return { positions, rawPositions, openBuys, pendingTickers };
+}
+
+export type ReconciliationResult =
+  | { status: "reconciled"; closed: number }
+  | { status: "refused"; reason: string };
+
+/**
+ * Book each open BUY the broker no longer holds as closed, or, when the read cannot support that
+ * conclusion, close nothing and alert. Exported as the test seam that proves the tool honours a
+ * refusal: a unit test of orphanedOpenBuys alone cannot show that the caller does.
+ */
+export async function reconcileOrphans(args: {
+  openBuys: OpenBuyTrade[];
+  rawPositions: T212Position[];
+  pendingTickers: ReadonlySet<string> | null;
+  fxRate: number;
+  closeTrade: (a: CloseTradeArgs) => Promise<unknown>;
+  alert: (text: string) => Promise<void>;
+}): Promise<ReconciliationResult> {
+  const result = orphanedOpenBuys(args.openBuys, args.rawPositions, args.pendingTickers);
+  if (!result.reconcilable) {
+    await args.alert(
+      `manage_positions: orphan reconciliation refused, nothing closed: ${result.reason}`,
+    );
+    return { status: "refused", reason: result.reason };
+  }
+  const orphanArgs = buildOrphanCloseTradeArgs(result.orphans, args.fxRate);
+  await Promise.all(orphanArgs.map((a) => args.closeTrade(a)));
+  return { status: "reconciled", closed: orphanArgs.length };
 }
 
 export default defineTool({
@@ -47,7 +98,8 @@ export default defineTool({
     const fxRate = fx.rate;
     const dryRun = isDryRun();
     const memory = memoryFromEnv();
-    const { positions, openBuys } = await loadExitScope(client, memory, tradingEnv());
+    const scope = await loadExitScope(client, memory, tradingEnv());
+    const { positions, rawPositions, openBuys, pendingTickers } = scope;
 
     // Ratchet each held position's high-water mark up to the latest price, and persist it
     // so the trailing stop is durable across cycles. Best-effort: a memory failure must
@@ -106,13 +158,19 @@ export default defineTool({
         : { placed: [], rejected: [] };
 
     // Record realized P&L + close the originating BUY for each exit actually executed.
+    let reconciliation: ReconciliationResult | undefined;
     try {
       const closeArgs = buildCloseTradeArgs(result.placed, byTicker);
       await Promise.all(closeArgs.map((a) => memory.closeTrade(a)));
       // Reconcile: BUYs whose position is no longer held were closed elsewhere.
-      const orphans = orphanedOpenBuys(openBuys, positions);
-      const orphanArgs = buildOrphanCloseTradeArgs(orphans, fxRate);
-      await Promise.all(orphanArgs.map((a) => memory.closeTrade(a)));
+      reconciliation = await reconcileOrphans({
+        openBuys,
+        rawPositions,
+        pendingTickers,
+        fxRate,
+        closeTrade: (a) => memory.closeTrade(a),
+        alert,
+      });
     } catch (err) {
       console.warn("[memory] closeTrade reconciliation failed (non-fatal):", err);
     }
@@ -121,6 +179,7 @@ export default defineTool({
       exitsTriggered: signals,
       placed: result.placed,
       rejected: result.rejected,
+      reconciliation,
       dryRun,
       note:
         signals.length === 0 ? "no exit conditions met" : `${signals.length} exit(s)`,

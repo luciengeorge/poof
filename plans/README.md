@@ -29,7 +29,7 @@ instrument announces itself.
 | 003 | Stop failure payloads carrying the shared secret to Slack | P1 | S | 001 | DONE |
 | 004 | Stop `.env.example` reinstating the pre-#76 risk gate | P1 | S | 001 | DONE |
 | 005 | Never place an order twice, never lose one that filled | P1 | M | 001 | TODO |
-| 007 | Guard orphan reconciliation against an empty portfolio read | P1 | M | 001 | TODO |
+| 007 | Guard orphan reconciliation against an empty portfolio read | P1 | M | 001 | DONE |
 | 008 | Score funnel outcomes through Tiingo, not a 403 endpoint | P1 | M | 001 | DONE |
 | 009 | Make CI catch the two outages that shipped green | P1 | M | 001 | TODO |
 | 010 | Fix the evals workflow and make its failure loud | P1 | M | 001, 009 | TODO |
