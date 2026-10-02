@@ -3,11 +3,13 @@ import assert from "node:assert/strict";
 import { FinnhubProvider, FinnhubError, finnhubFromEnv, mapCandles } from "./data.ts";
 
 function fakeFetch(
-  handler: (url: string) => { status?: number; body?: unknown },
+  handler: (url: string) => { status?: number; body?: unknown; headers?: Record<string, string> },
 ) {
   const calls: string[] = [];
-  const fn = async (input: RequestInfo | URL) => {
+  const inits: (RequestInit | undefined)[] = [];
+  const fn = async (input: RequestInfo | URL, init?: RequestInit) => {
     calls.push(String(input));
+    inits.push(init);
     const r = handler(String(input));
     const bodyText =
       r.body === undefined
@@ -15,9 +17,22 @@ function fakeFetch(
         : typeof r.body === "string"
           ? r.body
           : JSON.stringify(r.body);
-    return new Response(bodyText, { status: r.status ?? 200 });
+    return new Response(bodyText, { status: r.status ?? 200, headers: r.headers });
   };
-  return { fn: fn as unknown as typeof fetch, calls };
+  return { fn: fn as unknown as typeof fetch, calls, inits };
+}
+
+/** A fetch that never resolves on its own; it settles only when aborted. */
+function hangingFetch() {
+  let aborted = false;
+  const fn = async (_input: RequestInfo | URL, init?: RequestInit) =>
+    new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => {
+        aborted = true;
+        reject(new DOMException("The operation was aborted.", "AbortError"));
+      });
+    });
+  return { fn: fn as unknown as typeof fetch, wasAborted: () => aborted };
 }
 
 // --- Task 1: scaffold + getQuote ---
@@ -63,6 +78,61 @@ test("retries once on 429 then resolves on 200", async () => {
   const q = await p.getQuote("AAPL");
   assert.equal(calls, 2);
   assert.deepEqual(q, { symbol: "AAPL", price: 110, prevClose: 100, changePct: 10 });
+});
+
+// --- deadlines ---
+
+test("a hanging Finnhub read is aborted at the deadline instead of waiting for ever", async () => {
+  const h = hangingFetch();
+  const p = new FinnhubProvider({ apiKey: "KEY", fetchImpl: h.fn, timeoutMs: 25 });
+  const startedAt = Date.now();
+  await assert.rejects(() => p.getQuote("AAPL"), /timed out after 25ms/);
+  assert.ok(h.wasAborted(), "the AbortSignal must have fired");
+  assert.ok(Date.now() - startedAt < 2_000, "must not have waited anywhere near the default");
+});
+
+test("every Finnhub attempt, the 429 retry included, carries an abort signal", async () => {
+  let n = 0;
+  const f = fakeFetch(() => {
+    n++;
+    if (n === 1) return { status: 429, body: "limit", headers: { "retry-after": "0.01" } };
+    return { body: { c: 110, pc: 100, dp: 10 } };
+  });
+  const p = new FinnhubProvider({ apiKey: "KEY", fetchImpl: f.fn });
+  await p.getQuote("AAPL");
+  assert.equal(f.inits.length, 2);
+  for (const init of f.inits) assert.ok(init?.signal instanceof AbortSignal);
+});
+
+test("a successful Finnhub read disarms its deadline", async () => {
+  // A deadline left armed after success would fire later on a finished request (and keep a warm
+  // serverless process holding a timer). Waiting past it and finding the signal unaborted proves
+  // the timer was cleared; merely completing several calls in a row would not.
+  const f = fakeFetch(() => ({ body: { c: 110, pc: 100, dp: 10 } }));
+  const p = new FinnhubProvider({ apiKey: "KEY", fetchImpl: f.fn, timeoutMs: 20 });
+  await p.getQuote("AAPL");
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  const signal = f.inits[0]?.signal;
+  assert.ok(signal instanceof AbortSignal);
+  assert.equal(signal.aborted, false);
+});
+
+test("the call budget gives up on a persistent 429 before sleeping, not after the retries run out", async () => {
+  const f = fakeFetch(() => ({ status: 429, body: "limit", headers: { "retry-after": "1" } }));
+  const p = new FinnhubProvider({ apiKey: "KEY", fetchImpl: f.fn, callBudgetMs: 50 });
+  const startedAt = Date.now();
+  await assert.rejects(
+    () => p.getQuote("AAPL"),
+    (err: unknown) => {
+      assert.ok(err instanceof FinnhubError);
+      assert.equal(err.status, 429);
+      return true;
+    },
+  );
+  // One call, not four: the first one-second backoff already overshoots a 50 ms budget, so the
+  // budget (not retry exhaustion) is what ended the call, and it ended it without sleeping.
+  assert.equal(f.calls.length, 1);
+  assert.ok(Date.now() - startedAt < 500, "the budget must be checked before the backoff sleep");
 });
 
 // --- Task 2: news ---

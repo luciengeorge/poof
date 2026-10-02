@@ -1,6 +1,27 @@
 import { sleep, retryDelayMs } from "./http-backoff.ts";
+import { timeoutFetch } from "./fetch-timeout.ts";
 
 const FINNHUB_BASE = "https://finnhub.io/api/v1";
+
+/**
+ * Deadline for one Finnhub HTTP attempt, matching JEV_TIMEOUT_MS. The wide funnel reads company
+ * news for a 126-ticker chunk one ticker at a time inside Vercel's 300 s function wall, and a
+ * platform kill runs no catch and no finally, so one read that hangs (rather than errors) used to
+ * be able to take the whole function down and leave the chunk at `started` for good. Past this
+ * deadline the read throws instead, which the funnel's per-ticker catch counts as a failure.
+ */
+export const FINNHUB_TIMEOUT_MS = 8_000;
+
+/**
+ * Ceiling for one `get()` including its 429 retries and their backoff sleeps. The per-attempt
+ * deadline alone does not bound the call: four attempts plus three ten-second backoffs is 62 s,
+ * and the funnel's headroom inside the 300 s wall is about 151 s, so three bad tickers would still
+ * kill the function. The budget is checked before each backoff sleep, so the attempt after the
+ * last permitted sleep can still run to its own deadline: one call ends within
+ * FINNHUB_CALL_BUDGET_MS + FINNHUB_TIMEOUT_MS. Past the budget the call throws the same
+ * FinnhubError(429) that running out of retries throws, so no caller sees a new error type.
+ */
+export const FINNHUB_CALL_BUDGET_MS = 20_000;
 
 export interface Quote {
   symbol: string;
@@ -59,6 +80,10 @@ export interface MarketDataProvider {
 export interface FinnhubConfig {
   apiKey: string;
   fetchImpl?: typeof fetch;
+  /** Per-attempt deadline; defaults to FINNHUB_TIMEOUT_MS. Tests pass a short one. */
+  timeoutMs?: number;
+  /** Whole-call budget across retries; defaults to FINNHUB_CALL_BUDGET_MS. */
+  callBudgetMs?: number;
 }
 
 export class FinnhubError extends Error {
@@ -120,10 +145,13 @@ function mapNews(r: RawNews): NewsItem {
 export class FinnhubProvider implements MarketDataProvider {
   private readonly apiKey: string;
   private readonly fetchImpl: typeof fetch;
+  private readonly callBudgetMs: number;
 
   constructor(cfg: FinnhubConfig) {
     this.apiKey = cfg.apiKey;
-    this.fetchImpl = cfg.fetchImpl ?? fetch;
+    // Wrapped once here so every attempt in `get`, retries included, carries the deadline.
+    this.fetchImpl = timeoutFetch(cfg.timeoutMs ?? FINNHUB_TIMEOUT_MS, cfg.fetchImpl ?? fetch);
+    this.callBudgetMs = cfg.callBudgetMs ?? FINNHUB_CALL_BUDGET_MS;
   }
 
   private async get<T>(
@@ -136,12 +164,15 @@ export class FinnhubProvider implements MarketDataProvider {
     // Finnhub's free tier is tightly rate-limited. Back off and retry on 429
     // honoring Retry-After, so a single busy symbol doesn't fail the request.
     const maxRetries = 3;
+    const deadline = Date.now() + this.callBudgetMs;
     for (let attempt = 0; ; attempt++) {
       const res = await this.fetchImpl(url);
       const text = await res.text();
       if (res.ok) return JSON.parse(text) as T;
       if (res.status === 429 && attempt < maxRetries) {
-        await sleep(retryDelayMs(res.headers, attempt));
+        const delay = retryDelayMs(res.headers, attempt);
+        if (Date.now() + delay >= deadline) throw new FinnhubError(res.status, text);
+        await sleep(delay);
         continue;
       }
       throw new FinnhubError(res.status, text);
