@@ -32,7 +32,10 @@ function openBuy(ticker: string): OpenBuyTrade {
 
 test("the index core down 15% and held 60 days produces no exit and no orphan close", async () => {
   const scope = await loadExitScope(
-    { getPortfolio: async () => [position(CORE_TICKER), position("AAPL_US_EQ")] },
+    {
+      getPortfolio: async () => [position(CORE_TICKER), position("AAPL_US_EQ")],
+      getPendingOrders: async () => [],
+    },
     { openBuys: async () => [openBuy(CORE_TICKER), openBuy("AAPL_US_EQ")] },
     "live",
   );
@@ -46,7 +49,20 @@ test("the index core down 15% and held 60 days produces no exit and no orphan cl
     signals.map((s) => s.ticker),
     ["AAPL_US_EQ"],
   );
-  assert.deepEqual(orphanedOpenBuys(scope.openBuys, scope.positions), []);
+  // Reconciliation sees the raw read, core included, so the core row must be filtered from the
+  // BUYs it reconciles; and with every remaining BUY held, nothing is orphaned.
+  assert.deepEqual(
+    scope.rawPositions.map((p) => p.ticker),
+    [CORE_TICKER, "AAPL_US_EQ"],
+  );
+  assert.deepEqual(
+    scope.openBuys.map((b) => b.ticker),
+    ["AAPL_US_EQ"],
+  );
+  assert.deepEqual(orphanedOpenBuys(scope.openBuys, scope.rawPositions, scope.pendingTickers), {
+    reconcilable: true,
+    orphans: [],
+  });
 });
 
 test("manage_positions filters the core out before checkExits and orphan reconciliation (structural)", () => {
@@ -55,7 +71,7 @@ test("manage_positions filters the core out before checkExits and orphan reconci
   const src = readFileSync(new URL("../tools/manage_positions.ts", import.meta.url), "utf8");
   assert.match(
     src,
-    /\(await client\.getPortfolio\(\)\)\.filter\(\(p\) => !isCore\(p\.ticker\)\)/,
+    /const rawPositions = await client\.getPortfolio\(\);\s*const positions = rawPositions\.filter\(\(p\) => !isCore\(p\.ticker\)\)/,
     "the portfolio must be filtered of the core as it is read",
   );
   assert.match(
@@ -70,9 +86,14 @@ test("manage_positions filters the core out before checkExits and orphan reconci
   );
   const scope = src.indexOf("await loadExitScope(client, memory, tradingEnv())");
   const exits = src.indexOf("checkExits(managed");
-  const orphans = src.indexOf("orphanedOpenBuys(openBuys, positions)");
+  const orphans = src.indexOf("await reconcileOrphans({");
   assert.ok(scope > 0, "the tool must load its positions through loadExitScope");
   assert.ok(scope < exits && scope < orphans, "the filtered scope must feed exits and orphans");
+  assert.match(
+    src,
+    /await reconcileOrphans\(\{\s*openBuys,\s*rawPositions,\s*pendingTickers,/,
+    "reconciliation must get the filtered BUYs but the RAW portfolio, so a core-only read is not empty",
+  );
 });
 
 test("review_performance shows the core with no exit levels, marked as the index core", () => {
