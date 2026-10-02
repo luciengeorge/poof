@@ -71,7 +71,7 @@ test("manage_positions filters the core out before checkExits and orphan reconci
   const src = readFileSync(new URL("../tools/manage_positions.ts", import.meta.url), "utf8");
   assert.match(
     src,
-    /const rawPositions = await client\.getPortfolio\(\);\s*const positions = rawPositions\.filter\(\(p\) => !isCore\(p\.ticker\)\)/,
+    /const rawPositions = await client\.getPortfolio\(\{ fresh: true \}\);\s*const positions = rawPositions\.filter\(\(p\) => !isCore\(p\.ticker\)\)/,
     "the portfolio must be filtered of the core as it is read",
   );
   assert.match(

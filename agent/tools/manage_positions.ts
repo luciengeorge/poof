@@ -42,15 +42,16 @@ export async function loadExitScope(
   pendingTickers: Set<string> | null;
 }> {
   // Pending orders before the portfolio, so a BUY that fills between the two reads is still seen
-  // in one of them (unless the portfolio is served from the client's short cache).
-  const pendingTickers = await client.getPendingOrders().then(
-    (orders) => new Set(orders.map((o) => o.ticker)),
-    (err: unknown) => {
+  // in one of them. The portfolio read is fresh: the client's short cache could predate the
+  // pending read, and a BUY filling in that gap would be in neither.
+  const pendingTickers = await client
+    .getPendingOrders()
+    .then((orders) => new Set(orders.map((o) => o.ticker)))
+    .catch((err: unknown) => {
       console.warn("[t212] getPendingOrders failed; orphan reconciliation will refuse:", err);
       return null;
-    },
-  );
-  const rawPositions = await client.getPortfolio();
+    });
+  const rawPositions = await client.getPortfolio({ fresh: true });
   const positions = rawPositions.filter((p) => !isCore(p.ticker));
   const openBuys = (((await memory.openBuys(env)) ?? []) as OpenBuyTrade[]).filter(
     (b) => !isCore(b.ticker),
