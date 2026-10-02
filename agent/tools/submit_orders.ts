@@ -251,9 +251,10 @@ export default defineTool({
   }),
   // Require human approval (Slack) before REAL orders. Only meaningful when actually
   // executing: dry-run/simulated orders never need approval. (eve `approval`: returning
-  // true = require user approval, false = not applicable.)
-  approval: () =>
-    process.env.REQUIRE_APPROVAL === "true" && process.env.DRY_RUN === "false",
+  // true = require user approval, false = not applicable.) The negation goes through isDryRun()
+  // so the kill switch has one reader: a second raw read here agreed with state.ts only by
+  // coincidence, and could drift from its default-safe polarity without any test noticing.
+  approval: () => process.env.REQUIRE_APPROVAL === "true" && !isDryRun(),
   async execute({ proposals }) {
     const finnhub = finnhubFromEnv();
     return submitOrders(proposals, {

@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { deriveRiskState, resolveLimits, type StoredRiskState } from "./state.ts";
+import { readdirSync, readFileSync } from "node:fs";
+import { deriveRiskState, isDryRun, resolveLimits, type StoredRiskState } from "./state.ts";
 import { checkHalt, DEFAULT_LIMITS } from "./risk.ts";
 
 test("resolveLimits: returns the shipped defaults when no env overrides", () => {
@@ -143,4 +144,61 @@ test("lossDayMinDropPct is tunable: a 3% drop no longer counts under a 5% thresh
   );
   assert.equal(d.persist.consecutiveLossDays, 0);
   assert.equal(d.persist.dayStartEquity, 97);
+});
+
+// DRY_RUN is the kill switch, and isDryRun() reads it at call time. A single `!==` written as
+// `===` would invert it with no test noticing, so its polarity is pinned case by case. The env
+// var is restored in a finally so one failing case cannot leave real orders armed for the rest.
+const DRY_RUN_CASES: [value: string | undefined, dryRun: boolean, why: string][] = [
+  [undefined, true, "the safe default: absence must never enable real orders"],
+  ["", true, "a blank in a .env file is not consent"],
+  ["true", true, "explicitly on"],
+  ["false", false, "the only value that arms real orders"],
+  // Case-sensitive by design: a "helpful" toLowerCase() would widen the only string that arms
+  // real money.
+  ["False", true, "only the exact lowercase string arms real orders"],
+];
+
+for (const [value, dryRun, why] of DRY_RUN_CASES) {
+  const shown = value === undefined ? "unset" : JSON.stringify(value);
+  test(`isDryRun: DRY_RUN=${shown} gives ${dryRun} (${why})`, () => {
+    const prev = process.env.DRY_RUN;
+    if (value === undefined) delete process.env.DRY_RUN;
+    else process.env.DRY_RUN = value;
+    try {
+      assert.equal(isDryRun(), dryRun);
+    } finally {
+      if (prev === undefined) delete process.env.DRY_RUN;
+      else process.env.DRY_RUN = prev;
+    }
+  });
+}
+
+test("state.ts is the only reader of DRY_RUN in agent/, scripts/ and convex/; submit_orders goes through isDryRun() (structural)", () => {
+  // submit_orders' approval predicate used to compare the raw env var itself. It agreed with
+  // isDryRun() only by coincidence, so the polarity pinned above did not cover it. One reader
+  // means no caller can drift from state.ts, so walk every non-test source file.
+  const root = new URL("../../", import.meta.url);
+  const reader = /process\.env\.DRY_RUN\b|process\.env\[\s*["'`]DRY_RUN["'`]\s*\]/;
+  const seen: string[] = [];
+  const offenders: string[] = [];
+  for (const dir of ["agent", "scripts", "convex"]) {
+    for (const rel of readdirSync(new URL(`${dir}/`, root), { recursive: true }) as string[]) {
+      if (!/\.(ts|mjs)$/.test(rel) || rel.endsWith(".test.ts")) continue;
+      if (rel.includes("node_modules") || rel.includes("_generated")) continue;
+      const path = `${dir}/${rel}`;
+      seen.push(path);
+      if (reader.test(readFileSync(new URL(path, root), "utf8"))) offenders.push(path);
+    }
+  }
+  assert.ok(seen.includes("agent/lib/state.ts"), "the walk must see agent/lib/state.ts");
+  assert.ok(offenders.includes("agent/lib/state.ts"), "state.ts must own the DRY_RUN read");
+  const others = offenders.filter((f) => f !== "agent/lib/state.ts");
+  assert.deepEqual(others, [], `only agent/lib/state.ts may read DRY_RUN; call isDryRun() instead: ${others.join(", ")}`);
+  const tool = readFileSync(new URL("agent/tools/submit_orders.ts", root), "utf8");
+  assert.match(
+    tool,
+    /approval: \(\) =>\s*process\.env\.REQUIRE_APPROVAL === "true" && !isDryRun\(\)/,
+    "approval must require REQUIRE_APPROVAL=true and a non-dry run, via isDryRun()",
+  );
 });
