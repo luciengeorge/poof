@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { deriveRiskState, isDryRun, resolveLimits, type StoredRiskState } from "./state.ts";
 import { checkHalt, DEFAULT_LIMITS } from "./risk.ts";
 
@@ -174,18 +174,28 @@ for (const [value, dryRun, why] of DRY_RUN_CASES) {
   });
 }
 
-test("state.ts is the only reader of DRY_RUN; submit_orders goes through isDryRun() (structural)", () => {
+test("state.ts is the only reader of DRY_RUN in agent/, scripts/ and convex/; submit_orders goes through isDryRun() (structural)", () => {
   // submit_orders' approval predicate used to compare the raw env var itself. It agreed with
   // isDryRun() only by coincidence, so the polarity pinned above did not cover it. One reader
-  // means the tool cannot drift from state.ts.
-  const state = readFileSync(new URL("./state.ts", import.meta.url), "utf8");
-  const tool = readFileSync(new URL("../tools/submit_orders.ts", import.meta.url), "utf8");
-  assert.match(state, /process\.env\.DRY_RUN/, "state.ts must own the DRY_RUN read");
-  assert.doesNotMatch(
-    tool,
-    /\.DRY_RUN\b|\[\s*["'`]DRY_RUN["'`]\s*\]/,
-    "submit_orders must not read DRY_RUN itself; call isDryRun()",
-  );
+  // means no caller can drift from state.ts, so walk every non-test source file.
+  const root = new URL("../../", import.meta.url);
+  const reader = /process\.env\.DRY_RUN\b|process\.env\[\s*["'`]DRY_RUN["'`]\s*\]/;
+  const seen: string[] = [];
+  const offenders: string[] = [];
+  for (const dir of ["agent", "scripts", "convex"]) {
+    for (const rel of readdirSync(new URL(`${dir}/`, root), { recursive: true }) as string[]) {
+      if (!/\.(ts|mjs)$/.test(rel) || rel.endsWith(".test.ts")) continue;
+      if (rel.includes("node_modules") || rel.includes("_generated")) continue;
+      const path = `${dir}/${rel}`;
+      seen.push(path);
+      if (reader.test(readFileSync(new URL(path, root), "utf8"))) offenders.push(path);
+    }
+  }
+  assert.ok(seen.includes("agent/lib/state.ts"), "the walk must see agent/lib/state.ts");
+  assert.ok(offenders.includes("agent/lib/state.ts"), "state.ts must own the DRY_RUN read");
+  const others = offenders.filter((f) => f !== "agent/lib/state.ts");
+  assert.deepEqual(others, [], `only agent/lib/state.ts may read DRY_RUN; call isDryRun() instead: ${others.join(", ")}`);
+  const tool = readFileSync(new URL("agent/tools/submit_orders.ts", root), "utf8");
   assert.match(
     tool,
     /approval: \(\) =>\s*process\.env\.REQUIRE_APPROVAL === "true" && !isDryRun\(\)/,
