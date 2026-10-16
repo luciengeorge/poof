@@ -202,13 +202,12 @@ export class T212Client {
     const readCash = () => readAt(this.request<CashBalance>("GET", "/equity/account/cash"));
     const readPositions = () => readAt(this.request<T212Position[]>("GET", "/equity/portfolio"));
     let [cash, positions] = await Promise.all([readCash(), readPositions()]);
-    // A 429 backoff on one endpoint (the portfolio is limited to about one read per 5 s, and the
-    // exit check reads it just before) leaves the pair seconds apart, and reconcileAccountValueGbp
-    // then skips its divergence check. Re-read the side that finished first, once, so the pair is
-    // adjacent again.
-    if (Math.abs(cash.readAt - positions.readAt) > ACCOUNT_SNAPSHOT_READ_SKEW_TOLERANCE_MS) {
-      if (cash.readAt < positions.readAt) cash = await readCash();
-      else positions = await readPositions();
+    // A 429 backoff on the portfolio (limited to about one read per 5 s, and the exit check reads
+    // it just before) leaves the pair seconds apart, and reconcileAccountValueGbp then skips its
+    // divergence check. Re-read cash once so the pair is adjacent again. Never re-read the
+    // portfolio here: straight after a read it would hit the same limit and widen the gap.
+    if (positions.readAt - cash.readAt > ACCOUNT_SNAPSHOT_READ_SKEW_TOLERANCE_MS) {
+      cash = await readCash();
     }
     const takenAt = Math.max(cash.readAt, positions.readAt);
     const snapshot = {
