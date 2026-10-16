@@ -66,15 +66,28 @@ export class ExaProvider {
     }
     if (Object.keys(contents).length > 0) body.contents = contents;
 
-    const res = await this.fetchImpl(`${EXA_BASE}/search`, {
-      method: "POST",
-      headers: {
-        "x-api-key": this.apiKey,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify(body),
-    });
-    const text = await res.text();
+    const post = async () => {
+      const res = await this.fetchImpl(`${EXA_BASE}/search`, {
+        method: "POST",
+        headers: {
+          "x-api-key": this.apiKey,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+      return { res, text: await res.text() };
+    };
+    let { res, text } = await post();
+    // Some categories (e.g. "company") use dedicated indices that reject date filters with a 400.
+    // The date is only a bias, so drop it and retry once rather than fail the search.
+    if (
+      res.status === 400 &&
+      body.startPublishedDate !== undefined &&
+      text.includes("does not support the following filters")
+    ) {
+      delete body.startPublishedDate;
+      ({ res, text } = await post());
+    }
     if (!res.ok) throw new ExaError(res.status, text);
 
     const parsed = JSON.parse(text) as { results?: RawExaResult[] };

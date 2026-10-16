@@ -225,6 +225,33 @@ test("getBrokerSnapshot reads cash and positions together and caches the pair", 
   assert.equal(fresh.cash.free, 200);
 });
 
+test("getBrokerSnapshot re-reads cash when the portfolio read finished well after it", async () => {
+  // The portfolio answers 1.1 s late, as after a 429 backoff; the cash read is then repeated.
+  const f = fakeFetch((url) => ({ body: url.endsWith("/cash") ? { total: 10, free: 10 } : [] }));
+  const slowPortfolio: typeof fetch = async (input, init) => {
+    if (String(input).endsWith("/equity/portfolio")) await new Promise((r) => setTimeout(r, 1_100));
+    return f.fn(input, init);
+  };
+  const client = new T212Client(cfg({ fetchImpl: slowPortfolio }));
+  const snap = await client.getBrokerSnapshot({ fresh: true });
+  assert.equal(f.calls.filter((c) => c.url.endsWith("/equity/account/cash")).length, 2);
+  assert.equal(f.calls.filter((c) => c.url.endsWith("/equity/portfolio")).length, 1);
+  assert.ok(Math.abs(snap.cashReadAt - snap.positionsReadAt) <= 1_000);
+});
+
+test("getBrokerSnapshot never re-reads the portfolio when cash is the slow side", async () => {
+  // Re-reading the portfolio straight after a read would hit its ~5 s rate limit.
+  const f = fakeFetch((url) => ({ body: url.endsWith("/cash") ? { total: 10, free: 10 } : [] }));
+  const slowCash: typeof fetch = async (input, init) => {
+    if (String(input).endsWith("/equity/account/cash")) await new Promise((r) => setTimeout(r, 1_100));
+    return f.fn(input, init);
+  };
+  const client = new T212Client(cfg({ fetchImpl: slowCash }));
+  await client.getBrokerSnapshot({ fresh: true });
+  assert.equal(f.calls.filter((c) => c.url.endsWith("/equity/portfolio")).length, 1);
+  assert.equal(f.calls.filter((c) => c.url.endsWith("/equity/account/cash")).length, 1);
+});
+
 test("getCash caches within the TTL: two calls hit the network once", async () => {
   const f = fakeFetch(() => ({ body: { free: 100 } }));
   const client = new T212Client(cfg({ fetchImpl: f.fn }));

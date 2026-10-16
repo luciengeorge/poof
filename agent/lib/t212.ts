@@ -2,6 +2,7 @@ import { sleep, retryDelayMs } from "./http-backoff.ts";
 import { isDryRun } from "./state.ts";
 import { tradingEnv } from "./risk-runtime.ts";
 import { fakeT212Fetch } from "./t212-fake.ts";
+import { ACCOUNT_SNAPSHOT_READ_SKEW_TOLERANCE_MS } from "./execution.ts";
 
 export type T212Env = "demo" | "live";
 export type TimeValidity = "DAY" | "GTC";
@@ -198,10 +199,16 @@ export class T212Client {
       value: await request,
       readAt: Date.now(),
     });
-    const [cash, positions] = await Promise.all([
-      readAt(this.request<CashBalance>("GET", "/equity/account/cash")),
-      readAt(this.request<T212Position[]>("GET", "/equity/portfolio")),
-    ]);
+    const readCash = () => readAt(this.request<CashBalance>("GET", "/equity/account/cash"));
+    const readPositions = () => readAt(this.request<T212Position[]>("GET", "/equity/portfolio"));
+    let [cash, positions] = await Promise.all([readCash(), readPositions()]);
+    // A 429 backoff on the portfolio (limited to about one read per 5 s, and the exit check reads
+    // it just before) leaves the pair seconds apart, and reconcileAccountValueGbp then skips its
+    // divergence check. Re-read cash once so the pair is adjacent again. Never re-read the
+    // portfolio here: straight after a read it would hit the same limit and widen the gap.
+    if (positions.readAt - cash.readAt > ACCOUNT_SNAPSHOT_READ_SKEW_TOLERANCE_MS) {
+      cash = await readCash();
+    }
     const takenAt = Math.max(cash.readAt, positions.readAt);
     const snapshot = {
       cash: cash.value,
