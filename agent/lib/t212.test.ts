@@ -225,6 +225,20 @@ test("getBrokerSnapshot reads cash and positions together and caches the pair", 
   assert.equal(fresh.cash.free, 200);
 });
 
+test("getBrokerSnapshot re-reads the side that finished first when the pair is too far apart", async () => {
+  // The portfolio answers 1.1 s late, as after a 429 backoff; the cash read is then repeated.
+  const f = fakeFetch((url) => ({ body: url.endsWith("/cash") ? { total: 10, free: 10 } : [] }));
+  const slowPortfolio: typeof fetch = async (input, init) => {
+    if (String(input).endsWith("/equity/portfolio")) await new Promise((r) => setTimeout(r, 1_100));
+    return f.fn(input, init);
+  };
+  const client = new T212Client(cfg({ fetchImpl: slowPortfolio }));
+  const snap = await client.getBrokerSnapshot({ fresh: true });
+  assert.equal(f.calls.filter((c) => c.url.endsWith("/equity/account/cash")).length, 2);
+  assert.equal(f.calls.filter((c) => c.url.endsWith("/equity/portfolio")).length, 1);
+  assert.ok(Math.abs(snap.cashReadAt - snap.positionsReadAt) <= 1_000);
+});
+
 test("getCash caches within the TTL: two calls hit the network once", async () => {
   const f = fakeFetch(() => ({ body: { free: 100 } }));
   const client = new T212Client(cfg({ fetchImpl: f.fn }));

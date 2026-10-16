@@ -80,3 +80,28 @@ test("throws ExaError on non-2xx, flags 429", async () => {
     },
   );
 });
+
+test("a category that rejects date filters is retried once without the date", async () => {
+  const rejection =
+    '{"error":"Invalid request body | The company category does not support the following filters: startPublishedDate.","tag":"INVALID_REQUEST_BODY"}';
+  const f = fakeFetch((_url, init) => {
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+    return "startPublishedDate" in body
+      ? { status: 400, body: rejection }
+      : { body: { results: [{ title: "t", url: "u" }] } };
+  });
+  const exa = new ExaProvider({ apiKey: "k", fetchImpl: f.fn });
+  const results = await exa.search("acme", { category: "company", startPublishedDate: "2026-10-01" });
+  assert.equal(results.length, 1);
+  assert.equal(f.calls.length, 2);
+  const retried = JSON.parse(String(f.calls[1].init.body)) as Record<string, unknown>;
+  assert.equal(retried.category, "company");
+  assert.ok(!("startPublishedDate" in retried));
+});
+
+test("any other 400 is not retried", async () => {
+  const f = fakeFetch(() => ({ status: 400, body: '{"error":"bad query"}' }));
+  const exa = new ExaProvider({ apiKey: "k", fetchImpl: f.fn });
+  await assert.rejects(exa.search("acme", { startPublishedDate: "2026-10-01" }), ExaError);
+  assert.equal(f.calls.length, 1);
+});
