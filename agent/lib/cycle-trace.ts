@@ -24,6 +24,7 @@
 
 import { parseGbpFigures } from "./report-check.ts";
 import type { ReportTruth } from "./report-check.ts";
+import { CORE_TICKER } from "./core.ts";
 
 /**
  * The tool or subagent name behind one `action.result` event, or null when the result is not
@@ -233,6 +234,16 @@ export interface TracedOrder {
   detail?: string;
 }
 
+/** One index-core order the code sent, as recorded for the judge. Never a stock order. */
+export interface TracedCoreOrder {
+  ticker: string;
+  side: string;
+  notionalGbp?: number;
+  /** "placed" | "simulated" | "rejected" | "pending" (one already waiting) | "failed". */
+  status: string;
+  detail?: string;
+}
+
 /** One exit the exit engine triggered, as recorded for the judge. */
 export interface TracedExit {
   ticker: string;
@@ -350,6 +361,35 @@ export function exitsFrom(
     exits.push({ ticker, reason, ...(detail !== undefined ? { detail } : {}) });
   }
   return { exits, truncated };
+}
+
+/** Core statuses that mean no core order exists for the report to describe. */
+const CORE_NO_ORDER = new Set(["nothing-to-do", "not-bootstrapped", "funds-raised"]);
+
+/**
+ * The index-core order in a `record_cycle` (sweep) or `submit_orders` (funding sale) result.
+ * Returns null when the output carries no `core` at all, and [] when it reports that no core
+ * order was needed, so the judge can tell "not recorded" from "none".
+ */
+export function coreOrdersFrom(output: unknown): TracedCoreOrder[] | null {
+  if (typeof output !== "object" || output === null) return null;
+  const core = (output as { core?: unknown }).core;
+  if (typeof core !== "object" || core === null) return null;
+  const raw = core as Record<string, unknown>;
+  const status = nonEmptyString(raw.status);
+  if (status === null) return null;
+  if (CORE_NO_ORDER.has(status)) return [];
+  const notionalGbp = finiteOrNull(raw.notionalGbp);
+  const detail = detailOf(raw.detail);
+  return [
+    {
+      ticker: CORE_TICKER,
+      side: raw.action === "fund" ? "SELL" : "BUY",
+      ...(notionalGbp !== null && notionalGbp > 0 ? { notionalGbp } : {}),
+      status,
+      ...(detail !== undefined ? { detail } : {}),
+    },
+  ];
 }
 
 /**

@@ -300,6 +300,20 @@ export default defineSchema({
       ),
     ),
     ordersTruncated: v.optional(v.boolean()),
+    // Index-core (VUAG) orders the CODE sent: the end-of-cycle cash sweep in record_cycle and a
+    // funding sale in submit_orders. Kept apart from `orders` so a sweep BUY never reads as a
+    // stock buy to the before-buy guards. Absent = not recorded; empty = no core order this cycle.
+    coreOrders: v.optional(
+      v.array(
+        v.object({
+          ticker: v.string(),
+          side: v.string(),
+          notionalGbp: v.optional(v.number()),
+          status: v.string(),
+          detail: v.optional(v.string()),
+        }),
+      ),
+    ),
     exits: v.optional(
       v.array(
         v.object({

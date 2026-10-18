@@ -16,6 +16,7 @@ import {
   ordersFrom,
   positionsFrom,
   postTradeTruthFrom,
+  coreOrdersFrom,
   quotesFrom,
   requestedActionNames,
   resultOrders,
@@ -666,4 +667,36 @@ test("resultOrders carries the status through, so a rejection is not read as a s
     observed.orders.map((o) => o.status).sort(),
     ["placed", "rejected"],
   );
+});
+
+// --- index-core orders ---
+
+test("the end-of-cycle sweep is captured as a core BUY", () => {
+  assert.deepEqual(
+    coreOrdersFrom({
+      recorded: true,
+      core: { action: "sweep", status: "placed", quantity: 0.49, notionalGbp: 55.34, dryRun: false, detail: "swept" },
+    }),
+    [{ ticker: "VUAGl_EQ", side: "BUY", notionalGbp: 55.34, status: "placed", detail: "swept" }],
+  );
+});
+
+test("a funding sale is a core SELL, and a pending core order is kept with no notional", () => {
+  assert.deepEqual(
+    coreOrdersFrom({ placed: [], rejected: [], core: { action: "fund", status: "simulated", quantity: -0.2, notionalGbp: 20, dryRun: true, detail: "d" } }),
+    [{ ticker: "VUAGl_EQ", side: "SELL", notionalGbp: 20, status: "simulated", detail: "d" }],
+  );
+  assert.deepEqual(
+    coreOrdersFrom({ core: { action: "sweep", status: "pending", quantity: 0, notionalGbp: 0, dryRun: false, detail: "waiting" } }),
+    [{ ticker: "VUAGl_EQ", side: "BUY", status: "pending", detail: "waiting" }],
+  );
+});
+
+test("no core order needed is EMPTY; no core field at all is NOT RECORDED", () => {
+  for (const status of ["nothing-to-do", "not-bootstrapped", "funds-raised"]) {
+    assert.deepEqual(coreOrdersFrom({ core: { action: "sweep", status, quantity: 0, notionalGbp: 0 } }), []);
+  }
+  assert.equal(coreOrdersFrom({ recorded: false, note: "memory or broker unavailable" }), null);
+  assert.equal(coreOrdersFrom({ core: { action: "sweep" } }), null);
+  assert.equal(coreOrdersFrom(null), null);
 });
