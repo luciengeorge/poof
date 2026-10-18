@@ -28,7 +28,7 @@ export default defineTool({
     "notes, or an explicit UNJUDGEABLE result when no trace exists for that id. Read-only: it " +
     "cannot trade, change a report, or ask a human anything.",
   inputSchema: z.object({
-    cycleId: z.string().min(1).describe("the immutable cycle id supplied by the weekly scorecard"),
+    cycleId: z.string().min(1).describe("the immutable cycle id supplied by the weekly judge pass"),
   }),
   async execute({ cycleId }) {
     return await loadCycleGroundTruth(cycleId);

@@ -6,7 +6,7 @@ export default defineAgent({
     "id, loads the stored tool outputs itself and grades it 1-5 on grounding, consistency, calibration and " +
     "completeness and returns structured scores only. It GRADES, it never rewrites: it cannot " +
     "produce a corrected report, and it cannot change, delay, or block anything. Called from " +
-    "the weekly scorecard schedule over stored cycle traces, never during a live trading cycle.",
+    "the weekly judge-pass schedule over stored cycle traces, never during a live trading cycle.",
   // Same model as the orchestrator and red_team. `reasoning` is REQUIRED: the GPT-5.6 series
   // defaults to reasoning "none", and a grader with reasoning disabled would return plausible
   // scores without actually checking the report against the tool outputs. "high" rather than

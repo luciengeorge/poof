@@ -24,6 +24,12 @@ test("the judge pass runs in its OWN schedule, before the scorecard, so a failed
   assert.match(scorecard, /cron: "0 21 \* \* 5"/);
   assert.match(source, /message: JUDGE_PASS,/);
   assert.match(scorecard, /message: SCORECARD,/);
-  assert.doesNotMatch(scorecard, /list_unjudged_cycles|report_judge|save_report_score/);
+  assert.match(scorecard, /Do NOT grade any report in this run/);
+  // The prompt NAMES the grading tools only to forbid them; no step may call them.
+  assert.doesNotMatch(scorecard, /Call list_unjudged_cycles|delegate to the `report_judge`/);
+  // The system prompt must let the judge run use its tools, or the week silently gets no verdicts.
+  const instructions = readFileSync(new URL("../instructions.md", import.meta.url), "utf8");
+  assert.match(instructions, /weekly JUDGE PASS run/);
+  assert.doesNotMatch(instructions, /WEEKLY SCORECARD ONLY/);
   assert.match(scorecard, /review_eval_health/);
 });
