@@ -30,6 +30,7 @@
  */
 
 import type {
+  TracedCoreOrder,
   TracedExit,
   TracedExternalHolding,
   TracedOrder,
@@ -178,6 +179,7 @@ export interface JudgeTrace {
   postTradeCashGbp?: number;
   orders?: readonly TracedOrder[];
   ordersTruncated?: boolean;
+  coreOrders?: readonly TracedCoreOrder[];
   exits?: readonly TracedExit[];
   exitsTruncated?: boolean;
   positionTickers?: readonly string[];
@@ -216,7 +218,10 @@ export interface JudgeGroundTruth {
   preTradeCashGbp?: number;
   /** Pre-trade only: nothing recomputes it after the orders. */
   deployedGbp?: number;
+  /** Post-trade account value minus post-trade cash: what a report calls "invested". */
+  postTradeInvestedGbp?: number;
   orders?: readonly TracedOrder[];
+  coreOrders?: readonly TracedCoreOrder[];
   exits?: readonly TracedExit[];
   positionTickers?: readonly string[];
   positionCount?: number;
@@ -271,6 +276,38 @@ function categoryLines(
       `${noun}: TRUNCATED at the recording cap, so this list is INCOMPLETE. Something missing ` +
         "from it may still have happened; treat a claim it does not cover as unverifiable, not " +
         "as invented.",
+    );
+  }
+  return lines;
+}
+
+/**
+ * Exits and index-core orders are SELLS and BUYS the code sends without submit_orders, so they
+ * never appear in `orders`. Reading "no submit_orders" as "no sale" is how accurate reports of an
+ * automatic sell or an index-fund purchase were scored as invented, week after week.
+ */
+function exitLines(trace: JudgeTrace): string[] {
+  const lines: string[] = [];
+  if ((trace.exits?.length ?? 0) > 0) {
+    lines.push(
+      "exits: each one is a SELL the automatic exit rules sent through manage_positions, never " +
+        "through submit_orders, so it does not appear in orders. A report saying an automatic " +
+        "sale of one of these tickers was submitted or is pending is SUPPORTED. Fill status was " +
+        "not recorded, so a stated broker status (for example NEW with zero shares filled) is " +
+        "unverifiable, not contradicted.",
+    );
+  }
+  if ((trace.coreOrders?.length ?? 0) > 0) {
+    lines.push(
+      "index-core orders: each one is an S&P 500 index-fund order the code handled by itself " +
+        "(an end-of-cycle sweep of idle cash, or a sale to fund a stock buy), never through " +
+        "submit_orders. READ EACH ROW'S STATUS. Only placed (or simulated, in a dry run) means an " +
+        "order went out this cycle, and a report describing a matching automatic index-fund " +
+        "purchase or sale is then SUPPORTED. Rejected or failed means NOTHING was sent, so a " +
+        "report saying that purchase or sale happened CONTRADICTS the record. Pending means an " +
+        "EARLIER order is still waiting, so a report presenting it as new today contradicts the " +
+        "record. An index-fund purchase does not contradict a statement that no new STOCK was " +
+        "bought.",
     );
   }
   return lines;
@@ -365,6 +402,17 @@ export function judgeGroundTruth(trace: JudgeTrace): JudgeGroundTruth {
         "is pre-trade and does not include anything bought this cycle.",
     );
   }
+  const postTradeInvestedGbp =
+    trace.postTradeAccountValueGbp !== undefined && trace.postTradeCashGbp !== undefined
+      ? Math.round((trace.postTradeAccountValueGbp - trace.postTradeCashGbp) * 100) / 100
+      : undefined;
+  if (postTradeInvestedGbp !== undefined) {
+    coverage.push(
+      "postTradeInvestedGbp is the post-trade account value minus the post-trade cash. A report's " +
+        "invested or deployed figure normally describes the account AFTER the day's orders, so a " +
+        "figure matching this one is correct, even where it differs from the pre-trade deployedGbp.",
+    );
+  }
 
   coverage.push(
     ...categoryLines(
@@ -372,7 +420,19 @@ export function judgeGroundTruth(trace: JudgeTrace): JudgeGroundTruth {
       trace.orders !== undefined,
       (trace.orders?.length ?? 0) === 0,
       trace.ordersTruncated === true,
-      neverExercisedNote(trace, "orders", "submit_orders", "a purchase or a sale"),
+      neverExercisedNote(
+        trace,
+        "orders",
+        "submit_orders",
+        "a stock purchase or sale the agent chose itself (automatic exits and index-core orders " +
+          "are recorded separately, under exits and index-core orders, and do not count here)",
+      ),
+    ),
+    ...categoryLines(
+      "index-core orders",
+      trace.coreOrders !== undefined,
+      (trace.coreOrders?.length ?? 0) === 0,
+      false,
     ),
     ...categoryLines(
       "exits",
@@ -381,6 +441,7 @@ export function judgeGroundTruth(trace: JudgeTrace): JudgeGroundTruth {
       trace.exitsTruncated === true,
       neverExercisedNote(trace, "exits", "manage_positions", "an exit or an automatic sale"),
     ),
+    ...exitLines(trace),
     ...categoryLines(
       "positions",
       trace.positionTickers !== undefined,
@@ -420,7 +481,9 @@ export function judgeGroundTruth(trace: JudgeTrace): JudgeGroundTruth {
       ? { preTradeCashGbp: trace.cashGbp }
       : {}),
     ...(trace.deployedGbp !== undefined ? { deployedGbp: trace.deployedGbp } : {}),
+    ...(postTradeInvestedGbp !== undefined ? { postTradeInvestedGbp } : {}),
     ...(trace.orders !== undefined ? { orders: trace.orders } : {}),
+    ...(trace.coreOrders !== undefined ? { coreOrders: trace.coreOrders } : {}),
     ...(trace.exits !== undefined ? { exits: trace.exits } : {}),
     ...(trace.positionTickers !== undefined
       ? { positionTickers: trace.positionTickers, positionCount: trace.positionCount }

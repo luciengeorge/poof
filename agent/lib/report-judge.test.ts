@@ -494,6 +494,68 @@ test("the same rule covers exits, so a fabricated automatic sale is refuted too"
   assert.match(note, /manage_positions/);
 });
 
+// The live cycles of 2026-10-12/13/14: no submit_orders, but manage_positions sold a position and
+// record_cycle swept idle cash into the index fund. Each accurate report scored grounding=1.
+function quietCycleWithAutomaticOrders(over: Partial<JudgeTrace> = {}): JudgeTrace {
+  return trace({
+    toolSequence: ["recall_memory", "manage_positions", "review_performance", "record_cycle"],
+    accountValueGbp: 241.46,
+    cashGbp: 8.88,
+    deployedGbp: 232.58,
+    postTradeAccountValueGbp: 241.52,
+    postTradeCashGbp: 63.15,
+    exits: [{ ticker: "ALK_US_EQ", reason: "max-hold" }],
+    coreOrders: [{ ticker: "VUAGl_EQ", side: "BUY", notionalGbp: 55.34, status: "placed" }],
+    ...over,
+  });
+}
+
+test("REGRESSION: an automatic exit is a sale the judge is told is SUPPORTED without submit_orders", () => {
+  const truth = judgeGroundTruth(quietCycleWithAutomaticOrders());
+  const exitNote = truth.coverage.find((line) => /^exits: each one is a SELL/.test(line));
+  assert.ok(exitNote, "a captured exit must say it is a sale sent outside submit_orders");
+  assert.match(exitNote, /SUPPORTED/);
+  assert.match(exitNote, /unverifiable, not contradicted/);
+});
+
+test("REGRESSION: the index-core sweep reaches the judge as its own list, and is SUPPORTED", () => {
+  const truth = judgeGroundTruth(quietCycleWithAutomaticOrders());
+  assert.deepEqual(truth.coreOrders, [
+    { ticker: "VUAGl_EQ", side: "BUY", notionalGbp: 55.34, status: "placed" },
+  ]);
+  assert.equal(truth.orders, undefined, "a core order must never be folded into the stock orders");
+  const coreNote = truth.coverage.find((line) => /^index-core orders: each one/.test(line));
+  assert.ok(coreNote);
+  assert.match(coreNote, /SUPPORTED/);
+  // A failed or rejected sweep sent nothing: the note must not let a row's mere presence support it.
+  assert.match(coreNote, /STATUS/);
+  assert.match(coreNote, /Rejected or failed means NOTHING was sent/);
+  assert.match(coreNote, /Pending means an EARLIER order/);
+  // The never-exercised rule still refutes a stock order, but carves out the two automatic kinds.
+  const ordersNote = truth.coverage.find((line) => /^orders:/.test(line));
+  assert.ok(ordersNote);
+  assert.match(ordersNote, /CONTRADICTS/);
+  assert.match(ordersNote, /automatic exits and index-core orders/);
+});
+
+test("an EMPTY core list means no index-fund order, which a report cannot claim", () => {
+  const note = judgeGroundTruth(quietCycleWithAutomaticOrders({ coreOrders: [] })).coverage.find(
+    (line) => /^index-core orders:/.test(line),
+  );
+  assert.ok(note);
+  assert.match(note, /CONTRADICTS/);
+});
+
+test("REGRESSION: the post-trade invested figure is derived, so 241.52 - 63.15 is not a contradiction", () => {
+  const truth = judgeGroundTruth(quietCycleWithAutomaticOrders());
+  assert.equal(truth.postTradeInvestedGbp, 178.37);
+  assert.equal(truth.deployedGbp, 232.58, "the pre-trade figure stays, labelled");
+  assert.ok(truth.coverage.some((line) => /^postTradeInvestedGbp/.test(line)));
+  // Without both post-trade figures there is nothing to derive it from.
+  const partial = judgeGroundTruth(quietCycleWithAutomaticOrders({ postTradeCashGbp: undefined }));
+  assert.equal(partial.postTradeInvestedGbp, undefined);
+});
+
 test("a TRUNCATED tool sequence keeps a missing order list UNVERIFIABLE", () => {
   // A capped record proves nothing about what is not in it, so absence stops being evidence.
   const note = judgeGroundTruth(

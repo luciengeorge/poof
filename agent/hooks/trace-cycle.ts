@@ -12,6 +12,7 @@ import {
   ordersFrom,
   positionsFrom,
   postTradeTruthFrom,
+  coreOrdersFrom,
   quotesFrom,
   truthFrom,
 } from "../lib/cycle-trace.ts";
@@ -221,19 +222,27 @@ export default defineHook({
           // report describes what is left AFTER trading), and the deterministic check keeps
           // grading the pre-trade account value it always graded.
           const postTrade = postTradeTruthFrom(output);
-          if (postTrade) {
+          const coreOrders = coreOrdersFrom(output);
+          if (postTrade || coreOrders) {
             await memory.saveCycleTraceContext(traceKey, {
-              postTradeAccountValueGbp: postTrade.accountValueGbp,
-              postTradeCashGbp: postTrade.cashGbp,
+              ...(postTrade
+                ? {
+                    postTradeAccountValueGbp: postTrade.accountValueGbp,
+                    postTradeCashGbp: postTrade.cashGbp,
+                  }
+                : {}),
+              ...(coreOrders ? { coreOrders, callId } : {}),
             });
           }
         } else if (name === "submit_orders") {
           const captured = ordersFrom(output);
           if (captured) {
             warnIfTruncated(traceKey, "the order list", captured.truncated);
+            const coreOrders = coreOrdersFrom(output);
             await memory.saveCycleTraceContext(traceKey, {
               orders: captured.orders,
               ordersTruncated: captured.truncated,
+              ...(coreOrders && coreOrders.length > 0 ? { coreOrders } : {}),
               callId,
             });
           } else {

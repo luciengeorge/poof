@@ -200,6 +200,14 @@ export interface StoredCycleTrace extends CycleTraceKey {
     detail?: string;
   }[];
   ordersTruncated?: boolean;
+  /** Index-core orders the code sent (sweep or funding sale), kept apart from `orders`. */
+  coreOrders?: {
+    ticker: string;
+    side: string;
+    notionalGbp?: number;
+    status: string;
+    detail?: string;
+  }[];
   exits?: { ticker: string; reason: string; detail?: string }[];
   exitsTruncated?: boolean;
   positionTickers?: string[];
@@ -507,6 +515,7 @@ export class Memory {
         | "externalGbpValues"
         | "orders"
         | "ordersTruncated"
+        | "coreOrders"
         | "exits"
         | "exitsTruncated"
         | "positionTickers"

@@ -922,6 +922,17 @@ export const saveCycleTraceContext = mutation({
       ),
     ),
     ordersTruncated: v.optional(v.boolean()),
+    coreOrders: v.optional(
+      v.array(
+        v.object({
+          ticker: v.string(),
+          side: v.string(),
+          notionalGbp: v.optional(v.number()),
+          status: v.string(),
+          detail: v.optional(v.string()),
+        }),
+      ),
+    ),
     exits: v.optional(
       v.array(
         v.object({
@@ -995,6 +1006,9 @@ export const saveCycleTraceContext = mutation({
       patch.ordersTruncated =
         merged.truncated || existing.ordersTruncated === true || rest.ordersTruncated === true;
     }
+    if (rest.coreOrders !== undefined && !alreadyMerged) {
+      patch.coreOrders = mergeEventRows(existing.coreOrders, rest.coreOrders).rows;
+    }
     if (rest.exits !== undefined && !alreadyMerged) {
       const merged = mergeEventRows(existing.exits, rest.exits);
       patch.exits = merged.rows;
@@ -1041,7 +1055,10 @@ export const saveCycleTraceContext = mutation({
     // Record the contribution only when something accumulating was actually merged, so a snapshot
     // save does not burn the callId and block a later, fuller delivery of the same call.
     const mergedSomething =
-      patch.orders !== undefined || patch.exits !== undefined || patch.quotes !== undefined;
+      patch.orders !== undefined ||
+      patch.coreOrders !== undefined ||
+      patch.exits !== undefined ||
+      patch.quotes !== undefined;
     if (mergedSomething && callId !== undefined && callId !== "") {
       patch.contextCallIds = [...(existing.contextCallIds ?? []), callId];
     }
