@@ -527,6 +527,10 @@ test("REGRESSION: the index-core sweep reaches the judge as its own list, and is
   const coreNote = truth.coverage.find((line) => /^index-core orders: each one/.test(line));
   assert.ok(coreNote);
   assert.match(coreNote, /SUPPORTED/);
+  // A failed or rejected sweep sent nothing: the note must not let a row's mere presence support it.
+  assert.match(coreNote, /STATUS/);
+  assert.match(coreNote, /Rejected or failed means NOTHING was sent/);
+  assert.match(coreNote, /Pending means an EARLIER order/);
   // The never-exercised rule still refutes a stock order, but carves out the two automatic kinds.
   const ordersNote = truth.coverage.find((line) => /^orders:/.test(line));
   assert.ok(ordersNote);

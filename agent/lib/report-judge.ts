@@ -299,11 +299,15 @@ function exitLines(trace: JudgeTrace): string[] {
   }
   if ((trace.coreOrders?.length ?? 0) > 0) {
     lines.push(
-      "index-core orders: each one is an order for the S&P 500 index fund that the code sent by " +
-        "itself (an end-of-cycle sweep of idle cash, or a sale to fund a stock buy), never through " +
-        "submit_orders. A report describing a matching automatic index-fund purchase or sale is " +
-        "SUPPORTED, and an index-fund purchase does not contradict a statement that no new STOCK " +
-        "was bought.",
+      "index-core orders: each one is an S&P 500 index-fund order the code handled by itself " +
+        "(an end-of-cycle sweep of idle cash, or a sale to fund a stock buy), never through " +
+        "submit_orders. READ EACH ROW'S STATUS. Only placed (or simulated, in a dry run) means an " +
+        "order went out this cycle, and a report describing a matching automatic index-fund " +
+        "purchase or sale is then SUPPORTED. Rejected or failed means NOTHING was sent, so a " +
+        "report saying that purchase or sale happened CONTRADICTS the record. Pending means an " +
+        "EARLIER order is still waiting, so a report presenting it as new today contradicts the " +
+        "record. An index-fund purchase does not contradict a statement that no new STOCK was " +
+        "bought.",
     );
   }
   return lines;
