@@ -376,10 +376,11 @@ test("REGRESSION: the judge runs from a SCHEDULE, never inline in the trace hook
   // turn that is placing orders: eve hooks execute inline in the event pipeline, which is why a
   // thrown hook escalates to turn.failed and why the online evals needed fetch timeouts at all.
   // If you are reading this because the test just failed: that is the point. Keep the
-  // deterministic numeric check in the hook and the judge in agent/schedules/scorecard.ts.
+  // deterministic numeric check in the hook and the judge in agent/schedules/judge.ts.
   const hook = readFileSync(new URL("../hooks/trace-cycle.ts", import.meta.url), "utf8");
   assert.doesNotMatch(hook, /report_judge|report-judge|reportJudge|saveReportScore/);
-  const schedule = readFileSync(new URL("../schedules/scorecard.ts", import.meta.url), "utf8");
-  assert.match(schedule, /report_judge/);
-  assert.match(schedule, /review_eval_health/);
+  const judge = readFileSync(new URL("../schedules/judge.ts", import.meta.url), "utf8");
+  assert.match(judge, /report_judge/);
+  const scorecard = readFileSync(new URL("../schedules/scorecard.ts", import.meta.url), "utf8");
+  assert.match(scorecard, /review_eval_health/);
 });

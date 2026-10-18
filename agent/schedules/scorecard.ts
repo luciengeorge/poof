@@ -6,36 +6,18 @@ import { memoryFromEnv } from "../lib/memory.ts";
 // 17:00 EDT). Once/week satisfies Hobby's once-per-day cron limit. The agent assembles the
 // scorecard from existing tools (review_performance, recall_memory): read-only, no trading.
 //
-// This one schedule also runs the ONLINE-EVAL read path, in two steps and in this order:
-//   1. the REPORT-QUALITY JUDGE pass over cycles that have already completed, and
-//   2. the EVAL HEALTH section built from the aggregate, including the verdicts from step 1.
-//
-// WHY THE JUDGE RUNS HERE AND NOT IN THE HOOK. eve hooks execute INLINE in the event pipeline
-// (that is why a thrown hook escalates to turn.failed, and why the online evals needed
-// agent/lib/fetch-timeout.ts to stop a hanging HTTP call from stalling a cycle). A model call
-// from a hook would block a LIVE TRADING CYCLE for tens of seconds on the very turn that is
-// placing orders. The deterministic numeric check therefore stays immediate in the hook, and
-// the slower, subtler judge runs here, batched, over stored data. See agent/lib/report-judge.ts.
-// The cycle runs once per weekday, so this is roughly 5 judge calls a week.
+// The report-quality JUDGE pass runs two hours earlier in its own schedule (judge.ts), so a
+// judge turn that fails can no longer take this report down with it, as it did on 2026-10-16.
+// review_eval_health below still picks up that run's verdicts.
 
-const JUDGE_PASS = [
-  "FIRST, run the weekly ONLINE-EVAL JUDGE PASS over cycles that have already finished. This is grading of past work, not trading, and it can change nothing: those reports were sent days ago.",
-  "1. Call list_unjudged_cycles.",
-  "2. For EACH entry in `cycles`, delegate to the `report_judge` subagent. Give its message the `cycleId` and `reportText`, and no embedded ground-truth payload. State that it must call its own `get_cycle_ground_truth` tool with that id before grading; its tool returns the facts and complete `coverage` notes. It grades, never rewrites. Set `outputSchema` to {\"oneOf\":[{\"type\":\"object\",\"properties\":{\"status\":{\"const\":\"judged\"},\"grounding\":{\"type\":\"integer\"},\"consistency\":{\"type\":\"integer\"},\"calibration\":{\"type\":\"integer\"},\"completeness\":{\"type\":\"integer\"},\"overall\":{\"type\":\"integer\"},\"findings\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}},\"required\":[\"status\",\"grounding\",\"consistency\",\"calibration\",\"completeness\",\"overall\",\"findings\"]},{\"type\":\"object\",\"properties\":{\"status\":{\"const\":\"unjudgeable\"},\"unjudgeableReason\":{\"type\":\"string\"}},\"required\":[\"status\",\"unjudgeableReason\"]}]}. ",
-  "3. For a `status: judged` subagent result, call save_report_score once with that result as `verdict`. For `status: unjudgeable`, call save_report_score once with `unjudgeableReason` and NO `verdict`. Do NOT invent a score, tidy either result, or re-run the judge: unavailable ground truth is UNJUDGEABLE, not grounding=3.",
-  "4. For each entry in `notJudgeable`, call save_report_score with its `unjudgedReason` and no `verdict`.",
-  "Then say nothing about this pass in the report beyond what the eval-health section below contains.",
-  "If any part of this pass fails, note it in one line and CARRY ON to the scorecard anyway: grading is observation, and failing to grade must never cost the user their weekly report.",
-].join(" ");
+
 
 const SCORECARD = [
-  "SECOND, post this week's PERFORMANCE SCORECARD to Slack (do NOT trade).",
+  "Post this week's PERFORMANCE SCORECARD to Slack (do NOT trade).",
   "Call review_performance and recall_memory, then post a skimmable summary: current equity and P&L since inception, alpha vs buy-and-hold SPY, realized win-rate (wins/losses), a short per-strategy-type breakdown from realizedByTag (which strategy types are winning or losing, with a small-sample caveat for types with fewer than ~10 closed trades), open positions with unrealized P&L and age, how many cycles ran and trades were placed this week, and your current memory (directives, lessons, observations). Also report TWO self-assessments verbatim rather than in your own words, because both are deliberately unflattering: `failurePatterns.note` (where the money actually went across the whole closed record, and whether any pattern has recurred often enough to justify changing a rule) and `calibration.note` (whether the confidence you claim at entry matches what actually happens). If either says there is not enough data, SAY THAT plainly rather than dressing it up: an honest unknown is the useful answer at this sample size.",
-  "Then call review_eval_health (AFTER the judge pass, so this week's verdicts are included) and include its `lines` as a final section, VERBATIM, in the order given. Do not paraphrase, summarise, soften, or reorder them, and do not add a reassuring gloss: the wording is deliberate, and a guard reported as NEVER EXERCISED must not be presented as one that is working.",
+  "Do NOT grade any report in this run (no list_unjudged_cycles, report_judge or save_report_score): the judge pass is a separate, earlier run. Then call review_eval_health (this week's judge verdicts were saved by that run) and include its `lines` as a final section, VERBATIM, in the order given. Do not paraphrase, summarise, soften, or reorder them, and do not add a reassuring gloss: the wording is deliberate, and a guard reported as NEVER EXERCISED must not be presented as one that is working.",
   "End with one line on what you're focused on improving.",
 ].join(" ");
-
-const JUDGE_PASS_AND_SCORECARD = `${JUDGE_PASS}\n\n${SCORECARD}`;
 
 export default defineSchedule({
   cron: "0 21 * * 5",
@@ -59,7 +41,7 @@ export default defineSchedule({
 
     waitUntil(
       receive(slack, {
-        message: JUDGE_PASS_AND_SCORECARD,
+        message: SCORECARD,
         target: { channelId },
         auth: appAuth,
       }),

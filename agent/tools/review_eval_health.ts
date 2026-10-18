@@ -38,8 +38,9 @@ export default defineTool({
     "production cycle traces into per-invariant pass / fail / not-applicable counts (so the " +
     "VACUITY RATE is explicit and a guard that was never exercised is not mistaken for one that " +
     "is working), any invariant violations with their tool sequence, the report-quality judge " +
-    "scores and trend, and any truncated, unfinished or unjudged cycles. Call it AFTER the judge " +
-    "pass so this week's verdicts are included. Post its `lines` VERBATIM: the wording is " +
+    "scores and trend, and any truncated, unfinished or unjudged cycles. This week's verdicts were " +
+    "saved by the separate judge-pass run earlier the same day: do NOT grade from the scorecard " +
+    "run, even if some cycles are still unjudged (they say so here). Post its `lines` VERBATIM: the wording is " +
     "deliberate. Read-only, observe-only: no effect on trading.",
   inputSchema: z.object({
     windowDays: z
