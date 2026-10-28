@@ -1284,6 +1284,22 @@ export const recentCycleTraces = query({
   },
 });
 
+/**
+ * Start times of cycle traces begun at or after `since`, finished or not. Keyed on startedAt
+ * because a turn that died mid-way never gets a completedAt, and the catch-up must still see it.
+ */
+export const cycleTraceStartsSince = query({
+  args: { token: v.string(), env: v.string(), since: v.number() },
+  handler: async (ctx, args) => {
+    assertSecret(args.token);
+    const rows = await ctx.db
+      .query("cycleTraces")
+      .withIndex("by_env_and_startedAt", (q) => q.eq("env", args.env).gte("startedAt", args.since))
+      .take(50);
+    return rows.map((t) => t.startedAt);
+  },
+});
+
 export const recallRecent = query({
   args: {
     token: v.string(),

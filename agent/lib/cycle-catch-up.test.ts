@@ -35,7 +35,9 @@ test("the catch-up writes the cycle heartbeat BEFORE dispatching, and checks mar
   const src = readFileSync(new URL("../schedules/cycle-catch-up.ts", import.meta.url), "utf8");
   assert.match(src, /cron: "0 18 \* \* 1-5"/);
   assert.match(src, /isUsMarketOpen\(now\)/);
-  assert.match(src, /recentCycleTraces\(tradingEnv\(\)/);
+  // Keyed on startedAt: a cycle that died mid-way has no completedAt and must still count.
+  assert.match(src, /cycleTraceStartsSince\(tradingEnv\(\)/);
+  assert.doesNotMatch(src, /recentCycleTraces/);
   const heartbeat = src.indexOf('recordCronRun({ schedule: "cycle"');
   const dispatch = src.indexOf("receive(slack");
   assert.ok(heartbeat > 0 && dispatch > heartbeat, "heartbeat must be written before the dispatch");

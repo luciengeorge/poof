@@ -28,7 +28,8 @@ export default defineSchedule({
     }
     let traceStarts: number[] | "unreadable";
     try {
-      traceStarts = (await memory.recentCycleTraces(tradingEnv(), 10)).map((t) => t.startedAt);
+      const startOfUtcDay = Date.parse(`${now.toISOString().slice(0, 10)}T00:00:00Z`);
+      traceStarts = await memory.cycleTraceStartsSince(tradingEnv(), startOfUtcDay);
     } catch (err) {
       console.warn("[cycle-catch-up] could not read cycle traces, not dispatching:", err);
       traceStarts = "unreadable";
