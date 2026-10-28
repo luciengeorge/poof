@@ -4,9 +4,9 @@ import {
   judgeGroundTruthResult,
   type JudgeGroundTruthResult,
 } from "../../../lib/report-judge.ts";
-import { memoryFromEnv, type Memory } from "../../../lib/memory.ts";
+import { memoryFromEnv, type Memory, type StoredCycleTrace } from "../../../lib/memory.ts";
 
-type CycleTraceReader = Pick<Memory, "getCycleTraceById">;
+type CycleTraceReader = Pick<Memory, "getCycleTraceById" | "recentCycleTraces">;
 
 /**
  * Load one cycle's facts through the secret-gated Convex memory client.
@@ -18,7 +18,29 @@ export async function loadCycleGroundTruth(
   cycleId: string,
   memory: CycleTraceReader = memoryFromEnv(),
 ): Promise<JudgeGroundTruthResult> {
-  return judgeGroundTruthResult(await memory.getCycleTraceById(cycleId));
+  const trace = await memory.getCycleTraceById(cycleId);
+  if (trace === null) return judgeGroundTruthResult(null);
+  return judgeGroundTruthResult({ ...trace, ...(await previousAccountValue(trace, memory)) });
+}
+
+/**
+ * The account value the cycle before this one recorded, which reports quote as "last recorded".
+ * Best effort: a failed lookup leaves the claim unverifiable rather than failing the grade.
+ */
+async function previousAccountValue(
+  trace: StoredCycleTrace,
+  memory: CycleTraceReader,
+): Promise<{ previousAccountValueGbp?: number }> {
+  try {
+    const previous = (await memory.recentCycleTraces(trace.env, 50))
+      .filter((t) => t.startedAt < trace.startedAt && t.postTradeAccountValueGbp !== undefined)
+      .sort((a, b) => b.startedAt - a.startedAt)[0];
+    return previous?.postTradeAccountValueGbp !== undefined
+      ? { previousAccountValueGbp: previous.postTradeAccountValueGbp }
+      : {};
+  } catch {
+    return {};
+  }
 }
 
 export default defineTool({

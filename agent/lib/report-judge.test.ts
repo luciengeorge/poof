@@ -515,7 +515,6 @@ test("REGRESSION: an automatic exit is a sale the judge is told is SUPPORTED wit
   const exitNote = truth.coverage.find((line) => /^exits: each one is a SELL/.test(line));
   assert.ok(exitNote, "a captured exit must say it is a sale sent outside submit_orders");
   assert.match(exitNote, /SUPPORTED/);
-  assert.match(exitNote, /unverifiable, not contradicted/);
 });
 
 test("REGRESSION: the index-core sweep reaches the judge as its own list, and is SUPPORTED", () => {
@@ -530,12 +529,34 @@ test("REGRESSION: the index-core sweep reaches the judge as its own list, and is
   // A failed or rejected sweep sent nothing: the note must not let a row's mere presence support it.
   assert.match(coreNote, /STATUS/);
   assert.match(coreNote, /Rejected or failed means NOTHING was sent/);
-  assert.match(coreNote, /Pending means an EARLIER order/);
+  assert.match(coreNote, /Already-waiting means an EARLIER order/);
   // The never-exercised rule still refutes a stock order, but carves out the two automatic kinds.
   const ordersNote = truth.coverage.find((line) => /^orders:/.test(line));
   assert.ok(ordersNote);
   assert.match(ordersNote, /CONTRADICTS/);
   assert.match(ordersNote, /automatic exits and index-core orders/);
+});
+
+test("REGRESSION: placed means SENT, so a report calling it pending agrees, and broker fields are checkable", () => {
+  const note = judgeGroundTruth(quietCycleWithAutomaticOrders()).coverage.find((line) =>
+    /^brokerStatus and filledQuantity/.test(line),
+  );
+  assert.ok(note, "the broker-status note must always be present");
+  assert.match(note, /placed means SENT to the broker, not filled/);
+  assert.match(note, /SUPPORTED when they match/);
+  assert.match(note, /absent, a stated broker status is unverifiable and costs nothing/);
+  // The old exit wording told the judge fill status was never recorded; it now can be.
+  const exitNote = judgeGroundTruth(quietCycleWithAutomaticOrders()).coverage.find((line) =>
+    /^exits: each one is a SELL/.test(line),
+  );
+  assert.ok(exitNote);
+  assert.doesNotMatch(exitNote, /not recorded/);
+});
+
+test("the previous cycle's value travels with the ground truth when the tool found one", () => {
+  const truth = judgeGroundTruth(quietCycleWithAutomaticOrders({ previousAccountValueGbp: 246.71 }));
+  assert.equal(truth.previousAccountValueGbp, 246.71);
+  assert.ok(truth.coverage.some((line) => /^previousAccountValueGbp/.test(line)));
 });
 
 test("an EMPTY core list means no index-fund order, which a report cannot claim", () => {

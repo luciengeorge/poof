@@ -232,6 +232,9 @@ export interface TracedOrder {
   strategyTag?: string;
   /** Why it was skipped or rejected. */
   detail?: string;
+  /** The broker's own answer when the order was sent, e.g. "NEW". */
+  brokerStatus?: string;
+  filledQuantity?: number;
 }
 
 /** One index-core order the code sent, as recorded for the judge. Never a stock order. */
@@ -239,9 +242,11 @@ export interface TracedCoreOrder {
   ticker: string;
   side: string;
   notionalGbp?: number;
-  /** "placed" | "simulated" | "rejected" | "pending" (one already waiting) | "failed". */
+  /** "placed" | "simulated" | "rejected" | "already-waiting" (an earlier order) | "failed". */
   status: string;
   detail?: string;
+  brokerStatus?: string;
+  filledQuantity?: number;
 }
 
 /** One exit the exit engine triggered, as recorded for the judge. */
@@ -249,6 +254,8 @@ export interface TracedExit {
   ticker: string;
   reason: string;
   detail?: string;
+  brokerStatus?: string;
+  filledQuantity?: number;
 }
 
 /** One ADVISORY-ONLY external holding, with its GBP figures under NAMED fields. */
@@ -266,6 +273,21 @@ function nonEmptyString(value: unknown): string | null {
 function detailOf(value: unknown): string | undefined {
   const text = nonEmptyString(value);
   return text === null ? undefined : text.slice(0, MAX_DETAIL_CHARS);
+}
+
+/**
+ * The broker's status and fill from a Trading 212 order response. Reports quote these ("NEW with
+ * zero shares filled"), and without them the judge could only call that unverifiable.
+ */
+function brokerFieldsOf(order: unknown): { brokerStatus?: string; filledQuantity?: number } {
+  if (typeof order !== "object" || order === null) return {};
+  const raw = order as Record<string, unknown>;
+  const brokerStatus = nonEmptyString(raw.status);
+  const filledQuantity = finiteOrNull(raw.filledQuantity);
+  return {
+    ...(brokerStatus !== null ? { brokerStatus: brokerStatus.slice(0, MAX_DETAIL_CHARS) } : {}),
+    ...(filledQuantity !== null ? { filledQuantity } : {}),
+  };
 }
 
 /**
@@ -300,6 +322,7 @@ export function ordersFrom(
       ...order,
       status: skipped !== undefined ? "skipped" : simulated ? "simulated" : "placed",
       ...(skipped !== undefined ? { detail: skipped } : {}),
+      ...brokerFieldsOf((row as { order?: unknown }).order),
     });
   }
   for (const row of rejected) {
@@ -345,6 +368,12 @@ export function exitsFrom(
   if (typeof output !== "object" || output === null) return null;
   const signals = (output as { exitsTriggered?: unknown }).exitsTriggered;
   if (!Array.isArray(signals)) return null;
+  const placed = (output as { placed?: unknown }).placed;
+  const sentByTicker = new Map<string, unknown>();
+  for (const row of Array.isArray(placed) ? placed : []) {
+    const ticker = orderFrom(row)?.ticker;
+    if (ticker !== undefined) sentByTicker.set(ticker, (row as { order?: unknown }).order);
+  }
   const exits: TracedExit[] = [];
   let truncated = false;
   for (const signal of signals) {
@@ -358,7 +387,12 @@ export function exitsFrom(
       continue;
     }
     const detail = detailOf(raw.detail);
-    exits.push({ ticker, reason, ...(detail !== undefined ? { detail } : {}) });
+    exits.push({
+      ticker,
+      reason,
+      ...(detail !== undefined ? { detail } : {}),
+      ...brokerFieldsOf(sentByTicker.get(ticker)),
+    });
   }
   return { exits, truncated };
 }
@@ -386,8 +420,10 @@ export function coreOrdersFrom(output: unknown): TracedCoreOrder[] | null {
       ticker: CORE_TICKER,
       side: raw.action === "fund" ? "SELL" : "BUY",
       ...(notionalGbp !== null && notionalGbp > 0 ? { notionalGbp } : {}),
-      status,
+      // Renamed so the judge cannot read a report's "pending" (sent, not yet filled) as this.
+      status: status === "pending" ? "already-waiting" : status,
       ...(detail !== undefined ? { detail } : {}),
+      ...brokerFieldsOf(raw.order),
     },
   ];
 }

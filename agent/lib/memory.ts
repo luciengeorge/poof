@@ -198,6 +198,8 @@ export interface StoredCycleTrace extends CycleTraceKey {
     status: string;
     strategyTag?: string;
     detail?: string;
+    brokerStatus?: string;
+    filledQuantity?: number;
   }[];
   ordersTruncated?: boolean;
   /** Index-core orders the code sent (sweep or funding sale), kept apart from `orders`. */
@@ -207,8 +209,16 @@ export interface StoredCycleTrace extends CycleTraceKey {
     notionalGbp?: number;
     status: string;
     detail?: string;
+    brokerStatus?: string;
+    filledQuantity?: number;
   }[];
-  exits?: { ticker: string; reason: string; detail?: string }[];
+  exits?: {
+    ticker: string;
+    reason: string;
+    detail?: string;
+    brokerStatus?: string;
+    filledQuantity?: number;
+  }[];
   exitsTruncated?: boolean;
   positionTickers?: string[];
   positionCount?: number;
