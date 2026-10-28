@@ -2,6 +2,7 @@ import { defineSchedule } from "eve/schedules";
 import slack from "../channels/slack.ts";
 import { isUsMarketOpen } from "../lib/clock.ts";
 import { memoryFromEnv } from "../lib/memory.ts";
+import { CYCLE_MESSAGE } from "../lib/cycle-catch-up.ts";
 
 // Cron fires in UTC; the handler gates precisely to US market hours via ET (DST-aware).
 // Vercel Hobby plan allows only ONE cron run/day, so this fires once per weekday at
@@ -35,8 +36,7 @@ export default defineSchedule({
 
     waitUntil(
       receive(slack, {
-        message:
-          "Run one trading cycle now, following your instructions, and post the summary here.",
+        message: CYCLE_MESSAGE,
         target: { channelId },
         auth: appAuth,
       }),
