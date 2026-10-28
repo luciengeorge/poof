@@ -4,28 +4,37 @@ import { alert } from "../lib/alert.ts";
 import { isUsMarketOpen } from "../lib/clock.ts";
 import { CYCLE_MESSAGE, shouldCatchUp } from "../lib/cycle-catch-up.ts";
 import { memoryFromEnv } from "../lib/memory.ts";
+import { tradingEnv } from "../lib/risk-runtime.ts";
 
 // Runs the trading cycle late when the 15:00 UTC cycle cron left no heartbeat today. On
 // 2026-10-28 a prod deploy at 15:33 re-registered every cron mid-hour and that day's cycle never
 // fired; the GitHub watchdog only noticed five hours later, after the close. 18:00 UTC is inside
 // US market hours all year and well after the cycle's hour has ended.
 //
-// It records a `cycle` heartbeat before dispatching, so the watchdog is satisfied and a second
-// catch-up the same day finds that heartbeat and does nothing.
+// It runs only when there is no `cycle` heartbeat AND no cycle trace from today (cycle.ts still
+// dispatches when its heartbeat write fails). It records a `cycle` heartbeat before dispatching,
+// so the watchdog is satisfied and a second catch-up the same day does nothing.
 export default defineSchedule({
   cron: "0 18 * * 1-5",
   async run({ receive, waitUntil, appAuth }) {
     const now = new Date();
     const memory = memoryFromEnv();
-    let latest: { firedAt?: unknown } | null | "unreadable";
+    let heartbeat: { firedAt?: unknown } | null | "unreadable";
     try {
-      latest = (await memory.latestCronRun("cycle")) as { firedAt?: unknown } | null;
+      heartbeat = (await memory.latestCronRun("cycle")) as { firedAt?: unknown } | null;
     } catch (err) {
       console.warn("[cycle-catch-up] could not read the cycle heartbeat, not dispatching:", err);
-      latest = "unreadable";
+      heartbeat = "unreadable";
     }
-    if (!shouldCatchUp(latest, now)) {
-      console.log("[cycle-catch-up] today's cycle already fired (or heartbeat unreadable); nothing to do");
+    let traceStarts: number[] | "unreadable";
+    try {
+      traceStarts = (await memory.recentCycleTraces(tradingEnv(), 10)).map((t) => t.startedAt);
+    } catch (err) {
+      console.warn("[cycle-catch-up] could not read cycle traces, not dispatching:", err);
+      traceStarts = "unreadable";
+    }
+    if (!shouldCatchUp(heartbeat, traceStarts, now)) {
+      console.log("[cycle-catch-up] today's cycle already ran (or its evidence is unreadable); nothing to do");
       return;
     }
 
