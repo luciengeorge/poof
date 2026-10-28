@@ -553,6 +553,17 @@ test("REGRESSION: placed means SENT, so a report calling it pending agrees, and 
   assert.doesNotMatch(exitNote, /not recorded/);
 });
 
+test("a core row stored before the rename as pending reaches the judge as already-waiting", () => {
+  const truth = judgeGroundTruth(
+    quietCycleWithAutomaticOrders({
+      coreOrders: [{ ticker: "VUAGl_EQ", side: "BUY", status: "pending", detail: "waiting" }],
+    }),
+  );
+  assert.deepEqual(truth.coreOrders, [
+    { ticker: "VUAGl_EQ", side: "BUY", status: "already-waiting", detail: "waiting" },
+  ]);
+});
+
 test("the previous cycle's value travels with the ground truth when the tool found one", () => {
   const truth = judgeGroundTruth(quietCycleWithAutomaticOrders({ previousAccountValueGbp: 246.71 }));
   assert.equal(truth.previousAccountValueGbp, 246.71);

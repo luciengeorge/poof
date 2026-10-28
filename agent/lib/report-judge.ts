@@ -507,7 +507,14 @@ export function judgeGroundTruth(trace: JudgeTrace): JudgeGroundTruth {
       ? { previousAccountValueGbp: trace.previousAccountValueGbp }
       : {}),
     ...(trace.orders !== undefined ? { orders: trace.orders } : {}),
-    ...(trace.coreOrders !== undefined ? { coreOrders: trace.coreOrders } : {}),
+    ...(trace.coreOrders !== undefined
+      ? {
+          // Traces written before the rename store "pending"; the judge must only see the new name.
+          coreOrders: trace.coreOrders.map((o) =>
+            o.status === "pending" ? { ...o, status: "already-waiting" } : o,
+          ),
+        }
+      : {}),
     ...(trace.exits !== undefined ? { exits: trace.exits } : {}),
     ...(trace.positionTickers !== undefined
       ? { positionTickers: trace.positionTickers, positionCount: trace.positionCount }
