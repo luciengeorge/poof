@@ -395,7 +395,8 @@ export default defineSchema({
   })
     .index("by_env", ["env"])
     .index("by_env_and_session_and_turn", ["env", "sessionId", "turnId"])
-    .index("by_env_and_completedAt", ["env", "completedAt"]),
+    .index("by_env_and_completedAt", ["env", "completedAt"])
+    .index("by_env_and_startedAt", ["env", "startedAt"]),
 
   // ADVISORY-ONLY holdings in a SEPARATE account the agent has no API access to and can
   // NEVER trade. Deliberately its own table: these rows must never reach the trading

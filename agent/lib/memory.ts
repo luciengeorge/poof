@@ -582,6 +582,9 @@ export class Memory {
     return ((await this.query("getCycleTraceById", { cycleId })) ??
       null) as StoredCycleTrace | null;
   }
+  async cycleTraceStartsSince(env: Env, since: number): Promise<number[]> {
+    return ((await this.query("cycleTraceStartsSince", { env, since })) ?? []) as number[];
+  }
   async recentCycleTraces(env: Env, limit?: number): Promise<StoredCycleTrace[]> {
     return ((await this.query("recentCycleTraces", { env, limit })) ??
       []) as StoredCycleTrace[];
