@@ -688,7 +688,7 @@ test("a funding sale is a core SELL, and a pending core order is kept with no no
   );
   assert.deepEqual(
     coreOrdersFrom({ core: { action: "sweep", status: "pending", quantity: 0, notionalGbp: 0, dryRun: false, detail: "waiting" } }),
-    [{ ticker: "VUAGl_EQ", side: "BUY", status: "pending", detail: "waiting" }],
+    [{ ticker: "VUAGl_EQ", side: "BUY", status: "already-waiting", detail: "waiting" }],
   );
 });
 
@@ -699,4 +699,40 @@ test("no core order needed is EMPTY; no core field at all is NOT RECORDED", () =
   assert.equal(coreOrdersFrom({ recorded: false, note: "memory or broker unavailable" }), null);
   assert.equal(coreOrdersFrom({ core: { action: "sweep" } }), null);
   assert.equal(coreOrdersFrom(null), null);
+});
+
+// --- broker status and fill ---
+
+const NEW_UNFILLED = { id: 1, ticker: "MDT_US_EQ", quantity: 0.5, status: "NEW", filledQuantity: 0 };
+
+test("a placed order carries the broker's status and fill, so a quoted NEW-zero-filled is checkable", () => {
+  const captured = ordersFrom({
+    placed: [{ proposal: { ticker: "MDT_US_EQ", side: "BUY", notional: 45 }, quantity: 0.5, dryRun: false, order: NEW_UNFILLED }],
+    rejected: [],
+  });
+  assert.deepEqual(captured?.orders, [
+    { ticker: "MDT_US_EQ", side: "BUY", notionalGbp: 45, status: "placed", brokerStatus: "NEW", filledQuantity: 0 },
+  ]);
+});
+
+test("an exit carries the status of the sell that was sent for its ticker", () => {
+  const captured = exitsFrom({
+    exitsTriggered: [
+      { ticker: "LLY_US_EQ", reason: "max-hold" },
+      { ticker: "VRT_US_EQ", reason: "stop-loss" },
+    ],
+    placed: [{ proposal: { ticker: "LLY_US_EQ", side: "SELL" }, quantity: 0.03, dryRun: false, order: { ...NEW_UNFILLED, ticker: "LLY_US_EQ" } }],
+    rejected: [],
+  });
+  assert.deepEqual(captured?.exits, [
+    { ticker: "LLY_US_EQ", reason: "max-hold", brokerStatus: "NEW", filledQuantity: 0 },
+    { ticker: "VRT_US_EQ", reason: "stop-loss" },
+  ]);
+});
+
+test("a core order carries the broker's status and fill", () => {
+  assert.deepEqual(
+    coreOrdersFrom({ core: { action: "sweep", status: "placed", quantity: 0.3, notionalGbp: 35.33, dryRun: false, detail: "swept", order: { ...NEW_UNFILLED, ticker: "VUAGl_EQ" } } }),
+    [{ ticker: "VUAGl_EQ", side: "BUY", notionalGbp: 35.33, status: "placed", detail: "swept", brokerStatus: "NEW", filledQuantity: 0 }],
+  );
 });

@@ -177,6 +177,8 @@ export interface JudgeTrace {
   /** From record_cycle's fresh broker fetch at the end of the cycle: POST-TRADE. */
   postTradeAccountValueGbp?: number;
   postTradeCashGbp?: number;
+  /** The previous cycle's recorded account value, looked up by the ground-truth tool. */
+  previousAccountValueGbp?: number;
   orders?: readonly TracedOrder[];
   ordersTruncated?: boolean;
   coreOrders?: readonly TracedCoreOrder[];
@@ -220,6 +222,8 @@ export interface JudgeGroundTruth {
   deployedGbp?: number;
   /** Post-trade account value minus post-trade cash: what a report calls "invested". */
   postTradeInvestedGbp?: number;
+  /** What the report calls the "last recorded" account value. */
+  previousAccountValueGbp?: number;
   orders?: readonly TracedOrder[];
   coreOrders?: readonly TracedCoreOrder[];
   exits?: readonly TracedExit[];
@@ -282,6 +286,17 @@ function categoryLines(
 }
 
 /**
+ * Reports quote the broker's answer ("NEW with zero shares filled"). Before it was recorded the
+ * judge marked that down as unverifiable, and read "pending" as contradicting "placed".
+ */
+const BROKER_STATUS_NOTE =
+  "brokerStatus and filledQuantity on an order, exit or index-core order are the broker's own " +
+  "answer when it was sent. A report quoting them (for example NEW with zero shares filled) is " +
+  "SUPPORTED when they match. Status placed means SENT to the broker, not filled: a report calling " +
+  "a placed order pending, unconfirmed or not yet filled agrees with it. Where those two fields " +
+  "are absent, a stated broker status is unverifiable and costs nothing.";
+
+/**
  * Exits and index-core orders are SELLS and BUYS the code sends without submit_orders, so they
  * never appear in `orders`. Reading "no submit_orders" as "no sale" is how accurate reports of an
  * automatic sell or an index-fund purchase were scored as invented, week after week.
@@ -292,9 +307,7 @@ function exitLines(trace: JudgeTrace): string[] {
     lines.push(
       "exits: each one is a SELL the automatic exit rules sent through manage_positions, never " +
         "through submit_orders, so it does not appear in orders. A report saying an automatic " +
-        "sale of one of these tickers was submitted or is pending is SUPPORTED. Fill status was " +
-        "not recorded, so a stated broker status (for example NEW with zero shares filled) is " +
-        "unverifiable, not contradicted.",
+        "sale of one of these tickers was submitted or is pending is SUPPORTED.",
     );
   }
   if ((trace.coreOrders?.length ?? 0) > 0) {
@@ -304,8 +317,8 @@ function exitLines(trace: JudgeTrace): string[] {
         "submit_orders. READ EACH ROW'S STATUS. Only placed (or simulated, in a dry run) means an " +
         "order went out this cycle, and a report describing a matching automatic index-fund " +
         "purchase or sale is then SUPPORTED. Rejected or failed means NOTHING was sent, so a " +
-        "report saying that purchase or sale happened CONTRADICTS the record. Pending means an " +
-        "EARLIER order is still waiting, so a report presenting it as new today contradicts the " +
+        "report saying that purchase or sale happened CONTRADICTS the record. Already-waiting means " +
+        "an EARLIER order is still waiting, so a report presenting it as new today contradicts the " +
         "record. An index-fund purchase does not contradict a statement that no new STOCK was " +
         "bought.",
     );
@@ -406,6 +419,13 @@ export function judgeGroundTruth(trace: JudgeTrace): JudgeGroundTruth {
     trace.postTradeAccountValueGbp !== undefined && trace.postTradeCashGbp !== undefined
       ? Math.round((trace.postTradeAccountValueGbp - trace.postTradeCashGbp) * 100) / 100
       : undefined;
+  coverage.push(
+    trace.previousAccountValueGbp !== undefined
+      ? "previousAccountValueGbp is the account value the PREVIOUS cycle recorded. A report's " +
+          "\"last recorded\" or \"up from\" figure is that number, so check it against this one."
+      : "no previous cycle's account value is available, so a stated \"last recorded\" figure " +
+          "is unverifiable and costs nothing.",
+  );
   if (postTradeInvestedGbp !== undefined) {
     coverage.push(
       "postTradeInvestedGbp is the post-trade account value minus the post-trade cash. A report's " +
@@ -428,6 +448,7 @@ export function judgeGroundTruth(trace: JudgeTrace): JudgeGroundTruth {
           "are recorded separately, under exits and index-core orders, and do not count here)",
       ),
     ),
+    BROKER_STATUS_NOTE,
     ...categoryLines(
       "index-core orders",
       trace.coreOrders !== undefined,
@@ -482,8 +503,18 @@ export function judgeGroundTruth(trace: JudgeTrace): JudgeGroundTruth {
       : {}),
     ...(trace.deployedGbp !== undefined ? { deployedGbp: trace.deployedGbp } : {}),
     ...(postTradeInvestedGbp !== undefined ? { postTradeInvestedGbp } : {}),
+    ...(trace.previousAccountValueGbp !== undefined
+      ? { previousAccountValueGbp: trace.previousAccountValueGbp }
+      : {}),
     ...(trace.orders !== undefined ? { orders: trace.orders } : {}),
-    ...(trace.coreOrders !== undefined ? { coreOrders: trace.coreOrders } : {}),
+    ...(trace.coreOrders !== undefined
+      ? {
+          // Traces written before the rename store "pending"; the judge must only see the new name.
+          coreOrders: trace.coreOrders.map((o) =>
+            o.status === "pending" ? { ...o, status: "already-waiting" } : o,
+          ),
+        }
+      : {}),
     ...(trace.exits !== undefined ? { exits: trace.exits } : {}),
     ...(trace.positionTickers !== undefined
       ? { positionTickers: trace.positionTickers, positionCount: trace.positionCount }

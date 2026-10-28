@@ -30,6 +30,9 @@ test("the judge tool returns ground truth and coverage for its requested cycle i
       requestedId = cycleId;
       return TRACE;
     },
+    async recentCycleTraces() {
+      return [];
+    },
   });
 
   assert.equal(requestedId, REAL_CYCLE_ID);
@@ -47,6 +50,9 @@ test("the judge tool explicitly returns UNJUDGEABLE when its cycle id has no tra
     async getCycleTraceById() {
       return null;
     },
+    async recentCycleTraces() {
+      return [];
+    },
   });
 
   assert.deepEqual(result, {
@@ -54,4 +60,56 @@ test("the judge tool explicitly returns UNJUDGEABLE when its cycle id has no tra
     reason:
       "ground truth is unavailable for this cycle id, so this report is UNJUDGEABLE and must not receive a score",
   });
+});
+
+function traceAt(startedAt: number, over: Partial<StoredCycleTrace> = {}): StoredCycleTrace {
+  return { ...TRACE, _id: `t${startedAt}`, startedAt, completedAt: startedAt + 1, ...over };
+}
+
+/** Honours env and limit like the Convex query (newest first by completedAt). */
+function recentFrom(rows: StoredCycleTrace[]) {
+  return async (env: string, limit?: number) =>
+    rows
+      .filter((t) => t.env === env)
+      .sort((a, b) => (b.completedAt ?? 0) - (a.completedAt ?? 0))
+      .slice(0, limit ?? 10);
+}
+
+test("REGRESSION: the previous cycle's recorded value reaches the judge, so \"last recorded\" is checkable", async () => {
+  const current = traceAt(500, { postTradeAccountValueGbp: 241.11 });
+  const rows = [
+    traceAt(100, { postTradeAccountValueGbp: 239.0 }),
+    traceAt(400, { postTradeAccountValueGbp: 242.46 }),
+    traceAt(450), // an ad-hoc turn with no post-trade figure: skipped
+    traceAt(480, { env: "demo", postTradeAccountValueGbp: 999 }),
+    current,
+    traceAt(600, { postTradeAccountValueGbp: 240.11 }), // a LATER cycle is never "previous"
+  ];
+  const result = await loadCycleGroundTruth("t500", {
+    async getCycleTraceById() {
+      return current;
+    },
+    recentCycleTraces: recentFrom(rows),
+  });
+  assert.equal(result.status, "available");
+  if (result.status === "available") {
+    assert.equal(result.groundTruth.previousAccountValueGbp, 242.46);
+    assert.ok(result.groundTruth.coverage.some((l) => /^previousAccountValueGbp/.test(l)));
+  }
+});
+
+test("a failed previous-value lookup leaves the claim unverifiable, never fails the grade", async () => {
+  const result = await loadCycleGroundTruth("t500", {
+    async getCycleTraceById() {
+      return traceAt(500);
+    },
+    async recentCycleTraces() {
+      throw new Error("convex unavailable");
+    },
+  });
+  assert.equal(result.status, "available");
+  if (result.status === "available") {
+    assert.equal(result.groundTruth.previousAccountValueGbp, undefined);
+    assert.ok(result.groundTruth.coverage.some((l) => /unverifiable and costs nothing/.test(l)));
+  }
 });
