@@ -30,7 +30,7 @@ const JUDGE_PASS = [
 
 export default defineSchedule({
   cron: "0 19 * * 5",
-  async run({ receive, waitUntil, appAuth }) {
+  async run({ to, waitUntil, appAuth }) {
     const firedAt = Date.now();
     const channelId = process.env.SLACK_CHANNEL_ID;
     const dispatched = !!channelId;
@@ -47,9 +47,7 @@ export default defineSchedule({
     }
 
     waitUntil(
-      receive(slack, {
-        message: JUDGE_PASS,
-        target: { channelId },
+      to(slack, { channelId }).send(JUDGE_PASS, {
         auth: appAuth,
       }),
     );

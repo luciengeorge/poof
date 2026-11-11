@@ -39,7 +39,7 @@ test("the catch-up writes the cycle heartbeat BEFORE dispatching, and checks mar
   assert.match(src, /cycleTraceStartsSince\(tradingEnv\(\)/);
   assert.doesNotMatch(src, /recentCycleTraces/);
   const heartbeat = src.indexOf('recordCronRun({ schedule: "cycle"');
-  const dispatch = src.indexOf("receive(slack");
+  const dispatch = src.indexOf("to(slack");
   assert.ok(heartbeat > 0 && dispatch > heartbeat, "heartbeat must be written before the dispatch");
   assert.match(src, /heartbeat write failed, not dispatching[^]*?return;/);
 });

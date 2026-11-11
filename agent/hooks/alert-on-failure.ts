@@ -8,16 +8,18 @@ import { alert, describeFailure } from "../lib/alert.ts";
 
 export default defineHook({
   events: {
-    async "turn.failed"(event, ctx) {
+    async "turn.settled"(event, ctx) {
+      if (event.data.outcome !== "failed") return;
       try {
-        await alert(`🚨 poof turn failed (session ${ctx.session.id}): ${describeFailure(event)}`);
+        await alert(`🚨 poof turn failed (session ${ctx.session.id}): ${describeFailure({ data: event.data.error })}`);
       } catch {
         /* never throw from a failure hook */
       }
     },
-    async "session.failed"(event, ctx) {
+    async "session.ended"(event, ctx) {
+      if (event.data.outcome !== "failed") return;
       try {
-        await alert(`🚨 poof SESSION FAILED (session ${ctx.session.id}): ${describeFailure(event)}`);
+        await alert(`🚨 poof SESSION FAILED (session ${ctx.session.id}): ${describeFailure({ data: event.data.error })}`);
       } catch {
         /* never throw from a failure hook */
       }

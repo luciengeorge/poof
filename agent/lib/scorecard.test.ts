@@ -22,8 +22,8 @@ test("the judge pass records unavailable ground truth as UNJUDGEABLE without a s
 test("the judge pass runs in its OWN schedule, before the scorecard, so a failed grading turn cannot sink the report", () => {
   assert.match(source, /cron: "0 19 \* \* 5"/);
   assert.match(scorecard, /cron: "0 21 \* \* 5"/);
-  assert.match(source, /message: JUDGE_PASS,/);
-  assert.match(scorecard, /message: SCORECARD,/);
+  assert.match(source, /\.send\(JUDGE_PASS,/);
+  assert.match(scorecard, /\.send\(SCORECARD,/);
   assert.match(scorecard, /Do NOT grade any report in this run/);
   // The prompt NAMES the grading tools only to forbid them; no step may call them.
   assert.doesNotMatch(scorecard, /Call list_unjudged_cycles|delegate to the `report_judge`/);

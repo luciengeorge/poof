@@ -17,12 +17,12 @@
     "eval": "eve eval"
   },
   "dependencies": {
-    "@vercel/connect": "0.2.2",
-    "ai": "^7.0.28",
+    "@vercel/connect": "2.9.1",
+    "ai": "^7.0.169",
     "convex": "^1.42.0",
     "date-fns": "^4.4.0",
     "date-fns-tz": "^3.2.0",
-    "eve": "^0.22.1",
+    "eve": "1.0.0-rc.9",
     "zod": "4.4.3"
   },
   "devDependencies": {
@@ -30,10 +30,10 @@
     "typescript": "^7.0.2"
   },
   "overrides": {
-    "ai": "^7.0.28"
+    "ai": "^7.0.169"
   },
   "resolutions": {
-    "ai": "^7.0.28"
+    "ai": "^7.0.169"
   },
   "engines": {
     "node": "24.x"

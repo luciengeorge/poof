@@ -16,7 +16,7 @@ import { tradingEnv } from "../lib/risk-runtime.ts";
 // so the watchdog is satisfied and a second catch-up the same day does nothing.
 export default defineSchedule({
   cron: "0 18 * * 1-5",
-  async run({ receive, waitUntil, appAuth }) {
+  async run({ to, waitUntil, appAuth }) {
     const now = new Date();
     const memory = memoryFromEnv();
     let heartbeat: { firedAt?: unknown } | null | "unreadable";
@@ -59,9 +59,7 @@ export default defineSchedule({
     );
 
     waitUntil(
-      receive(slack, {
-        message: CYCLE_MESSAGE,
-        target: { channelId },
+      to(slack, { channelId }).send(CYCLE_MESSAGE, {
         auth: appAuth,
       }),
     );

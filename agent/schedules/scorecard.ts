@@ -21,7 +21,7 @@ const SCORECARD = [
 
 export default defineSchedule({
   cron: "0 21 * * 5",
-  async run({ receive, waitUntil, appAuth }) {
+  async run({ to, waitUntil, appAuth }) {
     const firedAt = Date.now();
     const channelId = process.env.SLACK_CHANNEL_ID;
     const dispatched = !!channelId;
@@ -40,9 +40,7 @@ export default defineSchedule({
     }
 
     waitUntil(
-      receive(slack, {
-        message: SCORECARD,
-        target: { channelId },
+      to(slack, { channelId }).send(SCORECARD, {
         auth: appAuth,
       }),
     );

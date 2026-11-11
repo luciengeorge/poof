@@ -99,7 +99,24 @@ export function resultOrders(
   const orders: TracedOrder[] = [];
   let truncated = false;
   let seenAny = false;
+  const callNames = new Map<string, string>();
   for (const event of events) {
+    const data = event.data as { callId?: string; capability?: { name?: string; kind?: string }; output?: unknown } | undefined;
+    if (event.type === "call.requested" && data?.callId && data.capability?.kind === "tool") {
+      callNames.set(data.callId, data.capability.name ?? "");
+    }
+    if (event.type === "call.settled") {
+      if (!data?.callId || callNames.get(data.callId) !== "submit_orders") continue;
+      const batch = ordersFrom(data.output);
+      if (!batch) continue;
+      seenAny = true;
+      truncated ||= batch.truncated;
+      for (const order of batch.orders) {
+        if (orders.length >= MAX_TRACE_ORDERS) { truncated = true; break; }
+        orders.push(order);
+      }
+      continue;
+    }
     if (event.type !== "action.result") continue;
     const result = (event.data as { result?: unknown })?.result;
     if (actionResultName(result) !== "submit_orders") continue;
@@ -121,6 +138,14 @@ export function resultOrders(
 export function requestedActionNames(events: readonly EventLike[]): string[] {
   const requested: string[] = [];
   for (const event of events) {
+    if (event.type === "call.requested") {
+      const data = event.data as { capability?: { kind?: string; name?: string } } | undefined;
+      const capability = data?.capability;
+      if ((capability?.kind === "tool" || capability?.kind === "agent") && capability.name) {
+        requested.push(capability.name);
+      }
+      continue;
+    }
     if (event.type !== "actions.requested") continue;
     const actions = (event.data as { actions?: unknown })?.actions;
     if (!Array.isArray(actions)) continue;
