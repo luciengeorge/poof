@@ -5,7 +5,7 @@ import { screenOne } from "../jev-shadow.ts";
 import { researchDay, shadowTick } from "../../../convex/shadowCalendar.ts";
 import { canonicalUrl, newsEligibility, relativeOutcome, startPair, storyKey, validQuote, type PriceBasis, type TimedQuote } from "./policy.ts";
 import type { Env, Lease, ShadowKind, ShadowStore } from "./store.ts";
-import { ShadowBudgetError, ShadowProviderError } from "./providers.ts";
+import { ShadowBudgetError, ShadowProviderError, ShadowStoreError } from "./providers.ts";
 
 export interface ShadowDeps {
   store: ShadowStore; now: () => number; sleep: (ms: number) => Promise<void>;
@@ -76,23 +76,38 @@ export async function runShadow(kind: ShadowKind, env: Env, owner: string,
     }
     const pending: string[] = [];
     let truncated = 0;
+    let rejected = 0;
+    const failures: string[] = [];
     const offset = Math.floor(claim.slot) % Math.max(1, inputs.cursors.length);
     const cursors = [...inputs.cursors.slice(offset), ...inputs.cursors.slice(0, offset)];
     for (const cursor of cursors.slice(0, 16)) {
       await pace(); const through = now();
       const from = new Date(Math.max(through - 36 * 3_600_000, cursor.through - 900_000)).toISOString().slice(0, 10);
-      const items = await news.getCompanyNews(cursor.ticker, from, new Date(through).toISOString().slice(0, 10));
+      let items: NewsItem[];
+      try {
+        items = await news.getCompanyNews(cursor.ticker, from, new Date(through).toISOString().slice(0, 10));
+      } catch (error) {
+        // A provider HTTP error or exhausted quota stops the run, including the first 429.
+        // A transient read/parse failure affects only this symbol; no cursor is advanced.
+        if (error instanceof FinnhubError || error instanceof ShadowBudgetError || error instanceof ShadowStoreError) throw error;
+        const category = error instanceof Error && /timed? out|timeout/i.test(error.message) ? "timeout" :
+          error instanceof SyntaxError ? "invalid-json" : "read-unavailable";
+        failures.push(`${cursor.ticker}:${category}`);
+        continue;
+      }
       const firstSeenAt = now();
       const relevant = items.filter((i) => !Number.isFinite(i.datetime) || i.datetime * 1_000 >= Math.max(through - 36 * 3_600_000, cursor.through - 900_000));
       const capped = relevant.length > 50;
       if (capped) truncated++;
-      const evidence = relevant.sort((a, b) => b.datetime - a.datetime).slice(0, 50).map((i) => {
+      const evidence = relevant.sort((a, b) => b.datetime - a.datetime).slice(0, 50).flatMap((i) => {
+        if (typeof i.headline !== "string" || !i.headline.trim()) { rejected++; return []; }
         const candidate = i.datetime * 1_000;
-        const publishedAt = Number.isFinite(candidate) && candidate > 0 ? candidate : 0;
+        const publishedAt = Number.isFinite(candidate) && candidate > 0 && candidate <= 8.64e15 ? candidate : 0;
         const reason = newsEligibility(publishedAt, firstSeenAt);
-        return { story: storyKey(i.headline, publishedAt || firstSeenAt), url: canonicalUrl(i.url),
-          headline: i.headline.slice(0, 500), summary: i.summary.slice(0, 2_000), source: i.source.slice(0, 120),
-          publishedAt, firstSeenAt, eligible: reason === null, ...(reason ? { reason } : {}) };
+        return [{ story: storyKey(i.headline, publishedAt || firstSeenAt), url: canonicalUrl(i.url),
+          headline: i.headline.slice(0, 500), summary: typeof i.summary === "string" ? i.summary.slice(0, 2_000) : "",
+          source: typeof i.source === "string" ? i.source.slice(0, 120) : "",
+          publishedAt, firstSeenAt, eligible: reason === null, ...(reason ? { reason } : {}) }];
       });
       pending.push(...await store.ingest(lease, cursor.ticker, through, capped, evidence));
     }
@@ -107,7 +122,7 @@ export async function runShadow(kind: ShadowKind, env: Env, owner: string,
       try {
         const screen = await screenOne(jev, { headline: row.headline, summary: row.summary, source: row.source,
           datetime: row.publishedAt / 1_000, related: row.ticker, url: "" }).catch((error: unknown) => {
-            if (error instanceof ShadowBudgetError || (error instanceof JevError && error.status === 429)) throw error;
+            if (error instanceof ShadowBudgetError || error instanceof ShadowStoreError || (error instanceof JevError && error.status === 429)) throw error;
             return undefined; // An unavailable annotation must not veto the forecast.
           });
         const response = await jev.ask({ ticker: row.ticker, headline: row.headline, summary: row.summary,
@@ -120,8 +135,9 @@ export async function runShadow(kind: ShadowKind, env: Env, owner: string,
           completedAt: now(), model: response.model, ...(screen ? { screen } : {}) });
       } catch (error) {
         // No automatic model replay and no invented 0.5. An attempted but unavailable answer is visible.
+        if (error instanceof ShadowStoreError) throw error;
         await store.prediction(lease, id, attemptId, { probability: null, completedAt: now(), model: JEV_MODEL, reason: "forecast-unavailable" });
-        if (error instanceof ShadowBudgetError || (error instanceof JevError && error.status === 429)) throw error;
+        if (error instanceof ShadowBudgetError || error instanceof ShadowStoreError || (error instanceof JevError && error.status === 429)) throw error;
         continue;
       }
       if (!prediction) continue;
@@ -139,11 +155,12 @@ export async function runShadow(kind: ShadowKind, env: Env, owner: string,
       }
       await store.attachStart(lease, id, pair);
     }
-    const reason = `news-ingested;truncated=${truncated};unattempted=${Math.max(0, pending.length - attemptCap)}`;
-    await store.finish(lease, "completed", reason); return reason;
+    const reason = `news-ingested;truncated=${truncated};unattempted=${Math.max(0, pending.length - attemptCap)};rejected=${rejected};failures=${failures.length}${failures.length ? `:${failures.slice(0, 2).join(",")}` : ""}`;
+    await store.finish(lease, failures.length ? "failed" : "completed", reason); return reason;
   } catch (error) {
     // Provider bodies can contain credentials. Persist a bounded category, never the raw error.
     const reason = error instanceof ShadowBudgetError ? "shadow-provider-budget" :
+      error instanceof ShadowStoreError ? "shadow-permit-unavailable" :
       error instanceof FinnhubError ? `shadow-finnhub-${error.status}` :
       error instanceof ShadowProviderError ? `shadow-tiingo-${error.status}` :
       error instanceof JevError ? `shadow-jev-${error.status ?? "unavailable"}` :

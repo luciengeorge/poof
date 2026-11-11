@@ -114,3 +114,65 @@ test("screen outage leaves annotation absent but still makes a forecast", async 
   await runShadow("news", "demo", "owner", () => r.deps, r.store);
   assert.equal(count, 2); assert.ok(r.log.includes("commit:0.8")); assert.ok(r.log.includes("start"));
 });
+
+test("one timed-out symbol preserves its cursor and does not block other news or forecasts", async () => {
+  const r = rig(), inputs = r.store.inputs, news = r.deps.news.getCompanyNews;
+  r.store.inputs = async (lease) => ({ ...await inputs(lease), cursors: [
+    { ticker: "JCI", through: r.row.firstSeenAt - 900_000 }, { ticker: "AAPL", through: r.row.firstSeenAt - 900_000 },
+  ] });
+  r.deps.news.getCompanyNews = async (symbol, from, to) => {
+    if (symbol === "JCI") throw new Error("fetch timed out after 8000ms");
+    return news(symbol, from, to);
+  };
+  const inserted: string[] = [], ingest = r.store.ingest;
+  r.store.ingest = async (...args) => { inserted.push(args[1]); return ingest(...args); };
+  const result = await runShadow("news", "demo", "owner", () => r.deps, r.store);
+  assert.deepEqual(inserted, ["AAPL"]); assert.ok(r.log.includes("commit:0.8"));
+  assert.match(result, /failures=1:JCI:timeout/); assert.match(r.log.at(-1)!, /^finish:failed:/);
+});
+
+test("missing optional text is normalized and rejected headlines do not pin the cursor", async () => {
+  const r = rig(), news = r.deps.news.getCompanyNews;
+  r.deps.forecastsEnabled = false;
+  r.deps.news.getCompanyNews = async (symbol, from, to) => {
+    const good = (await news(symbol, from, to))[0];
+    return [{ ...good, summary: null, source: undefined }, { ...good, headline: null }] as unknown as Awaited<ReturnType<typeof news>>;
+  };
+  let called = false;
+  r.store.ingest = async (_lease, _ticker, _through, truncated, evidence) => {
+    called = true; assert.equal(truncated, false); assert.equal(evidence.length, 1);
+    assert.equal(evidence[0].summary, ""); assert.equal(evidence[0].source, ""); return [];
+  };
+  const result = await runShadow("news", "demo", "owner", () => r.deps, r.store);
+  assert.equal(called, true); assert.match(result, /rejected=1;failures=0/);
+  assert.match(r.log.at(-1)!, /^finish:completed:/);
+});
+
+test("429 with an unreadable response body still stops after one physical request", async () => {
+  const r = rig(); let calls = 0;
+  const inputs = r.store.inputs;
+  r.store.inputs = async (lease) => ({ ...await inputs(lease), cursors: [
+    { ticker: "JCI", through: r.row.firstSeenAt }, { ticker: "AAPL", through: r.row.firstSeenAt },
+  ] });
+  r.deps.news = shadowFinnhub(r.store, { env: "demo", runId: "run", owner: "owner" }, "secret", async () => {
+    calls++;
+    return new Response(new ReadableStream({ start(controller) { controller.error(new Error("broken body")); } }), { status: 429 });
+  });
+  assert.equal(await runShadow("news", "demo", "owner", () => r.deps, r.store), "shadow-finnhub-429");
+  assert.equal(calls, 1); assert.equal(r.log.includes("ingest"), false);
+});
+
+test("durable permit failure is global and makes no physical provider requests", async () => {
+  const r = rig(); let permits = 0, calls = 0;
+  const inputs = r.store.inputs;
+  r.store.inputs = async (lease) => ({ ...await inputs(lease), cursors: [
+    { ticker: "JCI", through: r.row.firstSeenAt }, { ticker: "AAPL", through: r.row.firstSeenAt },
+  ] });
+  r.store.permit = async () => { permits++; throw new Error("fetch timed out after 4000ms"); };
+  r.deps.news = shadowFinnhub(r.store, { env: "demo", runId: "run", owner: "owner" }, "secret", async () => {
+    calls++; return new Response("[]");
+  });
+  assert.equal(await runShadow("news", "demo", "owner", () => r.deps, r.store), "shadow-permit-unavailable");
+  assert.equal(permits, 1); assert.equal(calls, 0);
+  assert.match(r.log.at(-1)!, /finish:failed:shadow-permit-unavailable/);
+});
