@@ -1,10 +1,12 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
+import { shadowTables } from "./shadowTables";
 
 // Durable memory for the trading agent. Every row is env-tagged ("demo" | "live")
 // so dry-run/demo data never mixes with live history. _id and _creationTime are
 // added automatically by Convex.
 export default defineSchema({
+  ...shadowTables,
   riskState: defineTable({
     env: v.string(),
     peakEquity: v.number(),

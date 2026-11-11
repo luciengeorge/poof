@@ -53,7 +53,7 @@ test("getQuote builds the right URL with token and maps fields", async () => {
   assert.equal(u.pathname, "/api/v1/quote");
   assert.equal(u.searchParams.get("symbol"), "AAPL");
   assert.equal(u.searchParams.get("token"), "KEY");
-  assert.deepEqual(q, { symbol: "AAPL", price: 110, prevClose: 100, changePct: 10 });
+  assert.deepEqual(q, { symbol: "AAPL", price: 110, prevClose: 100, changePct: 10, timestamp: 1_000 });
 });
 
 test("persistent 429 retries the full budget then throws FinnhubError", async () => {
