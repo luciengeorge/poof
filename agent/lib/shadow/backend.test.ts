@@ -95,3 +95,29 @@ test("news cursor commits with evidence, corrections cannot rewrite or reforecas
     assert.equal((await ctx.db.query("riskState").collect()).length, 0);
   });
 });
+
+
+test("daily Jev quota cannot refill inside one ET session", async (t) => {
+  const db = setup(t);
+  t.mock.method(Math, "random", () => 0.9);
+  const args = { token, env: "demo", kind: "news", owner: "one" };
+  const first = await db.mutation(api.claim, args);
+  const lease = { token, env: "demo", runId: first.runId, owner: "one" };
+  for (let n = 0; n < 40; n++) assert.equal(await db.mutation(api.permit, { ...lease, provider: "jev" }), true);
+  assert.equal(await db.mutation(api.permit, { ...lease, provider: "jev" }), false);
+  await db.mutation(api.finish, { ...lease, status: "completed", observations: [], quotes: [] });
+  t.mock.method(Date, "now", () => Date.parse("2026-11-11T20:30Z"));
+  const later = await db.mutation(api.claim, { ...args, owner: "two" });
+  assert.equal(await db.mutation(api.permit, { token, env: "demo", runId: later.runId, owner: "two", provider: "jev" }), false);
+});
+
+test("lease contention persists a skipped receipt and consumes the slot", async (t) => {
+  const db = setup(t);
+  await db.mutation(api.claim, { token, env: "demo", kind: "news", owner: "one" });
+  t.mock.method(Date, "now", () => Date.parse("2026-11-11T16:32Z"));
+  const args = { token, env: "demo", kind: "positions", owner: "two" };
+  assert.equal((await db.mutation(api.claim, args)).reason, "another-shadow-run-active");
+  assert.equal((await db.mutation(api.claim, args)).reason, "already-attempted");
+  const report = await db.query(api.report, { token, env: "demo", day: "2026-11-11" });
+  assert.equal(report.runs.filter((r: {reason?: string}) => r.reason === "another-shadow-run-active").length, 1);
+});

@@ -102,3 +102,15 @@ test("shadow facade routes only shadow function names and preserves authenticati
   await store.claim("demo", "news", "owner"); await store.report("demo", "2026-11-11");
   assert.deepEqual(calls, ["shadow:claim", "shadow:report"]);
 });
+
+
+test("screen outage leaves annotation absent but still makes a forecast", async () => {
+  const r = rig(), original = r.deps.jev;
+  let count = 0;
+  r.deps.jev = { async ask(state, questions) {
+    if (++count === 1) throw new Error("screen unavailable");
+    return original.ask(state, questions);
+  } };
+  await runShadow("news", "demo", "owner", () => r.deps, r.store);
+  assert.equal(count, 2); assert.ok(r.log.includes("commit:0.8")); assert.ok(r.log.includes("start"));
+});

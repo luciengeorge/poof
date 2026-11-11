@@ -106,7 +106,10 @@ export async function runShadow(kind: ShadowKind, env: Env, owner: string,
       let prediction;
       try {
         const screen = await screenOne(jev, { headline: row.headline, summary: row.summary, source: row.source,
-          datetime: row.publishedAt / 1_000, related: row.ticker, url: "" });
+          datetime: row.publishedAt / 1_000, related: row.ticker, url: "" }).catch((error: unknown) => {
+            if (error instanceof ShadowBudgetError || (error instanceof JevError && error.status === 429)) throw error;
+            return undefined; // An unavailable annotation must not veto the forecast.
+          });
         const response = await jev.ask({ ticker: row.ticker, headline: row.headline, summary: row.summary,
           source: row.source, publication: new Date(row.publishedAt).toISOString(), cutoff: new Date(row.inputCutoff).toISOString(),
           researchContract: "event-relative-v1; starting prices are collected only AFTER this probability is committed" }, {
@@ -124,8 +127,11 @@ export async function runShadow(kind: ShadowKind, env: Env, owner: string,
       if (!prediction) continue;
       let pair = null;
       for (let attempt = 0; attempt < 3 && now() - prediction.committedAt < 40_000; attempt++) {
+        // Refill both durable tokens before a paired burst; leave room for whole-second
+        // provider timestamps after commitment. Pace BETWEEN pairs, not between legs.
+        await sleep(Math.max(0, lastRequest + 6_400 - now(), Math.floor(prediction.committedAt / 1_000) * 1_000 + 1_000 - now()));
         await pace(); const stock = timed(await news.getQuote(row.ticker));
-        await pace(); const proxy = timed(await news.getQuote("SPY"));
+        checkTime(); const proxy = timed(await news.getQuote("SPY")); lastRequest = now();
         if (stock.symbol === row.ticker && startPair(stock, proxy, prediction.committedAt, now())) {
           pair = { stock, proxy, sessionOpen: prediction.session.open, sessionClose: prediction.session.close, sessionDay: prediction.session.day };
           break;
@@ -140,7 +146,8 @@ export async function runShadow(kind: ShadowKind, env: Env, owner: string,
     const reason = error instanceof ShadowBudgetError ? "shadow-provider-budget" :
       error instanceof FinnhubError ? `shadow-finnhub-${error.status}` :
       error instanceof ShadowProviderError ? `shadow-tiingo-${error.status}` :
-      error instanceof JevError ? `shadow-jev-${error.status ?? "unavailable"}` : "shadow-dependency-unavailable";
+      error instanceof JevError ? `shadow-jev-${error.status ?? "unavailable"}` :
+      error instanceof Error && error.message === "shadow-time-budget" ? "shadow-time-budget" : "shadow-dependency-unavailable";
     await store.finish(lease, "failed", reason);
     return reason;
   }

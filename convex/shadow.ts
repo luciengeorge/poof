@@ -10,9 +10,11 @@ import { shadowEnv, shadowKind, shadowObservation, shadowQuote, shadowScreen, sh
 // Shadow-only headroom. These limits never modify or reserve live-trading state.
 const limiter = new RateLimiter(components.rateLimiter, {
   finnhub: { kind: "token bucket", rate: 20, period: 60_000, capacity: 2 },
-  tiingo: { kind: "fixed window", rate: 2, period: 3_600_000 },
-  jev: { kind: "fixed window", rate: 40, period: 86_400_000 },
-  forecast: { kind: "fixed window", rate: 20, period: 86_400_000 },
+  tiingo: { kind: "fixed window", rate: 2, period: 3_600_000, start: 0 },
+  // UTC midnight is outside every supported US regular session. Day-specific keys
+  // plus this anchor prevent a randomly phased refill within the same ET session.
+  jev: { kind: "fixed window", rate: 40, period: 86_400_000, start: 0 },
+  forecast: { kind: "fixed window", rate: 20, period: 86_400_000, start: 0 },
 });
 const credentials = { token: v.string(), env: shadowEnv };
 declare const process: { env: Record<string, string | undefined> };
@@ -48,7 +50,12 @@ export const claim = mutation({
       q.eq("env", args.env).eq("day", day).eq("kind", args.kind).eq("slot", slot)).first();
     if (exists) return { reason: "already-attempted" };
     const active = await ctx.db.query("shadowRuns").withIndex("by_env_and_status", (q) => q.eq("env", args.env).eq("status", "running")).take(10);
-    if (active.some((r) => r.leaseUntil > now)) return { reason: "another-shadow-run-active" };
+    if (active.some((r) => r.leaseUntil > now)) {
+      await ctx.db.insert("shadowRuns", { env: args.env, day, kind: args.kind, slot,
+        owner: args.owner, startedAt: now, leaseUntil: now, finishedAt: now,
+        status: "skipped", reason: "another-shadow-run-active" });
+      return { reason: "another-shadow-run-active" };
+    }
     for (const row of active) await ctx.db.patch(row._id, { status: "failed", reason: "lease-expired", finishedAt: now });
     for (const state of ["new", "attempting", "committed"]) {
       const abandoned = await ctx.db.query("shadowEvents").withIndex("by_env_and_state_and_targetClose", (q) =>
@@ -182,9 +189,13 @@ export const attempt = mutation({
     const row = await ctx.db.get(args.eventId);
     if (!row || row.env !== args.env || row.state !== "new") return null;
     const now = Date.now();
+    if (now - row.publishedAt > 15 * 60_000) {
+      await ctx.db.patch(row._id, { state: "unscoreable", reason: "stale-before-attempt" });
+      return null;
+    }
     const limit = await limiter.limit(ctx, "forecast", { key: `${args.env}:${row.day}` });
-    if (!limit.ok || now - row.publishedAt > 15 * 60_000) {
-      await ctx.db.patch(row._id, { state: "unscoreable", reason: limit.ok ? "stale-before-attempt" : "forecast-budget" });
+    if (!limit.ok) {
+      await ctx.db.patch(row._id, { state: "unscoreable", reason: "forecast-budget" });
       return null;
     }
     await ctx.db.patch(row._id, { state: "attempting", attemptId: args.attemptId, inputCutoff: now });

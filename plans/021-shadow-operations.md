@@ -37,7 +37,7 @@ build, which deploys Convex and regenerates component API types. Never deploy Co
 ## Cadence, limits and evidence
 
 UTC cron wakeups: positions at minutes 2,7,…,57; news at 0,15,30,45; scorer at minute 9.
-Positions are offset from news to avoid both competing for the same shadow lease.
+Positions are offset from news to reduce competition for the same shadow lease. Contention records a skipped receipt.
 US regular-session calendar (2026–2027, NYSE holidays/early closes and ET DST) gates A/B.
 Unsupported years fail closed. All shadow jobs exclude UTC hours 12,15,18 to reserve the
 broad funnel, daily cycle and catch-up windows. Scoring can otherwise run outside sessions.
@@ -48,9 +48,9 @@ One active shadow job per environment; one attempt per kind/slot; 240-second lea
 retry. A missed slot is never backfilled as a contemporary observation.
 
 Durable quotas cover every physical shadow request: Finnhub 20/minute (burst 2), Tiingo
-2/hour, Jev 40/ET-day, forecasts 20/ET-day. Finnhub requests also run serially at least
-3.2 seconds apart. No feed retries; first 429 stops that run. Limits apply across shadow
-workers, with feed-key headroom reserved for existing live work; they do not retroactively
+2/hour, Jev 40/ET-day, forecasts 20/ET-day. Finnhub requests run serially at least 3.2 seconds apart, except starting-pair
+legs use a two-token burst after a 6.4-second refill pause. No feed retries; first 429 stops that run. Limits apply across shadow
+workers, with UTC-anchored daily windows (no reset during the US session) and feed-key headroom reserved for existing live work; they do not retroactively
 meter the established trading clients. If live degradation occurs, disable shadow research.
 
 A currently records `position-state-unavailable` with any fresh held-symbol quotes.
@@ -120,7 +120,7 @@ intraday exit readiness. D–F require their own implementation, review and acti
 
 ## Local verification (2026-11-11)
 
-845 tests passed on Node 24, including 17 shadow tests. App and Convex typechecks passed;
+848 tests passed on Node 24, including 20 shadow tests. App and Convex typechecks passed;
 Eve build and runtime-asset smoke check passed. Six mutation checks failed as expected when
 default-off gating, pre-commit quote rejection, adjusted-price basis, zero-retry policy,
 owner fencing and backend prospective-start validation were deliberately broken, then restored.
