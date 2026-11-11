@@ -1,9 +1,16 @@
-import { FinnhubProvider } from "../data.ts";
+import { FinnhubProvider, FinnhubError } from "../data.ts";
 import { timeoutFetch } from "../fetch-timeout.ts";
 import type { PriceBasis } from "./policy.ts";
 import type { Lease, ShadowStore } from "./store.ts";
 
 export class ShadowBudgetError extends Error {}
+export class ShadowStoreError extends Error {}
+export async function permitProvider(store: ShadowStore, lease: Lease, provider: "finnhub" | "tiingo" | "jev") {
+  let allowed: boolean;
+  try { allowed = await store.permit(lease, provider); }
+  catch { throw new ShadowStoreError("shadow-permit-unavailable"); }
+  if (!allowed) throw new ShadowBudgetError(`shadow-${provider}-budget`);
+}
 export class ShadowProviderError extends Error {
   readonly status: number;
   constructor(status: number) { super("shadow-tiingo-unavailable"); this.status = status; }
@@ -11,8 +18,14 @@ export class ShadowProviderError extends Error {
 export function shadowFinnhub(store: ShadowStore, lease: Lease, apiKey: string, fetchImpl: typeof fetch = fetch) {
   // Each physical request needs a durable permit; never use the retrying live singleton.
   const bounded: typeof fetch = async (input, init) => {
-    if (!(await store.permit(lease, "finnhub"))) throw new ShadowBudgetError("shadow-finnhub-budget");
-    return fetchImpl(input, init);
+    await permitProvider(store, lease, "finnhub");
+    const response = await fetchImpl(input, init);
+    // Preserve the HTTP status even if reading its error body would fail or hang.
+    if (!response.ok) {
+      void response.body?.cancel().catch(() => {});
+      throw new FinnhubError(response.status, "shadow-finnhub-unavailable");
+    }
+    return response;
   };
   return new FinnhubProvider({ apiKey, fetchImpl: bounded, maxRetries: 0, timeoutMs: 8_000 });
 }
@@ -20,7 +33,7 @@ export async function adjustedBars(
   store: ShadowStore, lease: Lease, apiKey: string, symbol: string, from: string, to: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<PriceBasis[]> {
-  if (!(await store.permit(lease, "tiingo"))) throw new ShadowBudgetError("shadow-tiingo-budget");
+  await permitProvider(store, lease, "tiingo");
   const url = new URL(`https://api.tiingo.com/tiingo/daily/${encodeURIComponent(symbol.toLowerCase())}/prices`);
   url.search = new URLSearchParams({ startDate: from, endDate: to, format: "json", token: apiKey }).toString();
   const response = await timeoutFetch(8_000, fetchImpl)(url);

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { memoryFromEnv } from "../memory.ts";
 import { HttpJevClient } from "../jev.ts";
 import { timeoutFetch } from "../fetch-timeout.ts";
-import { adjustedBars, shadowFinnhub, ShadowBudgetError } from "./providers.ts";
+import { adjustedBars, shadowFinnhub, permitProvider } from "./providers.ts";
 import { runShadow, shadowDue, shadowEnabled } from "./run.ts";
 import type { ShadowKind } from "./store.ts";
 
@@ -17,7 +17,7 @@ export async function runShadowSchedule(kind: ShadowKind, env = process.env): Pr
   const store = memoryFromEnv(undefined, { timeoutMs: 4_000 }).shadowStore();
   const result = await runShadow(kind, env.TRADING212_ENV, randomUUID(), (lease) => {
     const jevFetch: typeof fetch = async (input, init) => {
-      if (!(await store.permit(lease, "jev"))) throw new ShadowBudgetError("shadow-jev-budget");
+      await permitProvider(store, lease, "jev");
       return timeoutFetch(8_000)(input, init);
     };
     return { store, now: Date.now, forecastsEnabled: env.SHADOW_FORECASTS_ENABLED === "true",

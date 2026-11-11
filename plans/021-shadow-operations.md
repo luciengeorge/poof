@@ -149,5 +149,5 @@ quote-only where confirmed position quantities are unavailable; forecast results
 Production follow-up: a failed read/parse for one news symbol must not discard other
 symbols or their forecast opportunities. Such failures retain that cursor and mark the
 poll failed with bounded symbol/category diagnostics; peers continue. Missing optional
-summary/source text is empty, while malformed mandatory headlines keep the cursor stationary.
-All provider HTTP errors and durable budget denials still stop the run, including first429.
+summary/source text is empty; permanently invalid headlines are counted as rejected and do not pin the cursor.
+All provider HTTP errors stop before their bodies are read, including first429 with a broken body. Durable permit-store failures and budget denials are global failures; they never become per-symbol feed errors.
