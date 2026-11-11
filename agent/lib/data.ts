@@ -28,6 +28,8 @@ export interface Quote {
   price: number;
   prevClose: number;
   changePct: number;
+  /** Provider quote time in Unix milliseconds; absent when not supplied. */
+  timestamp?: number;
 }
 
 export interface NewsItem {
@@ -84,6 +86,8 @@ export interface FinnhubConfig {
   timeoutMs?: number;
   /** Whole-call budget across retries; defaults to FINNHUB_CALL_BUDGET_MS. */
   callBudgetMs?: number;
+  /** Shadow readers use zero so a rate limit never creates extra load. */
+  maxRetries?: number;
 }
 
 export class FinnhubError extends Error {
@@ -100,6 +104,7 @@ export class FinnhubError extends Error {
 }
 
 interface RawQuote {
+  t?: number;
   c: number;
   pc: number;
   dp: number;
@@ -146,6 +151,7 @@ export class FinnhubProvider implements MarketDataProvider {
   private readonly apiKey: string;
   private readonly fetchImpl: typeof fetch;
   private readonly callBudgetMs: number;
+  private readonly maxRetries: number;
 
   constructor(cfg: FinnhubConfig) {
     this.apiKey = cfg.apiKey;
@@ -155,6 +161,7 @@ export class FinnhubProvider implements MarketDataProvider {
     const fetchImpl: typeof fetch = cfg.fetchImpl ?? ((input, init) => fetch(input, init));
     this.fetchImpl = timeoutFetch(cfg.timeoutMs ?? FINNHUB_TIMEOUT_MS, fetchImpl);
     this.callBudgetMs = cfg.callBudgetMs ?? FINNHUB_CALL_BUDGET_MS;
+    this.maxRetries = cfg.maxRetries ?? 3;
   }
 
   private async get<T>(
@@ -166,7 +173,7 @@ export class FinnhubProvider implements MarketDataProvider {
     url.searchParams.set("token", this.apiKey);
     // Finnhub's free tier is tightly rate-limited. Back off and retry on 429
     // honoring Retry-After, so a single busy symbol doesn't fail the request.
-    const maxRetries = 3;
+    const maxRetries = this.maxRetries;
     const deadline = Date.now() + this.callBudgetMs;
     for (let attempt = 0; ; attempt++) {
       const res = await this.fetchImpl(url);
@@ -184,7 +191,8 @@ export class FinnhubProvider implements MarketDataProvider {
 
   async getQuote(symbol: string): Promise<Quote> {
     const q = await this.get<RawQuote>("/quote", { symbol });
-    return { symbol, price: q.c, prevClose: q.pc, changePct: q.dp };
+    return { symbol, price: q.c, prevClose: q.pc, changePct: q.dp,
+      ...(typeof q.t === "number" && Number.isFinite(q.t) && q.t > 0 ? { timestamp: q.t * 1_000 } : {}) };
   }
 
   async getCompanyNews(

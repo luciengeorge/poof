@@ -1,3 +1,4 @@
+import { createShadowStore, type ShadowStore } from "./shadow/store.ts";
 import { ConvexHttpClient } from "convex/browser";
 import type { Edit, MemoryRow } from "../../convex/memoryPolicy.ts";
 import { anyApi, type FunctionReference } from "convex/server";
@@ -287,9 +288,8 @@ export interface CronRunRecord {
 
 // Untyped function references (no dependency on convex/_generated). The Convex
 // functions live in convex/memory.ts; these point at them by path.
-const fns = anyApi.memory;
-const ref = (name: string) =>
-  fns[name] as unknown as FunctionReference<"mutation"> &
+const ref = (name: string, namespace = "memory") =>
+  anyApi[namespace][name] as unknown as FunctionReference<"mutation"> &
     FunctionReference<"query">;
 
 // Convex's argument validator prints the whole argument object into its error, token included,
@@ -315,9 +315,10 @@ export class Memory {
   private async mutation(
     name: string,
     args: Record<string, unknown>,
+    namespace = "memory",
   ): Promise<unknown> {
     try {
-      return await this.client.mutation(ref(name), { token: this.token, ...args });
+      return await this.client.mutation(ref(name, namespace), { token: this.token, ...args });
     } catch (err) {
       throw redacted(err);
     }
@@ -325,12 +326,20 @@ export class Memory {
   private async query(
     name: string,
     args: Record<string, unknown>,
+    namespace = "memory",
   ): Promise<unknown> {
     try {
-      return await this.client.query(ref(name), { token: this.token, ...args });
+      return await this.client.query(ref(name, namespace), { token: this.token, ...args });
     } catch (err) {
       throw redacted(err);
     }
+  }
+
+  shadowStore(): ShadowStore {
+    return createShadowStore(
+      (name, args) => this.query(name, args, "shadow"),
+      (name, args) => this.mutation(name, args, "shadow"),
+    );
   }
 
   recordTrade(t: TradeRecord): Promise<unknown> {

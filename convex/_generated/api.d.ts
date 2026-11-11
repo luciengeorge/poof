@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as shadow from "../shadow.js";
 import type * as auth from "../auth.js";
 import type * as memory from "../memory.js";
 import type * as memoryPolicy from "../memoryPolicy.js";
@@ -20,6 +21,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  shadow: typeof shadow;
   auth: typeof auth;
   memory: typeof memory;
   memoryPolicy: typeof memoryPolicy;
@@ -52,4 +54,6 @@ export declare const internal: FilterApi<
   FunctionReference<any, "internal">
 >;
 
-export declare const components: {};
+export declare const components: {
+  rateLimiter: import("@convex-dev/rate-limiter/_generated/component.js").ComponentApi<"rateLimiter">;
+};

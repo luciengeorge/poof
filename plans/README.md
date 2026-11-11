@@ -42,6 +42,7 @@ instrument announces itself.
 | 017 | Hold the index with every pound not in a stock | P1 | L | 001 | DONE (#84) |
 | 018 | Stop telling the agent to trade when it has no reason to | P1 | S | 017 (same release) | DONE (#84) |
 | 020 | Redact Convex errors at the memory boundary | P1 | S | 003 | DONE |
+| 021 | Pro monitoring, incremental news, and measured event forecasts | P2 | Staged | Version decision for shadow; execution gates for live | A–C implemented locally, default-off; deployment/activation and D–F gated |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (one-line reason) | REJECTED (one-line rationale)
 

@@ -19,6 +19,11 @@ full step-by-step cycle and `agent/lib/risk.ts` for the risk gate.
 and Convex (`convex/memory.ts`) for durable state (trade history, lessons, risk state).
 Reports and alerts go to Slack.
 
+Plan 021 adds isolated, default-off shadow quote collection, incremental news and prospective
+stock-versus-SPY forecasts. These handlers have no broker or execution-agent capability.
+See [shadow operations](plans/021-shadow-operations.md) for activation switches, quotas,
+known position-snapshot limitations, reporting and rollback. Extra live decisions/exits remain gated.
+
 ## Setup
 
 1. Install Node 24.x (see `.nvmrc`) and `corepack enable`.

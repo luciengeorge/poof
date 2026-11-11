@@ -13,6 +13,9 @@ importers:
 
   .:
     dependencies:
+      '@convex-dev/rate-limiter':
+        specifier: 0.3.2
+        version: 0.3.2(convex@1.42.0)
       '@vercel/connect':
         specifier: 2.9.1
         version: 2.9.1(ai@7.0.169(zod@4.4.3))(eve@1.0.0-rc.9)
@@ -38,6 +41,9 @@ importers:
       '@types/node':
         specifier: 24.x
         version: 24.13.2
+      convex-test:
+        specifier: 0.0.50
+        version: 0.0.50(convex@1.42.0)
       typescript:
         specifier: ^7.0.2
         version: 7.0.2
@@ -59,6 +65,15 @@ packages:
   '@ai-sdk/provider@4.0.37':
     resolution: {integrity: sha512-4uPgZ3qiX/JaQFr0dQoibUzHImZit9u05ro2BxGUnJwU4fV28BOAbKUa2OjQvqtM1tMac3bTKkaXdyzGovQXqg==}
     engines: {node: '>=22'}
+
+  '@convex-dev/rate-limiter@0.3.2':
+    resolution: {integrity: sha512-+oBPsBfFbzdxiF/9XaaTQmVnvDlvEfg/c69/v8LxTbw4VLuiflIKlfnPQL8OS0azXQQ11hcPWHmU8ytFmHKDXA==}
+    peerDependencies:
+      convex: ^1.24.8
+      react: ^18.2.0 || ^19.0.0
+    peerDependenciesMeta:
+      react:
+        optional: true
 
   '@esbuild/aix-ppc64@0.27.0':
     resolution: {integrity: sha512-KuZrd2hRjz01y5JK9mEBSD3Vj3mbCvemhT466rSuJYeE/hjuBrHfjjcjMdTm/sz7au+++sdbJZJmuBwQLuw68A==}
@@ -488,6 +503,11 @@ packages:
     peerDependencies:
       zod: ^3.25.76 || ^4.1.8
 
+  convex-test@0.0.50:
+    resolution: {integrity: sha512-rMNfrgcKJGToYDqNns2n1AO9KUP1NyC/AF9ldYEuWwTfRbgC9RQiHjlZsZQ/sOjLIVPUyKKIjoI/fNJUzy1urw==}
+    peerDependencies:
+      convex: ^1.32.0
+
   convex@1.42.0:
     resolution: {integrity: sha512-KS1U+YkE7N7jDfucPW28iNehnb9/N5n9RJmdAFNdPIHTeNpbLKNqk1pJHp4ajHyMBAhGmri8Z4S1lc1LjliZWQ==}
     engines: {node: '>=18.0.0', npm: '>=7.0.0'}
@@ -762,6 +782,10 @@ snapshots:
     dependencies:
       json-schema: 0.4.0
 
+  '@convex-dev/rate-limiter@0.3.2(convex@1.42.0)':
+    dependencies:
+      convex: 1.42.0
+
   '@esbuild/aix-ppc64@0.27.0':
     optional: true
 
@@ -987,6 +1011,10 @@ snapshots:
       '@ai-sdk/provider': 4.0.37
       '@ai-sdk/provider-utils': 5.0.79(zod@4.4.3)
       zod: 4.4.3
+
+  convex-test@0.0.50(convex@1.42.0):
+    dependencies:
+      convex: 1.42.0
 
   convex@1.42.0:
     dependencies:

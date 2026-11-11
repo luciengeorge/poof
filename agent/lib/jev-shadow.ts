@@ -97,7 +97,7 @@ function strategyCriteria(): Record<string, string> {
   return criteria;
 }
 
-async function screenOne(jev: JevClient, item: NewsItem): Promise<JevScreen | undefined> {
+export async function screenOne(jev: JevClient, item: NewsItem): Promise<JevScreen | undefined> {
   const res = await jev.ask(
     {
       headline: item.headline,
