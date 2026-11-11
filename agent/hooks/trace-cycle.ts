@@ -1,3 +1,4 @@
+import { call } from "eve/events";
 import { defineHook } from "eve/hooks";
 import { alert } from "../lib/alert.ts";
 import {
@@ -139,10 +140,10 @@ function warnIfTruncated(key: CycleTraceKey, what: string, truncated: boolean): 
 export default defineHook({
   events: {
     // Open a trace only for turns that are actually trading cycles.
-    async "message.received"(event, ctx) {
+    async "delivery.consumed"(event, ctx) {
       try {
-        if (!isCycleTurnMessage(event.data?.message)) return;
-        const traceKey = key(ctx.session.id, event.data?.turnId);
+        if (!isCycleTurnMessage(event.data.parts.filter((p) => p.kind === "text").map((p) => p.text).join("\n"))) return;
+        const traceKey = key(ctx.session.id, event.data.turnId);
         if (!traceKey) return;
         await observerMemory().startCycleTrace(traceKey);
         // Positive signal on the happy path: if this line never appears in the logs and
@@ -157,11 +158,13 @@ export default defineHook({
 
     // Accumulate the ordered tool sequence and the cycle's ground truth. Every write is a
     // no-op when this turn has no trace, so non-cycle turns cost one round trip and nothing else.
-    async "action.result"(event, ctx) {
+    async "call.settled"(event, ctx) {
       try {
-        const traceKey = key(ctx.session.id, event.data?.turnId);
+        const traceKey = key(ctx.session.id, event.scope?.turnId ?? ctx.turn?.id);
         if (!traceKey) return;
-        const result = event.data?.result;
+        const observed = call(ctx.view, event.data.callId);
+        if (!observed || !["tool", "agent"].includes(observed.kind)) return;
+        const result = { toolName: observed.name, callId: event.data.callId, output: event.data.output };
         const name = actionResultName(result);
         if (!name) return;
 
@@ -302,11 +305,12 @@ export default defineHook({
     // correction afterwards, the correction quotes money, and it REPLACED the report. The judge
     // then graded a 300-character fragment and scored completeness 1-2 on complete reports.
     // Appending is also the more faithful record, since the reader saw both messages.
-    async "message.completed"(event, ctx) {
+    async "content.completed"(event, ctx) {
+      if (event.data.kind !== "text") return;
       try {
-        const traceKey = key(ctx.session.id, event.data?.turnId);
+        const traceKey = key(ctx.session.id, event.scope?.turnId ?? ctx.turn?.id);
         if (!traceKey) return;
-        const text = event.data?.message;
+        const text = event.data.value;
         if (!looksLikeReport(text)) return;
         await observerMemory().saveCycleTraceContext(traceKey, { reportText: String(text) });
       } catch (err) {
@@ -315,9 +319,10 @@ export default defineHook({
     },
 
     // The terminal boundary: grade the cycle once, persist the verdict, alert on anything wrong.
-    async "turn.completed"(event, ctx) {
+    async "turn.settled"(event, ctx) {
+      if (event.data.outcome !== "completed") return;
       try {
-        const traceKey = key(ctx.session.id, event.data?.turnId);
+        const traceKey = key(ctx.session.id, event.data.turnId);
         if (!traceKey) return;
         const memory = observerMemory();
         const trace = await memory.getCycleTrace(traceKey);

@@ -10,7 +10,7 @@ import { CYCLE_MESSAGE } from "../lib/cycle-catch-up.ts";
 // multiple times/day (e.g. "0 14,17,20 * * 1-5").
 export default defineSchedule({
   cron: "0 15 * * 1-5",
-  async run({ receive, waitUntil, appAuth }) {
+  async run({ to, waitUntil, appAuth }) {
     const firedAt = Date.now();
     const marketOpen = isUsMarketOpen(new Date());
     const channelId = process.env.SLACK_CHANNEL_ID;
@@ -35,9 +35,7 @@ export default defineSchedule({
     }
 
     waitUntil(
-      receive(slack, {
-        message: CYCLE_MESSAGE,
-        target: { channelId },
+      to(slack, { channelId }).send(CYCLE_MESSAGE, {
         auth: appAuth,
       }),
     );

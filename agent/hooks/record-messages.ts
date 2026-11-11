@@ -9,12 +9,12 @@ function env(): Env {
 // would fail the turn, so everything is wrapped in try/catch.
 export default defineHook({
   events: {
-    async "message.completed"(event, ctx) {
+    async "content.completed"(event, ctx) {
       try {
         // Skip interim narration before tool calls; only keep terminal replies.
-        if (event.data?.finishReason === "tool-calls") return;
-        const text = event.data?.message;
-        if (!text) return;
+        if (event.data.phase !== "reply" || event.data.kind !== "text") return;
+        const text = event.data.value;
+        if (typeof text !== "string" || !text) return;
         await memoryFromEnv().recordMessage({
           env: env(),
           role: "agent",

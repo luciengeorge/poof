@@ -1,9 +1,8 @@
 import { connectSlackCredentials } from "@vercel/connect/eve";
 import {
-  defaultSlackAuth,
-  loadThreadContextMessages,
   slackChannel,
 } from "eve/channels/slack";
+import { routeSlackMessage } from "../lib/ambient.ts";
 import { memoryFromEnv, type Env } from "../lib/memory.ts";
 
 // Best-effort capture of an inbound user message to durable memory. Fire-and-forget;
@@ -33,32 +32,10 @@ function recordUserMessage(m: {
 
 export default slackChannel({
   credentials: connectSlackCredentials("slack/poof"),
-  // On each @mention, also pull in any thread replies posted since the agent last
-  // answered, so follow-up mentions carry the full conversation (not just the mention).
-  // (Follow-ups still need to @mention the bot: Slack only routes mentions/DMs to apps.)
-  async onAppMention(ctx, message) {
-    const auth = defaultSlackAuth(message, ctx);
-    if (!auth) return null;
-    recordUserMessage(message);
-    const prior = await loadThreadContextMessages(ctx.thread, message, {
-      since: "last-agent-reply",
-    });
-    if (prior.length === 0) return { auth };
-    const transcript = prior
-      .map((m) => `${m.isMe ? "you" : (m.user ?? "user")}: ${m.markdown}`)
-      .join("\n");
-    return {
-      auth,
-      context: [
-        `Recent thread messages since your last reply:\n\n${transcript}`,
-      ],
-    };
-  },
-  // DMs deliver every message (no @mention needed). Record them too.
-  async onDirectMessage(ctx, message) {
-    const auth = defaultSlackAuth(message, ctx);
-    if (!auth) return null;
-    recordUserMessage(message);
-    return { auth };
+  threadContext: { since: "last-agent-reply" },
+  async onMessage(ctx, message) {
+    const route = await routeSlackMessage(ctx, message);
+    if (route && !ctx.edit) recordUserMessage(message);
+    return route;
   },
 });

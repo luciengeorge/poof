@@ -28,9 +28,9 @@ export default defineEval({
       (events) => {
         if (!guardedPathExercised(events, "strategy-tag-on-buy")) return true;
         for (const event of events) {
-          if (event.type !== "actions.requested") continue;
-          for (const action of event.data.actions) {
-            if (action.kind !== "tool-call" || action.toolName !== "submit_orders") continue;
+          if (event.type !== "call.requested") continue;
+          for (const action of [event.data]) {
+            if (action.capability.kind !== "tool" || action.capability.name !== "submit_orders") continue;
             const proposals = (action.input as { proposals?: unknown[] })?.proposals;
             if (!Array.isArray(proposals)) return false;
             for (const p of proposals) {

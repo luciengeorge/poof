@@ -736,3 +736,17 @@ test("a core order carries the broker's status and fill", () => {
     [{ ticker: "VUAGl_EQ", side: "BUY", notionalGbp: 35.33, status: "placed", detail: "swept", brokerStatus: "NEW", filledQuantity: 0 }],
   );
 });
+
+// Current Eve wire events must feed the same trading invariants as stored legacy runs.
+test("Eve 1.0 call events retain tool/subagent ordering and submitted orders", () => {
+  const output = { placed: [{ ticker: "AAPL_US_EQ", side: "BUY", status: "placed" }], rejected: [] };
+  const events = [
+    { type: "call.requested", data: { callId: "r", capability: { kind: "agent", name: "red_team" } } },
+    { type: "call.requested", data: { callId: "s", capability: { kind: "tool", name: "submit_orders" } } },
+    { type: "call.requested", data: { callId: "w", capability: { kind: "control", name: "task_wait" } } },
+    { type: "call.settled", data: { callId: "s", outcome: "completed", output } },
+  ];
+  assert.deepEqual(requestedActionNames(events), ["red_team", "submit_orders"]);
+  assert.deepEqual(resultOrders(events), { orders: ordersFrom(output)!.orders, truncated: false });
+  assert.equal(resultOrders([{ type: "call.settled", data: { callId: "unknown", output } }]), null);
+});

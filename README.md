@@ -111,3 +111,31 @@ To stop real-money trading immediately:
 
 This is the fastest way to halt order placement without touching any other config. Orders
 will go back to being simulated instead of sent to the broker.
+
+## Ambient listening in Slack
+
+Poof uses Eve 1.0.0-rc.9. It follows replies in threads with an active session and
+listens for unanswered Poof questions in `SLACK_CHANNEL_ID`. Mentions and DMs bypass
+the relevance filter. Unmentioned messages are screened with `decide` (five-second
+model deadline); uncertain results, errors, and incomplete thread context pass through
+for the agent to decide. Deferred turns can call `no_reply` without posting a status.
+Ambient instructions allow read-only discussion, not trading or state changes.
+Unmentioned routing defaults off (`AMBIENT_LISTENING_ENABLED=false`). Those instructions
+are not a code-enforced tool boundary; review that boundary before enabling this mode.
+
+Configure the Slack app behind the `slack/poof` Connect client:
+
+1. Subscribe to `message.channels` and grant `channels:history` for public channels.
+2. For private channels, also subscribe to `message.groups` and grant `groups:history`.
+3. Reinstall/reauthorize the app after changing scopes and invite it to the report channel.
+4. After the activation review, set `AMBIENT_LISTENING_ENABLED=true` and deploy. In the report channel, ask a Poof question without a mention,
+   then check that unrelated conversation stays quiet and thread follow-ups work.
+
+Filter decisions log channel IDs, timestamps, probabilities, and skip reasons without
+message bodies. Tune the goal and threshold in `agent/lib/ambient.ts` after reviewing
+real replies. No extra watched-channel environment variable is required.
+
+The upgrade migrates hooks to Eve's new stream events and schedules to
+`to(channel, target).send(...)`. `ask_question` is now opt-in, so the old disable
+sentinels were removed. Existing sessions from 0.22 cannot hand off directly to
+1.0: finish or end them before deploying, and let new messages start fresh sessions.

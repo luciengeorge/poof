@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 // Post-build smoke test. It reads only what `pnpm build` wrote, never the source tree: the funnel
 // threw ENOENT on every production fire for 13 days while every source-level check passed, because
@@ -40,6 +40,10 @@ for (const file of files) {
   const src = readFileSync(file, "utf8");
   if (src.includes(TICKER)) withTicker.push(relative(ROOT, file));
   for (const match of src.matchAll(RELATIVE_FILE_READ)) {
+    // Eve bundles some framework assets (for example its Windows sandbox script)
+    // alongside the code. Accept those only when the referenced file really exists.
+    const asset = /new URL\(\s*(["'`])([^"'`]+)\1/.exec(match[0]);
+    if (asset && existsSync(new URL(asset[2], pathToFileURL(file)))) continue;
     problems.push(
       `${relative(ROOT, file)} reads a file relative to the bundle at runtime: ${match[0]}. ` +
         "The bundler does not copy that file, so production gets ENOENT. Import the data as a module instead.",
@@ -57,5 +61,5 @@ if (problems.length > 0) fail(problems);
 
 console.log(
   `[smoke-build] ok: ${TICKER} found in ${withTicker.join(", ")}; ` +
-    `no runtime reads relative to the bundle across ${files.length} server files`,
+    `no missing runtime assets across ${files.length} server files`,
 );
