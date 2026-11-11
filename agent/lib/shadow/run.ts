@@ -76,25 +76,41 @@ export async function runShadow(kind: ShadowKind, env: Env, owner: string,
     }
     const pending: string[] = [];
     let truncated = 0;
+    const failures: string[] = [];
     const offset = Math.floor(claim.slot) % Math.max(1, inputs.cursors.length);
     const cursors = [...inputs.cursors.slice(offset), ...inputs.cursors.slice(0, offset)];
     for (const cursor of cursors.slice(0, 16)) {
       await pace(); const through = now();
       const from = new Date(Math.max(through - 36 * 3_600_000, cursor.through - 900_000)).toISOString().slice(0, 10);
-      const items = await news.getCompanyNews(cursor.ticker, from, new Date(through).toISOString().slice(0, 10));
+      let items: NewsItem[];
+      try {
+        items = await news.getCompanyNews(cursor.ticker, from, new Date(through).toISOString().slice(0, 10));
+      } catch (error) {
+        // A provider HTTP error or exhausted quota stops the run, including the first 429.
+        // A transient read/parse failure affects only this symbol; no cursor is advanced.
+        if (error instanceof FinnhubError || error instanceof ShadowBudgetError) throw error;
+        const category = error instanceof Error && /timed? out|timeout/i.test(error.message) ? "timeout" :
+          error instanceof SyntaxError ? "invalid-json" : "read-unavailable";
+        failures.push(`${cursor.ticker}:${category}`);
+        continue;
+      }
       const firstSeenAt = now();
       const relevant = items.filter((i) => !Number.isFinite(i.datetime) || i.datetime * 1_000 >= Math.max(through - 36 * 3_600_000, cursor.through - 900_000));
       const capped = relevant.length > 50;
       if (capped) truncated++;
-      const evidence = relevant.sort((a, b) => b.datetime - a.datetime).slice(0, 50).map((i) => {
+      let malformed = false;
+      const evidence = relevant.sort((a, b) => b.datetime - a.datetime).slice(0, 50).flatMap((i) => {
+        if (typeof i.headline !== "string" || !i.headline.trim()) { malformed = true; return []; }
         const candidate = i.datetime * 1_000;
-        const publishedAt = Number.isFinite(candidate) && candidate > 0 ? candidate : 0;
+        const publishedAt = Number.isFinite(candidate) && candidate > 0 && candidate <= 8.64e15 ? candidate : 0;
         const reason = newsEligibility(publishedAt, firstSeenAt);
-        return { story: storyKey(i.headline, publishedAt || firstSeenAt), url: canonicalUrl(i.url),
-          headline: i.headline.slice(0, 500), summary: i.summary.slice(0, 2_000), source: i.source.slice(0, 120),
-          publishedAt, firstSeenAt, eligible: reason === null, ...(reason ? { reason } : {}) };
+        return [{ story: storyKey(i.headline, publishedAt || firstSeenAt), url: canonicalUrl(i.url),
+          headline: i.headline.slice(0, 500), summary: typeof i.summary === "string" ? i.summary.slice(0, 2_000) : "",
+          source: typeof i.source === "string" ? i.source.slice(0, 120) : "",
+          publishedAt, firstSeenAt, eligible: reason === null, ...(reason ? { reason } : {}) }];
       });
-      pending.push(...await store.ingest(lease, cursor.ticker, through, capped, evidence));
+      if (malformed) failures.push(`${cursor.ticker}:malformed-headline`);
+      pending.push(...await store.ingest(lease, cursor.ticker, through, capped || malformed, evidence));
     }
     // Every durable event remains visible, including the unscreened tail. Next claim marks its
     // expired state; it can never be silently retried with information from a later day.
@@ -139,8 +155,8 @@ export async function runShadow(kind: ShadowKind, env: Env, owner: string,
       }
       await store.attachStart(lease, id, pair);
     }
-    const reason = `news-ingested;truncated=${truncated};unattempted=${Math.max(0, pending.length - attemptCap)}`;
-    await store.finish(lease, "completed", reason); return reason;
+    const reason = `news-ingested;truncated=${truncated};unattempted=${Math.max(0, pending.length - attemptCap)};failures=${failures.length}${failures.length ? `:${failures.slice(0, 2).join(",")}` : ""}`;
+    await store.finish(lease, failures.length ? "failed" : "completed", reason); return reason;
   } catch (error) {
     // Provider bodies can contain credentials. Persist a bounded category, never the raw error.
     const reason = error instanceof ShadowBudgetError ? "shadow-provider-budget" :

@@ -145,3 +145,9 @@ all per-mode flags on in Vercel and master/quota flags on in Convex and redeploy
 Vercel. Verify effective flags and first durable run receipts. Slack still requires the
 Connect client's message event subscriptions and history permissions. Observation remains
 quote-only where confirmed position quantities are unavailable; forecast results cannot trade.
+
+Production follow-up: a failed read/parse for one news symbol must not discard other
+symbols or their forecast opportunities. Such failures retain that cursor and mark the
+poll failed with bounded symbol/category diagnostics; peers continue. Missing optional
+summary/source text is empty, while malformed mandatory headlines keep the cursor stationary.
+All provider HTTP errors and durable budget denials still stop the run, including first429.
