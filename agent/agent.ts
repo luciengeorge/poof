@@ -1,7 +1,8 @@
-import { isAmbient } from "./lib/ambient-permissions.ts";
-import { defineAgent, defineDynamic } from "eve";
+import { defineAgent } from "eve";
 
-const definition = defineAgent({
+export default defineAgent({
+  // Poof uses authored tools and declared subagents; no arbitrary sandbox/root-copy tools.
+  defaultTools: false,
   // Orchestrator: sequences the trading pipeline and makes the trade calls. Subagents use the
   // same model (see agent/subagents/*). Design lives in the Obsidian vault.
   //
@@ -17,7 +18,3 @@ const definition = defineAgent({
   model: "openai/gpt-5.6-luna",
   reasoning: "xhigh",
 });
-
-export default defineDynamic((ctx) => isAmbient(ctx)
-  ? { ...definition, defaultTools: false, tool: false }
-  : definition);

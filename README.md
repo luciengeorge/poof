@@ -126,7 +126,8 @@ model deadline); uncertain results, errors, and incomplete thread context pass t
 for the agent to decide. Deferred turns can call `no_reply` without posting a status.
 Ambient instructions allow read-only discussion, not trading or state changes.
 Unmentioned routing defaults off (`AMBIENT_LISTENING_ENABLED=false`). Ambient auth claims
-enforce a read-only tool allowlist in code; sandbox tools and delegation are disabled.
+enforce a read-only tool allowlist in code. Poof uses authored tools with optional sandbox
+and root-copy tools disabled; ambient turns also cannot delegate to declared subagents.
 Slack messages queue behind running turns so conversation cannot steer a trading cycle.
 
 Configure the Slack app behind the `slack/poof` Connect client:
