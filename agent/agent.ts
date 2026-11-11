@@ -1,6 +1,7 @@
-import { defineAgent } from "eve";
+import { isAmbient } from "./lib/ambient-permissions.ts";
+import { defineAgent, defineDynamic } from "eve";
 
-export default defineAgent({
+const definition = defineAgent({
   // Orchestrator: sequences the trading pipeline and makes the trade calls. Subagents use the
   // same model (see agent/subagents/*). Design lives in the Obsidian vault.
   //
@@ -16,3 +17,7 @@ export default defineAgent({
   model: "openai/gpt-5.6-luna",
   reasoning: "xhigh",
 });
+
+export default defineDynamic((ctx) => isAmbient(ctx)
+  ? { ...definition, defaultTools: false, tool: false }
+  : definition);

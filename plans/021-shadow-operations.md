@@ -129,3 +129,19 @@ Jev automated code review was attempted but unavailable (`JEV_API_KEY` unset); n
 model validation, production schema dry-run, deployed-handler test or quota verification is
 claimed by these results. The separate earlier Gateway-backed greeting eval remains blocked
 by disconnected local Gateway credentials.
+
+## Authorized activation (11 Nov 2026)
+
+Lucien explicitly requested both ambient listening and all shadow research modes on.
+The activation patch enforces ambient read-only tool permissions, disables ambient sandbox
+and delegation, queues Slack turns, and adds an operator-only `/ops/activation-readiness`
+endpoint. It accepts the existing shared secret as a bearer token, never returns credentials
+or raw provider errors, and probes only bounded read-only feed/Slack/model requests with
+`?probe=1`. Never run probes in the excluded live windows. A status request without `probe`
+returns only effective configuration booleans.
+
+Deploy the permission patch with modes off after 16:00 UTC, verify the probes, then set
+all per-mode flags on in Vercel and master/quota flags on in Convex and redeploy through
+Vercel. Verify effective flags and first durable run receipts. Slack still requires the
+Connect client's message event subscriptions and history permissions. Observation remains
+quote-only where confirmed position quantities are unavailable; forecast results cannot trade.

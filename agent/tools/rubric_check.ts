@@ -1,3 +1,4 @@
+import { withAmbientReadOnly } from "../lib/ambient-permissions.ts";
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 
@@ -5,7 +6,7 @@ import { jevFromEnv } from "../lib/jev.ts";
 import { rubricCheck } from "../lib/rubric.ts";
 import { STRATEGY_TAGS } from "../lib/positions.ts";
 
-export default defineTool({
+export default withAmbientReadOnly("rubric_check", defineTool({
   description:
     "Deterministic risk rubric for ONE thesis, run BEFORE red_team. Jev answers three calibrated questions (priced in, catalyst connects to this stock, substance) and the earnings calendar settles the binary-event question in arithmetic; the verdict (keep/shrink/veto) is a fixed rule in code with a numbered reason per trigger. A `veto` drops the thesis. Pass the whole result to red_team, which then rules only on coherence. Does not place trades and cannot bypass the risk gate.",
   inputSchema: z.object({
@@ -39,4 +40,4 @@ export default defineTool({
     if (!result) return { available: false, reason: "Jev was unavailable; send the thesis to red_team as before." };
     return { available: true, ...result };
   },
-});
+}));

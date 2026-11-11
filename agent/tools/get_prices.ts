@@ -1,8 +1,9 @@
+import { withAmbientReadOnly } from "../lib/ambient-permissions.ts";
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 import { finnhubFromEnv, type Quote } from "../lib/data.ts";
 
-export default defineTool({
+export default withAmbientReadOnly("get_prices", defineTool({
   description:
     "Get the latest price quote for one or more US stock/ETF tickers (e.g. AAPL, SPY). Returns current price, previous close, and % change per symbol. A symbol lookup can fail (e.g. rate limit); failed symbols are omitted from `quotes` and listed in `failures` instead of failing the whole batch.",
   inputSchema: z.object({
@@ -22,4 +23,4 @@ export default defineTool({
     }
     return { quotes, failures };
   },
-});
+}));

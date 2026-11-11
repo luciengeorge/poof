@@ -32,6 +32,7 @@ function recordUserMessage(m: {
 
 export default slackChannel({
   credentials: connectSlackCredentials("slack/poof"),
+  turnPolicy: "queue",
   threadContext: { since: "last-agent-reply" },
   async onMessage(ctx, message) {
     const route = await routeSlackMessage(ctx, message);

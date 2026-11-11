@@ -1,3 +1,4 @@
+import { withAmbientReadOnly } from "../lib/ambient-permissions.ts";
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 import { memoryFromEnv, type Env } from "../lib/memory.ts";
@@ -11,7 +12,7 @@ function toRows(stored: readonly { memoryId: string }[]): MemoryRow[] {
   });
 }
 
-export default defineTool({
+export default withAmbientReadOnly("recall_memory", defineTool({
   description:
     "Recall your durable memory for this account. Returns your structured `memory` (directives you " +
     "must obey, lessons you derived, current observations), `fromLucien` (his recent messages, on " +
@@ -76,4 +77,4 @@ export default defineTool({
       };
     }
   },
-});
+}));
