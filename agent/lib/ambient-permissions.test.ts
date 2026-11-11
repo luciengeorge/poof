@@ -34,6 +34,8 @@ test("ambient has no default sandbox/delegation and messages queue behind existi
   assert.match(readFileSync(new URL("../agent.ts", import.meta.url), "utf8"), /defaultTools: false/);
   const slack = readFileSync(new URL("../channels/slack.ts", import.meta.url), "utf8");
   assert.match(slack, /turnPolicy: "queue"/);
+  assert.match(slack, /route\.auth\.attributes\.poofAmbient !== "true"/);
+  assert.match(readFileSync(new URL("../hooks/record-messages.ts", import.meta.url), "utf8"), /if \(isAmbient\(ctx\)\) return/);
   for (const name of ["red_team", "memory_gate", "report_judge"]) {
     assert.match(readFileSync(new URL(`../subagents/${name}/agent.ts`, import.meta.url), "utf8"), /isAmbient\(ctx\) \? null/);
   }

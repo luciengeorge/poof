@@ -1,5 +1,6 @@
 import { call } from "eve/events";
 import { defineHook } from "eve/hooks";
+import { isAmbient } from "../lib/ambient-permissions.ts";
 import { alert } from "../lib/alert.ts";
 import {
   actionResultCallId,
@@ -141,6 +142,7 @@ export default defineHook({
   events: {
     // Open a trace only for turns that are actually trading cycles.
     async "delivery.consumed"(event, ctx) {
+      if (isAmbient(ctx)) return;
       try {
         if (!isCycleTurnMessage(event.data.parts.filter((p) => p.kind === "text").map((p) => p.text).join("\n"))) return;
         const traceKey = key(ctx.session.id, event.data.turnId);

@@ -36,7 +36,7 @@ export default slackChannel({
   threadContext: { since: "last-agent-reply" },
   async onMessage(ctx, message) {
     const route = await routeSlackMessage(ctx, message);
-    if (route && !ctx.edit) recordUserMessage(message);
+    if (route && route.auth.attributes.poofAmbient !== "true" && !ctx.edit) recordUserMessage(message);
     return route;
   },
 });
