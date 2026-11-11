@@ -1,3 +1,4 @@
+import { withAmbientReadOnly } from "../lib/ambient-permissions.ts";
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 import { finnhubFromEnv } from "../lib/data.ts";
@@ -13,7 +14,7 @@ import {
 
 const DAY = 86_400_000;
 
-export default defineTool({
+export default withAmbientReadOnly("review_external_holdings", defineTool({
   description:
     "READ-ONLY advisory view of holdings the user owns in a SEPARATE, EXTERNAL brokerage account. " +
     "THE AGENT CANNOT TRADE THESE: there is no broker API for that account, so never propose or " +
@@ -132,4 +133,4 @@ export default defineTool({
       },
     };
   },
-});
+}));

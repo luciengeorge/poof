@@ -1,8 +1,9 @@
+import { withAmbientReadOnly } from "../lib/ambient-permissions.ts";
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 import { exaFromEnv } from "../lib/exa.ts";
 
-export default defineTool({
+export default withAmbientReadOnly("exa_search", defineTool({
   description:
     "Deep web search (via Exa) for fresh, relevant context on a company, ticker, sector, or market event, beyond the headline feed. Returns title, url, date, and a short text/summary per result. Use to pressure-test a thesis with current sources. Remember: public news is priced in fast, so weight genuinely recent, material items.",
   inputSchema: z.object({
@@ -28,4 +29,4 @@ export default defineTool({
     });
     return { results };
   },
-});
+}));

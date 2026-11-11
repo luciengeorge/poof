@@ -1,3 +1,4 @@
+import { withAmbientReadOnly } from "../lib/ambient-permissions.ts";
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 import { memoryFromEnv } from "../lib/memory.ts";
@@ -14,7 +15,7 @@ import { jevDurabilityCheck } from "../lib/jev-durability.ts";
  * rewrites scored -12.1%, because a rewrite destroys credit assignment. There is no way to replace
  * memory wholesale here; the shape of the tool makes the failing pattern unreachable.
  */
-export default defineTool({
+export default withAmbientReadOnly("amend_memory", defineTool({
   description:
     "Amend your durable memory with AT MOST 3 atomic edits. This is the only way memory changes: " +
     "there is no full-rewrite operation, because rewriting everything makes it impossible to tell " +
@@ -105,4 +106,4 @@ export default defineTool({
       return { applied: [], decisions: [], note: "memory unavailable" };
     }
   },
-});
+}));

@@ -1,3 +1,4 @@
+import { withAmbientReadOnly } from "../lib/ambient-permissions.ts";
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 import { t212FromEnv } from "../lib/t212.ts";
@@ -5,7 +6,7 @@ import { brokerSnapshotWithFx, buildRiskSnapshot } from "../lib/execution.ts";
 import { loadRiskState } from "../lib/state.ts";
 import { fxForCycle } from "../lib/fx.ts";
 
-export default defineTool({
+export default withAmbientReadOnly("get_account", defineTool({
   description:
     "Read the live Trading 212 account. Returns accountValueGbp (the authoritative total account value in GBP), cashGbp (free cash), deployedGbp (value of holdings), and per-position GBP values. All figures are GBP. Call this before proposing trades so sizing is grounded in real buying power.",
   inputSchema: z.object({}),
@@ -27,4 +28,4 @@ export default defineTool({
       accountValueReconciliation: snap.accountValueReconciliation,
     };
   },
-});
+}));

@@ -1,3 +1,4 @@
+import { withAmbientReadOnly } from "../lib/ambient-permissions.ts";
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 import { t212FromEnv, type T212Client, type T212Position } from "../lib/t212.ts";
@@ -98,7 +99,7 @@ export async function reconcileOrphans(args: {
   return { status: "reconciled", closed: orphanArgs.length };
 }
 
-export default defineTool({
+export default withAmbientReadOnly("manage_positions", defineTool({
   description:
     "Enforce exit rules on open positions: sells any whose stop-loss, take-profit, or max-hold has triggered (mechanical, not a judgement call). Call this EARLY each cycle, before looking for new entries. SELLs are allowed even when trading is halted (de-risking is always permitted). Honors DRY_RUN. Returns the exits triggered and what was placed.",
   inputSchema: z.object({}),
@@ -200,4 +201,4 @@ export default defineTool({
         signals.length === 0 ? "no exit conditions met" : `${signals.length} exit(s)`,
     };
   },
-});
+}));

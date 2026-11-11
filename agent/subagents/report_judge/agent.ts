@@ -1,6 +1,7 @@
-import { defineAgent } from "eve";
+import { isAmbient } from "../../lib/ambient-permissions.ts";
+import { defineAgent, defineDynamic } from "eve";
 
-export default defineAgent({
+const definition = defineAgent({
   description:
     "LLM-as-judge for report QUALITY. Given ONE already-published cycle report plus its cycle " +
     "id, loads the stored tool outputs itself and grades it 1-5 on grounding, consistency, calibration and " +
@@ -14,3 +15,5 @@ export default defineAgent({
   model: "openai/gpt-5.6-luna",
   reasoning: "high",
 });
+
+export default defineDynamic((ctx) => isAmbient(ctx) ? null : definition);

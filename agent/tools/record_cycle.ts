@@ -1,3 +1,4 @@
+import { withAmbientReadOnly } from "../lib/ambient-permissions.ts";
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 import { t212FromEnv } from "../lib/t212.ts";
@@ -10,7 +11,7 @@ import { isDryRun } from "../lib/state.ts";
 import { CORE_TICKER } from "../lib/core.ts";
 import { coreOrderRecord, sweepCore } from "../lib/core-orders.ts";
 
-export default defineTool({
+export default withAmbientReadOnly("record_cycle", defineTool({
   description:
     `Log this cycle's decision to durable memory. Call this ONCE at the END of every cycle (whether or not you traded), after posting your report. It records what you decided (trade / no-trade), your one-line reasoning, and the candidates/watchlist you considered, alongside a server-fetched equity and free-cash snapshot. This decision log is how the weekly scorecard counts cycles and how you review your own reasoning over time. It places no stock orders; afterwards it sweeps free cash above a small buffer into the index core (${CORE_TICKER}), automatically, and reports what it did in \`core\`. Safe to call every cycle.`,
   inputSchema: z.object({
@@ -97,4 +98,4 @@ export default defineTool({
       return { recorded: false, note: "memory or broker unavailable" };
     }
   },
-});
+}));

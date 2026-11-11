@@ -37,6 +37,7 @@ test("ambient routing: only watched channels and followed replies are screened",
     assert.equal(await routeSlackMessage(context(), message({ channelId: "COTHER" }), screen), null);
     const route = await routeSlackMessage(context(), message(), screen);
     assert.equal(route?.status, "deferred");
+    assert.equal(route?.auth.attributes.poofAmbient, "true");
     assert.deepEqual(route?.context, [CHANNEL_GOAL]);
     const followed = await routeSlackMessage(context({ isSubscribed: async () => true }), message({ channelId: "COTHER", threadTs: "1" }), screen);
     assert.equal(followed?.status, "deferred");

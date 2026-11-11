@@ -1,3 +1,4 @@
+import { withAmbientReadOnly } from "../lib/ambient-permissions.ts";
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 import { finnhubFromEnv } from "../lib/data.ts";
@@ -7,7 +8,7 @@ import { DEFAULT_EXITS } from "../lib/exits.ts";
 
 const DAY = 86_400_000;
 
-export default defineTool({
+export default withAmbientReadOnly("get_earnings_calendar", defineTool({
   // The window is INTERPOLATED, not written out, because a number repeated in prose is a number
   // that drifts: this text said "~10 days" while the exit engine's default was being raised.
   description:
@@ -42,4 +43,4 @@ export default defineTool({
     );
     return { today, earnings };
   },
-});
+}));

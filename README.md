@@ -125,15 +125,17 @@ the relevance filter. Unmentioned messages are screened with `decide` (five-seco
 model deadline); uncertain results, errors, and incomplete thread context pass through
 for the agent to decide. Deferred turns can call `no_reply` without posting a status.
 Ambient instructions allow read-only discussion, not trading or state changes.
-Unmentioned routing defaults off (`AMBIENT_LISTENING_ENABLED=false`). Those instructions
-are not a code-enforced tool boundary; review that boundary before enabling this mode.
+Unmentioned routing defaults off (`AMBIENT_LISTENING_ENABLED=false`). Ambient auth claims
+enforce a read-only tool allowlist in code. Poof uses authored tools with optional sandbox
+and root-copy tools disabled; ambient turns also cannot delegate to declared subagents.
+Slack messages queue behind running turns so conversation cannot steer a trading cycle.
 
 Configure the Slack app behind the `slack/poof` Connect client:
 
 1. Subscribe to `message.channels` and grant `channels:history` for public channels.
 2. For private channels, also subscribe to `message.groups` and grant `groups:history`.
 3. Reinstall/reauthorize the app after changing scopes and invite it to the report channel.
-4. After the activation review, set `AMBIENT_LISTENING_ENABLED=true` and deploy. In the report channel, ask a Poof question without a mention,
+4. Set `AMBIENT_LISTENING_ENABLED=true` and deploy outside the trading cron windows. In the report channel, ask a Poof question without a mention,
    then check that unrelated conversation stays quiet and thread follow-ups work.
 
 Filter decisions log channel IDs, timestamps, probabilities, and skip reasons without

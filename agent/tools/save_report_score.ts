@@ -1,3 +1,4 @@
+import { withAmbientReadOnly } from "../lib/ambient-permissions.ts";
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 import { alert } from "../lib/alert.ts";
@@ -31,7 +32,7 @@ import { judgeGroundTruth } from "../lib/report-judge.ts";
  * the risk gate, position sizing, or order placement.
  */
 
-export default defineTool({
+export default withAmbientReadOnly("save_report_score", defineTool({
   description:
     "ONLINE EVALS: record the report_judge verdict for ONE already-completed cycle. Pass the " +
     "subagent's structured output through unchanged as `verdict` (grounding, consistency, " +
@@ -175,4 +176,4 @@ export default defineTool({
       outcome,
     };
   },
-});
+}));

@@ -67,13 +67,15 @@ export async function routeSlackMessage(
     return { auth };
   }
   if (!ambientEnabled) return null;
-  if (ctx.edit) return { auth, status: "deferred" as const, guidance: THREAD_GUIDANCE };
+  // These trusted claims come from routing code, never from message text or the model.
+  const ambientAuth = { ...auth, attributes: { ...auth.attributes, poofAmbient: "true" } };
+  if (ctx.edit) return { auth: ambientAuth, status: "deferred" as const, guidance: THREAD_GUIDANCE };
   const followed = message.threadTs !== message.ts && await ctx.isSubscribed();
   if (!followed && message.channelId !== process.env.SLACK_CHANNEL_ID?.trim()) return null;
   const goal = followed ? THREAD_GUIDANCE : CHANNEL_GOAL;
   if (await screen(ctx, message, goal)) return null;
   return {
-    auth,
+    auth: ambientAuth,
     status: "deferred" as const,
     guidance: THREAD_GUIDANCE,
     context: followed ? [] : [CHANNEL_GOAL],

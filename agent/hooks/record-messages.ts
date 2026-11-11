@@ -1,4 +1,5 @@
 import { defineHook } from "eve/hooks";
+import { isAmbient } from "../lib/ambient-permissions.ts";
 import { memoryFromEnv, type Env } from "../lib/memory.ts";
 
 function env(): Env {
@@ -10,6 +11,7 @@ function env(): Env {
 export default defineHook({
   events: {
     async "content.completed"(event, ctx) {
+      if (isAmbient(ctx)) return;
       try {
         // Skip interim narration before tool calls; only keep terminal replies.
         if (event.data.phase !== "reply" || event.data.kind !== "text") return;

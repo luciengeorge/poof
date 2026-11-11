@@ -1,3 +1,4 @@
+import { withAmbientReadOnly } from "../lib/ambient-permissions.ts";
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 import {
@@ -32,7 +33,7 @@ import { tradingEnv } from "../lib/risk-runtime.ts";
  */
 const SCAN_LIMIT = 50;
 
-export default defineTool({
+export default withAmbientReadOnly("review_eval_health", defineTool({
   description:
     "ONLINE EVALS: the eval-health section for the weekly scorecard. Aggregates the recent " +
     "production cycle traces into per-invariant pass / fail / not-applicable counts (so the " +
@@ -75,4 +76,4 @@ export default defineTool({
     const health = aggregateEvalHealth(withinWindow(traces, now, days), { coverage });
     return { env, windowDays: days, ...health, lines: formatEvalHealth(health) };
   },
-});
+}));

@@ -1,3 +1,4 @@
+import { withAmbientReadOnly } from "../lib/ambient-permissions.ts";
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 import { memoryFromEnv } from "../lib/memory.ts";
@@ -23,7 +24,7 @@ import { tradingEnv } from "../lib/risk-runtime.ts";
 const SCAN_LIMIT = 50;
 const DEFAULT_LIMIT = 10;
 
-export default defineTool({
+export default withAmbientReadOnly("list_unjudged_cycles", defineTool({
   description:
     "ONLINE EVALS: list completed production trading cycles whose report has NOT yet been " +
     "graded for quality, each with the report text and immutable cycle id. Used by the weekly " +
@@ -74,4 +75,4 @@ export default defineTool({
 
     return { env, cycles, notJudgeable, scanned: traces.length };
   },
-});
+}));

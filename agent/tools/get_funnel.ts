@@ -1,3 +1,4 @@
+import { withAmbientReadOnly } from "../lib/ambient-permissions.ts";
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 
@@ -6,7 +7,7 @@ import { memoryFromEnv } from "../lib/memory.ts";
 
 const DEFAULT_LIMIT = 15;
 
-export default defineTool({
+export default withAmbientReadOnly("get_funnel", defineTool({
   description:
     "The day's shortlist from the wide funnel: every S&P 500 name's news, screened by Jev before the cycle and ranked in code by freshCatalyst x (1 - pricedIn) x strategy-bucket weight x recency. Returns the top items with their signals, plus how much of the universe was covered today. Use it as the FIRST place to look for candidates, then read the underlying stories. It is a ranking, not a filter: an item low on this list can still be worth a look if you have a reason.",
   inputSchema: z.object({
@@ -52,4 +53,4 @@ export default defineTool({
       })),
     };
   },
-});
+}));

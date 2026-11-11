@@ -1,3 +1,4 @@
+import { withAmbientReadOnly } from "../lib/ambient-permissions.ts";
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 import { t212FromEnv } from "../lib/t212.ts";
@@ -60,7 +61,7 @@ export function presentPosition(m: ManagedPosition, now: number) {
   };
 }
 
-export default defineTool({
+export default withAmbientReadOnly("review_performance", defineTool({
   description:
     `Review how the account is actually doing: open positions with unrealized P&L, their thesis, age, and active exit levels (the index core is marked \`indexCore\` and has none: it is exempt from exits); realized win/loss stats from closed trades; and alpha since inception against a benchmark. \`benchmark.benchmarkTicker\` says which benchmark: when it is ${CORE_TICKER}, alpha is measured against the index core itself, in GBP, total return, with no currency conversion (\`alpha.spyReturnPct\` is then the core's return and \`spyPrice\` is null); otherwise it is measured against buy-and-hold SPY. Read alpha.spyReturnBasis before quoting alpha: "GBP" means the benchmark's return is in pounds (for SPY, including the currency move) and the comparison is like-for-like; "USD-unadjusted" means no FX rate was available for SPY and the two returns are in different currencies, so say so rather than presenting the gap as real. Call this EARLY each cycle (after managing exits) so new decisions are informed by what worked and whether you're beating just holding the index. CURRENCY: accountValueGbp, cashGbp, deployedGbp and each position's marketValue/unrealizedPnl are GBP; each position's entryPrice/currentPrice are share prices in the instrument's own currency (USD for US stocks), NOT GBP. Read-only.`,
   inputSchema: z.object({}),
@@ -208,4 +209,4 @@ export default defineTool({
       alpha,
     };
   },
-});
+}));
