@@ -1,5 +1,3 @@
-import type { EvalReporter } from "eve/evals/reporters";
-
 interface Event {
   type: string;
   data: unknown;
@@ -41,15 +39,14 @@ export function failureDiagnostics(events: readonly Event[]) {
     pendingModels: models.size };
 }
 
-export const failureReporter: EvalReporter = {
-  onRunStart() {},
-  onEvalComplete(result) {
-    if (result.verdict !== "failed") return;
-    // Separate sessions so call/model identifiers cannot collide across sessions. Child internals
-    // are visible only if the eval captured them; zero counters never prove a child is healthy.
-    for (const session of result.result.sessions ?? []) {
-      console.error("[eval-failure-lifecycle] captured session", JSON.stringify(failureDiagnostics(session.events)));
-    }
-  },
-  onRunComplete() {},
-};
+/** Eve's completed-session snapshots omit a turn that aborts mid-stream. Read the public
+ * live-turn buffer instead. This wrapper neither changes cancellation nor consumes a second
+ * stream, and rethrows the original failure so no assertion/timeout can become a pass. */
+export async function diagnoseTurn<T>(live: { readonly events: readonly Event[]; result(): Promise<T> }): Promise<T> {
+  try {
+    return await live.result();
+  } catch (error) {
+    console.error("[eval-failure-lifecycle] in-flight turn", JSON.stringify(failureDiagnostics(live.events)));
+    throw error;
+  }
+}

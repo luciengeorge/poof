@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { failureDiagnostics, failureReporter } from "../../evals/lib/failure-diagnostics.ts";
+import { failureDiagnostics, diagnoseTurn } from "../../evals/lib/failure-diagnostics.ts";
 
 test("failure diagnostics distinguish unfinished tools, children and model runs without payloads", () => {
   const secret = "private-payload-must-not-appear";
@@ -25,17 +25,23 @@ test("failure diagnostics distinguish unfinished tools, children and model runs 
   assert.ok(!JSON.stringify(failureDiagnostics(events)).includes(secret));
 });
 
-test("failure reporter emits only failed-session counters, never error or transcript text", () => {
+test("forced timeout reads the live buffer even when the session snapshot is empty", async () => {
   const lines: string[] = [];
   const old = console.error;
   console.error = (...args) => { lines.push(args.join(" ")); };
   try {
-    const failed = { verdict: "failed", error: "secret", result: { sessions: [{ events: [] }], reply: "secret" } };
-    // Reporter fixture omits unrelated runner metadata; the public Eve type is checked at use.
-    failureReporter.onEvalComplete(failed as unknown as Parameters<typeof failureReporter.onEvalComplete>[0]);
+    const error = new Error("secret-error-must-not-be-logged");
+    const session = { events: [] };
+    const live = {
+      events: [{ type: "model.requested", data: { runId: "secret-run-id" } }],
+      result: () => new Promise<never>((_, reject) => setTimeout(() => reject(error), 5)),
+    };
+    await assert.rejects(diagnoseTurn(live), e => e === error);
+    assert.equal(session.events.length, 0);
     assert.equal(lines.length, 1);
     assert.ok(!lines[0].includes("secret"));
-    failureReporter.onEvalComplete({ ...failed, verdict: "passed" } as unknown as Parameters<typeof failureReporter.onEvalComplete>[0]);
+    assert.equal(JSON.parse(lines[0].slice(lines[0].indexOf("{"))).pendingModels, 1);
+    assert.equal(await diagnoseTurn({ events: [], result: async () => "ok" }), "ok");
     assert.equal(lines.length, 1);
   } finally { console.error = old; }
 });

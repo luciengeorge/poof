@@ -1,5 +1,4 @@
 import { defineEvalConfig } from "eve/evals";
-import { failureReporter } from "./lib/failure-diagnostics.ts";
 
 // Behavioral evals are fully deterministic (no `t.judge.*`), so no judge model is needed.
 // Run serially: each eval drives a real agent turn against the rate-limited demo APIs
@@ -8,5 +7,4 @@ import { failureReporter } from "./lib/failure-diagnostics.ts";
 export default defineEvalConfig({
   maxConcurrency: 1,
   timeoutMs: 240_000,
-  reporters: [failureReporter],
 });
