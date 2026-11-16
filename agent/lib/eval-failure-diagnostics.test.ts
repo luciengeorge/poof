@@ -7,7 +7,7 @@ test("failure diagnostics distinguish unfinished tools, children and model runs 
   const events = [
     { type: "call.requested", data: { callId: "done", capability: { kind: "tool", name: secret }, input: secret } },
     { type: "call.settled", data: { callId: "done", output: secret } },
-    { type: "call.requested", data: { callId: secret, capability: { kind: "agent" } } },
+    { type: "call.requested", data: { callId: secret, capability: { kind: "agent", name: "red_team" } } },
     { type: "call.requested", data: { callId: "tool", capability: { kind: "tool" } } },
     { type: "call.requested", data: { callId: "other", capability: { kind: secret } } },
     { type: "child.opened", data: { sessionId: secret } },
@@ -21,7 +21,8 @@ test("failure diagnostics distinguish unfinished tools, children and model runs 
   ];
   assert.deepEqual(failureDiagnostics(events), { callsRequested: 4, callsSettled: 1,
     modelsRequested: 2, modelsStarted: 2, modelsRetried: 1, modelsSettled: 1, childrenOpened: 1,
-    pendingTools: 1, pendingAgents: 1, pendingOtherCalls: 1, pendingModels: 1 });
+    pendingTools: 1, pendingAgents: 1, pendingOtherCalls: 1, pendingModels: 1,
+    pendingCapabilities: { red_team: 1, other: 2 } });
   assert.ok(!JSON.stringify(failureDiagnostics(events)).includes(secret));
 });
 

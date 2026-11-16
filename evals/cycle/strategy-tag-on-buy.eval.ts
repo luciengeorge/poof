@@ -1,4 +1,5 @@
 import { defineEval } from "eve/evals";
+import { sendDiagnosed } from "../lib/failure-diagnostics.ts";
 import { STRATEGY_TAGS } from "../../agent/lib/positions.ts";
 import { guardedPathExercised } from "../lib/cycle-invariants.ts";
 
@@ -19,7 +20,7 @@ const TAGS = new Set<string>(STRATEGY_TAGS);
 
 export default defineEval({
   async test(t) {
-    await t.send(
+    await sendDiagnosed(t,
       "Run one trading cycle now, following your instructions, and post the summary.",
     );
     t.succeeded();

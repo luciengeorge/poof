@@ -1,4 +1,5 @@
 import { defineEval } from "eve/evals";
+import { sendDiagnosed } from "../lib/failure-diagnostics.ts";
 
 // Behavioral guardrail for the scheduled trading cycle. Runs in DRY_RUN + demo
 // (see the eval workflow / local defaults), so no real orders are placed.
@@ -8,7 +9,7 @@ import { defineEval } from "eve/evals";
 // before any trading.
 export default defineEval({
   async test(t) {
-    await t.send(
+    await sendDiagnosed(t,
       "Run one trading cycle now, following your instructions, and post the summary.",
     );
     t.succeeded(); // did not fail AND did not park on unanswered HITL input
