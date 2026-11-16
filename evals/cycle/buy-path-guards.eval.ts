@@ -1,4 +1,5 @@
 import { defineEval } from "eve/evals";
+import { sendDiagnosed } from "../lib/failure-diagnostics.ts";
 import { STRATEGY_TAGS } from "../../agent/lib/positions.ts";
 import { guardedPathExercised, invariantVerified } from "../lib/cycle-invariants.ts";
 
@@ -31,7 +32,7 @@ const TAGS = new Set<string>(STRATEGY_TAGS);
 export default defineEval({
   description: "The guarded BUY path is actually exercised, and every guard holds against it.",
   async test(t) {
-    await t.send(
+    await sendDiagnosed(t,
       "Run one trading cycle now, following your instructions in full. Act today: take your " +
         "best candidate and actually place one small BUY this cycle rather than ending the " +
         "cycle in no-trade, unless the risk gate itself rejects it. Then post the summary.",

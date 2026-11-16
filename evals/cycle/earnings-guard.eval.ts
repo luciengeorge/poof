@@ -1,6 +1,6 @@
 import { defineEval } from "eve/evals";
 import { invariantSatisfied } from "../lib/cycle-invariants.ts";
-import { diagnoseTurn } from "../lib/failure-diagnostics.ts";
+import { sendDiagnosed } from "../lib/failure-diagnostics.ts";
 
 // Behavioral guardrail for the earnings binary-event guard (Signal step, instructions.md
 // step 4): a candidate must get an earnings-calendar lookup before the agent commits to
@@ -17,11 +17,9 @@ import { diagnoseTurn } from "../lib/failure-diagnostics.ts";
 // from one that was never reached.
 export default defineEval({
   async test(t) {
-    const session = await t.session();
-    const live = await session.start(
+    await sendDiagnosed(t,
       "Run one trading cycle now, following your instructions, and post the summary.",
     );
-    await diagnoseTurn(live);
     t.succeeded();
     t.eventsSatisfy(
       "submit_orders is only requested after the earnings calendar was checked",
