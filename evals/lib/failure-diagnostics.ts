@@ -10,6 +10,7 @@ const CAPABILITIES = new Set([
   "recall_memory", "manage_positions", "review_performance", "get_funnel", "get_news",
   "get_prices", "get_earnings_calendar", "rubric_check", "red_team", "get_account",
   "exa_search", "submit_orders", "record_cycle", "review_external_holdings", "report_judge",
+  "memory_gate", "amend_memory",
 ]);
 
 /** Export only fixed lifecycle labels and counts, never event payloads or identifiers. */

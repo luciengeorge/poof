@@ -26,6 +26,14 @@ test("failure diagnostics distinguish unfinished tools, children and model runs 
   assert.ok(!JSON.stringify(failureDiagnostics(events)).includes(secret));
 });
 
+test("memory-step stalls retain their capability labels until settled", () => {
+  for (const name of ["memory_gate", "amend_memory"]) {
+    const events = [{ type: "call.requested", data: { callId: "private-id", capability: { kind: name === "memory_gate" ? "agent" : "tool", name } } }];
+    assert.deepEqual(failureDiagnostics(events).pendingCapabilities, { [name]: 1 });
+    assert.deepEqual(failureDiagnostics([...events, { type: "call.settled", data: { callId: "private-id" } }]).pendingCapabilities, {});
+  }
+});
+
 test("forced timeout reads the live buffer even when the session snapshot is empty", async () => {
   const lines: string[] = [];
   const old = console.error;
