@@ -11,6 +11,9 @@ export interface ResolveOrderArgs {
   env: Env; account: string; stores: ResolutionStores; get: BrokerGet; signal?: AbortSignal;
   /** Present when the sending owner still holds its lease; omitted when recovering an older fence. */
   handoff?: ExecutionLease;
+  /** Only the call that sent the order (which returns it to trade bookkeeping) or an operator who has
+   * fixed that bookkeeping may release a filled order. Anyone else may release only a zero-fill end. */
+  acceptFilled: boolean;
   attempts?: number; delayMs?: number; wait?: (ms: number) => Promise<void>;
 }
 
@@ -29,6 +32,8 @@ export async function resolveFencedOrder(args: ResolveOrderArgs): Promise<{ clas
       ...(attempt === 0 && args.handoff ? { handoff: { owner: args.handoff.owner, generation: args.handoff.generation } } : {}) });
     if (evidence.reason === "matched-history" && evidence.historyComplete &&
         (evidence.classification === "filled" || evidence.classification === "rejected")) {
+      if (evidence.classification === "filled" && !args.acceptFilled)
+        throw new Error("Filled order never reached trade bookkeeping; account stays fenced for manual audit");
       await stores.inventory.apply({ env, account, evidenceId: evidence.receiptId });
       return stores.coordination.resolve({ env, account, evidenceId: evidence.receiptId });
     }

@@ -20,7 +20,7 @@ function recoverEarlierFence(scope: ExecutionScope, get: BrokerGet): Promise<voi
   return scope.recovery ??= (async () => {
     const { env, account } = scope.identity;
     if (!(await scope.store.status({ env, account })).unresolvedWrite) return;
-    await resolveFencedOrder({ env, account, stores, get, signal: scope.signal, wait: scope.wait, attempts: 2 });
+    await resolveFencedOrder({ env, account, stores, get, signal: scope.signal, wait: scope.wait, attempts: 2, acceptFilled: false });
   })();
 }
 
@@ -86,7 +86,7 @@ export async function coordinatedBrokerRequest<T>(args: { env: T212Env; method: 
   if (!matches || !stores) throw new Error("Broker order requires reconciliation; no additional orders are admitted");
   // Only a complete broker history, booked into the ledger, returns the order to the caller.
   const resolved = await resolveFencedOrder({ env: scope.identity.env, account: scope.identity.account, stores,
-    get: args.get, signal: scope.signal, wait: scope.wait, handoff: lease });
+    get: args.get, signal: scope.signal, wait: scope.wait, handoff: lease, acceptFilled: true });
   if (resolved.classification === "rejected") throw args.error(400, JSON.stringify({ detail: "Order ended at the broker without a fill" }));
   return { ...order, status: "FILLED", filledQuantity: order!.quantity } as T;
 }

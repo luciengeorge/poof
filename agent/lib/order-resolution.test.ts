@@ -134,7 +134,7 @@ test("an unverified broker account or a pending broker order blocks the send ent
   assert.equal((await accountRow())!.activeWrite, undefined);
 });
 
-test("a still-pending order keeps the account fenced; the next scope recovers it before any other broker request", async t => {
+test("a still-pending order keeps the account fenced; a later fill is never auto-released outside the sending call", async t => {
   const { run, client, accountRow, generations } = setup(t);
   const state = { ...filledBroker(), pending: [[], [{ id: 77 }]], history: [] as unknown[] };
   const calls: string[] = [];
@@ -146,10 +146,24 @@ test("a still-pending order keeps the account fenced; the next scope recovers it
   state.history = [historyRow("FILLED", 1, 501)];
   state.portfolio = [[held(1)]];
   const later: string[] = [];
+  await assert.rejects(run(() => client(state, later).getCash({ fresh: true }), "session/later"), /manual audit/);
+  assert.ok(!later.includes("GET /equity/account/cash"));
+  assert.ok((await accountRow())!.activeWrite);
+  assert.equal((await generations()).length, 0);
+});
+
+test("a later zero-fill end is recovered automatically before the next scope's broker request", async t => {
+  const { run, client, accountRow, entries } = setup(t);
+  const state = { ...filledBroker(), pending: [[], [{ id: 77 }]], history: [] as unknown[] };
+  await assert.rejects(run(() => client(state, []).placeMarketOrder({ ticker, quantity: 1 })), /stays fenced/);
+  state.pending = [[]];
+  state.history = [historyRow("CANCELLED", 0)];
+  state.portfolio = [[]];
+  const later: string[] = [];
   await run(() => client(state, later).getCash({ fresh: true }), "session/later");
   assert.equal(later.at(-1), "GET /equity/account/cash");
   assert.equal((await accountRow())!.activeWrite, undefined);
-  assert.equal((await generations())[0].quantity, 1);
+  assert.deepEqual((await entries()).map(e => e.released), [true]);
 });
 
 test("a terminal partial fill is never auto-released, even once booked; it needs manual audit", async t => {

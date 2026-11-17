@@ -179,6 +179,10 @@ listed, or incomplete history is retried a few times six seconds apart; a partia
 mismatch or invalid response stays fenced for manual audit. A filled order returns to the
 existing order bookkeeping unchanged.
 
-A fence left by an earlier run is resolved before the next tool call touches the broker. If
-it cannot be, that call fails: no reads, no orders. An unacknowledged send (no broker ID)
+A fence left by an earlier run is checked before the next tool call touches the broker. Only
+a zero-fill end is released automatically there: a fill must reach trade bookkeeping, and only
+the sending call returns it to that bookkeeping. A fill resolved anywhere else (slower than
+the in-cycle budget, or claimed by another tool call between retries) stays fenced. The
+operator records the trade, then runs `scripts/reconcile-execution.ts --resolve --accept-filled`.
+Until then that tool call fails: no reads, no orders. An unacknowledged send (no broker ID)
 still requires manual audit and is never resent.
