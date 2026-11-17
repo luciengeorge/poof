@@ -23,7 +23,8 @@ const identity = { env: "demo" as const, account: "test-account", owner: "reconc
 const token = "reconciliation-test-only";
 const expected = { operationId: "opaque", brokerOrderId: 123, ticker: "AAPL_US_EQ", quantity: -1, startedAt: Date.parse("2026-11-17T15:00:00Z") };
 const order = { id: 123, instrument: { ticker: "AAPL_US_EQ" }, quantity: 1, side: "SELL", filledQuantity: 1, status: "FILLED", createdAt: "2026-11-17T15:00:00Z" };
-const fill = { id: 456, quantity: 1, price: 100, type: "TRADE", filledAt: "2026-11-17T15:00:00Z" };
+const fill = { id: 456, quantity: 1, price: 100, type: "TRADE", filledAt: "2026-11-17T15:00:00Z",
+  walletImpact: { currency: "GBP", realisedProfitLoss: 10 } };
 function setup(t: TestContext) {
   for (const [key, value] of Object.entries({ APP_SHARED_SECRET: token, EXECUTION_ACCOUNT_ID: identity.account, EXECUTION_COORDINATION_ENABLED: "true" })) {
     const old = process.env[key]; t.after(() => { if (old === undefined) delete process.env[key]; else process.env[key] = old; }); process.env[key] = value;
@@ -96,6 +97,8 @@ test("GET evidence for a FILLED sell preserves residual quantity and never clear
   await assert.rejects(store.claim(identity), /already completed/);
   assert.equal((await db.run(ctx => ctx.db.query("trades").take(1))).length, 0);
   assert.equal((await db.run(ctx => ctx.db.query("executionEvidence").take(2))).length, 1);
+  assert.deepEqual((await db.run(ctx => ctx.db.query("executionEvidence").take(1)))[0].fills, [{ id: 456, quantity: 1,
+    price: 100, filledAt: Date.parse(fill.filledAt), walletCurrency: "GBP", realizedPnlGbp: 10 }]);
 });
 
 test("an empty complete history and flat portfolio are unknown, never proof of non-placement", async t => {

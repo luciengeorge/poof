@@ -124,3 +124,34 @@ exit1; disabled/incomplete configuration exits2. Expected backend outcomes use s
 codes, and CLI text is fixed rather than copied from exception payloads. Unknown errors
 remain generic; no stack, provider body, credential, account or broker payload is printed.
 These diagnostics never change fence state or authorize retries.
+
+
+## D isolated position-generation ledger
+
+The disabled inventory stage adopts a fresh baseline only under the current account owner,
+with no active I/O, no unresolved order and a verified zero pending-order count. It never
+infers a baseline from a post-order portfolio. Baseline origin and observation time are
+recorded without inventing the original entry date; later baseline refreshes must match
+existing quantities/basis and cannot overwrite a manual change or corporate action.
+
+For an acknowledged order, the read-only collector can seal normalized GBP-wallet fills
+inside its immutable reconciliation receipt. Bookkeeping accepts only the receipt ID,
+never a separately supplied fill set; older count-only receipts cannot be booked. Apply
+only a fresh, complete receipt from the current ownership generation. Fill IDs are unique
+per environment/account; conflicting or missing earlier fills fail closed. Replay is
+idempotent across receipts. Signed quantity changes must match the broker-observed residual,
+otherwise nothing commits. Top-ups preserve the generation and weighted native share-price
+basis. Partial exits preserve the residual and generation; only an exactly zero observed
+broker quantity closes it. Re-entry creates a new generation even within the same ET day.
+
+Realized P&L records the broker-reported GBP amount per SELL fill once; it is not estimated
+from native price differences or a guessed FX rate. These fields do not claim a fee-inclusive
+net return. BUY fills cannot claim realized profit. Existing trade/cycle/risk/lesson history
+is untouched. New tables remain isolated operational bookkeeping, not new model learning.
+
+**The collector does not invoke this ledger, and live trading tools do not use it.** A
+verified baseline producer, ledger orchestration, generation-aware exit intents/strategy bookkeeping,
+reviewed fence clear/manual recovery, and activation/drain/account verification remain to
+be integrated and tested. No current daily behavior changes. Neither a baseline nor a
+bookkeeping receipt grants dispatch or releases an account fence/daily reservation; APIs
+continue to report canDispatch/canClearFence=false. Do not enable the incomplete mode.
