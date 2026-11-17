@@ -151,3 +151,30 @@ symbols or their forecast opportunities. Such failures retain that cursor and ma
 poll failed with bounded symbol/category diagnostics; peers continue. Missing optional
 summary/source text is empty; permanently invalid headlines are counted as rejected and do not pin the cursor.
 All provider HTTP errors stop before their bodies are read, including first429 with a broken body. Durable permit-store failures and budget denials are global failures; they never become per-symbol feed errors.
+
+## Authorized continuation (17 Nov 2026)
+
+Lucien authorized completing the pending work: verify actual ambient delivery, add confirmed
+position snapshots, implement the execution contract, then trial a second daily review read-only.
+Keep the separate scheduled nightly-eval investigation active. Extra live trading is not
+activated by an observation feature or by a green behavioral rerun.
+
+The first slice adds operational evidence in isolated tables. `record_cycle` reuses its existing
+fresh broker read to persist immutable quantities and observation times; it issues no extra
+broker request. Simulation/fake reads are excluded. Observer writes have a short timeout and
+cannot fail the cycle. The pending-order state remains explicitly `unverified`, so these
+snapshots are not execution-ready and do not turn on hypothetical exits. No live peaks, risk
+state or order policy is changed.
+
+Ambient delivery/settlement receipts contain session/turn references and server times only,
+never conversation text, user identity or trading memory. Authenticated GET
+`/ops/observation-status` returns bounded receipt counts and latest snapshot metadata, not
+positions or messages. A receipt from an actual unmentioned Slack message is still required
+before claiming delivery verification; absence of messages is not a successful test.
+
+After this slice, implement D's ownership, intent/reconciliation and daily reservations as a
+separate reviewed change. Resolve its documented SELL bookkeeping/coordination policy conflict
+explicitly before enabling a new live execution mode. Then implement the read-only afternoon
+review without broker writes, `record_cycle` sweeps or trading-memory edits. Inspect incremental
+decisions before deciding whether to activate a second live review. Existing daily trading,
+catch-up and watchdog stay in place throughout the observation work.
