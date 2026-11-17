@@ -7,6 +7,7 @@ import { anyApi } from "convex/server";
 import { createReconciliationStore } from "./reconciliation-store.ts";
 import { reconcileExecution } from "./reconcile-execution.ts";
 import { classifyOrderEvidence, nextHistoryCursor } from "./order-evidence.ts";
+import { reconciliationDiagnostic } from "./reconciliation-diagnostics.ts";
 
 registerHooks({ resolve(specifier, context, next) {
   if (specifier.startsWith(".") && context.parentURL?.includes("/convex/")) {
@@ -53,11 +54,17 @@ test("read-only reconciliation authenticates and requires an acknowledged fenced
   const { db, config, seed } = setup(t);
   let sends = 0;
   const fetchImpl: typeof fetch = async () => { sends++; return response([]); };
-  await assert.rejects(reconcileExecution({ ...config, fetchImpl }), /No fenced/);
+  await assert.rejects(reconcileExecution({ ...config, fetchImpl }), error => {
+    assert.equal(reconciliationDiagnostic(error).status, "not-needed");
+    assert.equal(reconciliationDiagnostic(error).exitCode, 0); return true;
+  });
   await seed("unknown", false);
   await assert.rejects(db.mutation(reconciliation.claim, { ...identity, token: "wrong" }), /Unauthenticated/);
   await assert.rejects(db.mutation(reconciliation.claim, { ...identity, token, env: "live" }), /No fenced/);
-  await assert.rejects(reconcileExecution({ ...config, fetchImpl }), /manual audit/);
+  await assert.rejects(reconcileExecution({ ...config, fetchImpl }), error => {
+    assert.equal(reconciliationDiagnostic(error).status, "manual-audit-required");
+    assert.equal(reconciliationDiagnostic(error).exitCode, 2); return true;
+  });
   assert.equal(sends, 0);
 });
 

@@ -116,3 +116,11 @@ configuration. **Do not turn the mode on just to run it.** This implementation i
 injected transports and convex-test only; no actual broker calls or production reconciliation
 runs are part of validation. Generation-aware holdings and idempotent fill/P&L bookkeeping,
 then a reviewed fence-clear/recovery protocol and activation/rollback proof remain pending.
+
+
+Operator command outcomes: `not-needed` exits0 when the authenticated backend reports no
+fenced order; `manual-audit-required` exits2; `broker-read-failed` and unexpected failures
+exit1; disabled/incomplete configuration exits2. Expected backend outcomes use structured
+codes, and CLI text is fixed rather than copied from exception payloads. Unknown errors
+remain generic; no stack, provider body, credential, account or broker payload is printed.
+These diagnostics never change fence state or authorize retries.

@@ -1,5 +1,5 @@
 import { mutation } from "./_generated/server";
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import { shadowEnv } from "./shadowTypes";
 import { authorizeExecution } from "./executionAuth";
 import { orderEvidence } from "./reconciliationTypes";
@@ -18,11 +18,11 @@ export const claim = mutation({
       q.eq("env", args.env).eq("account", args.account).eq("owner", args.owner)).unique();
     if (prior) throw new Error("Reconciliation owner already completed");
     const row = await ctx.db.query("executionAccounts").withIndex("by_env_and_account", q => q.eq("env", args.env).eq("account", args.account)).unique();
-    if (!row?.activeWrite) throw new Error("No fenced order to reconcile");
+    if (!row?.activeWrite) throw new ConvexError({ code: "NO_FENCED_ORDER", message: "No fenced order to reconcile" });
     const op = await ctx.db.get("executionOperations", row.activeWrite);
     if (!op || op.kind !== "write" || op.env !== args.env || op.account !== args.account ||
         !["pending", "unknown", "filled"].includes(op.state) || !Number.isSafeInteger(op.brokerOrderId) || op.brokerOrderId! <= 0)
-      throw new Error("Unacknowledged order requires manual audit; no automatic resend");
+      throw new ConvexError({ code: "MANUAL_AUDIT_REQUIRED", message: "Unacknowledged order requires manual audit; no automatic resend" });
     const now = Date.now();
     if (row.leaseUntil > now) throw new Error("Account execution busy");
     // Expired reconciliation GETs are safe to abandon. Keep the original write unchanged.
