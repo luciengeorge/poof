@@ -12,7 +12,7 @@ export const executionTables = {
     day: v.string(), state: v.string(), attempt: v.number(), startedAt: v.number(), finishedAt: v.optional(v.number()),
     retryableRejection: v.optional(v.boolean()), brokerOrderId: v.optional(v.number()),
   }).index("by_env_and_account_and_key", ["env", "account", "key"]),
-  executionDays: defineTable({ env: shadowEnv, account: v.string(), day: v.string(), baselineEntries: v.number() })
+  executionDays: defineTable({ env: shadowEnv, account: v.string(), day: v.string(), baselineEntries: v.number(), entryLimit: v.number() })
     .index("by_env_and_account_and_day", ["env", "account", "day"]),
   executionEntries: defineTable({ env: shadowEnv, account: v.string(), day: v.string(), operationId: v.id("executionOperations"), released: v.boolean() })
     .index("by_env_and_account_and_day_and_released", ["env", "account", "day", "released"])

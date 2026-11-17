@@ -1,16 +1,32 @@
-import { mutation, query } from "./_generated/server";
+import { mutation, query, type MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
+import type { Doc } from "./_generated/dataModel";
 import { assertSecret } from "./auth";
 import { shadowEnv } from "./shadowTypes";
 import { researchDay, researchSession } from "./shadowCalendar";
 import { executionSessionOpen } from "./executionCalendar";
+import { normalizeExecutionAccount } from "./executionConfig";
 declare const process: { env: Record<string, string | undefined> };
 const identity = { token: v.string(), env: shadowEnv, account: v.string() };
 const owner = { ...identity, owner: v.string() };
 function authorize(args: { token: string; account: string }, requireEnabled = true) {
   assertSecret(args.token);
-  if ((requireEnabled && process.env.EXECUTION_COORDINATION_ENABLED !== "true") || !process.env.EXECUTION_ACCOUNT_ID ||
-      args.account !== process.env.EXECUTION_ACCOUNT_ID) throw new Error("Execution coordination unavailable");
+  const account = normalizeExecutionAccount(process.env.EXECUTION_ACCOUNT_ID);
+  if ((requireEnabled && process.env.EXECUTION_COORDINATION_ENABLED !== "true") || !account ||
+      args.account !== account) throw new Error("Execution coordination unavailable");
+}
+
+/** GETs have no order side effect. Bump the account generation when clearing them so
+ * their eventual results cannot settle into, or be returned from, the new ownership. */
+async function abandonExpiredReads(ctx: MutationCtx, account: Doc<"executionAccounts">, now: number): Promise<boolean> {
+  if (account.activeWrite || account.leaseUntil > now || !account.activeReads.length) return false;
+  for (const id of account.activeReads) {
+    const op = await ctx.db.get("executionOperations", id);
+    if (!op || op.kind !== "read" || op.env !== account.env || op.account !== account.account)
+      throw new Error("Read fence reconciliation required");
+    await ctx.db.patch("executionOperations", id, { state: "read-abandoned", finishedAt: now });
+  }
+  return true;
 }
 
 export const claim = mutation({
@@ -20,20 +36,25 @@ export const claim = mutation({
     if (!args.owner || args.owner.length > 300) throw new Error("Invalid execution owner");
     const row = await ctx.db.query("executionAccounts").withIndex("by_env_and_account", q => q.eq("env", args.env).eq("account", args.account)).unique();
     const now = Date.now();
-    if (row?.draining || (row && row.owner !== args.owner &&
-        (row.leaseUntil > now || row.activeWrite || row.activeReads.length))) throw new Error("Account execution busy");
+    if (row?.draining) throw new Error("Account execution busy");
+    // A write remains fenced forever without proof. A lost GET settlement can be
+    // abandoned after expiry; a stale reader's settlement then fails its generation check.
+    const abandoned = !!row && !row.activeWrite && await abandonExpiredReads(ctx, row, now);
+    const activeReads = abandoned ? [] : row?.activeReads ?? [];
+    if (row && row.owner !== args.owner && (row.leaseUntil > now || row.activeWrite || activeReads.length))
+      throw new Error("Account execution busy");
     const generation = !row ? 1 : row.owner === args.owner && row.leaseUntil > now ? row.generation : row.generation + 1;
-    // Never transfer an in-flight operation, even after expiry. Lease expiry is not quiescence.
-    if (row && generation !== row.generation && (row.activeWrite || row.activeReads.length)) throw new Error("Account reconciliation required");
-    const data = { owner: args.owner, generation, leaseUntil: now + 60_000 };
+    // Lease expiry never proves a write did not send.
+    if (row && generation !== row.generation && (row.activeWrite || activeReads.length)) throw new Error("Account reconciliation required");
+    const data = { owner: args.owner, generation, leaseUntil: now + 60_000, activeReads };
     if (row) await ctx.db.patch("executionAccounts", row._id, data);
-    else await ctx.db.insert("executionAccounts", { env: args.env, account: args.account, ...data, draining: false, activeReads: [] });
+    else await ctx.db.insert("executionAccounts", { env: args.env, account: args.account, ...data, draining: false });
     return { generation };
   },
 });
 
 export const begin = mutation({
-  args: { ...owner, generation: v.number(), key: v.string(), kind: v.union(v.literal("read"), v.literal("write")), ticker: v.string(), quantity: v.number() },
+  args: { ...owner, generation: v.number(), key: v.string(), kind: v.union(v.literal("read"), v.literal("write")), ticker: v.string(), quantity: v.number(), entryLimit: v.number() },
   handler: async (ctx, args) => {
     authorize(args);
     const account = await ctx.db.query("executionAccounts").withIndex("by_env_and_account", q => q.eq("env", args.env).eq("account", args.account)).unique();
@@ -58,6 +79,11 @@ export const begin = mutation({
     if (existing && args.kind === "write" && existing.day !== day) throw new Error("Operation belongs to an earlier trading day");
     const entry = args.kind === "write" && args.quantity > 0 && args.ticker !== "VUAGl_EQ";
     if (entry) {
+      // Deliberately stricter than risk.ts until reconciled position generations can
+      // distinguish a top-up: every stock BUY consumes a slot. The app supplies its
+      // resolved risk limit, bounded by the reviewed four-entry maximum.
+      if (!Number.isSafeInteger(args.entryLimit) || args.entryLimit < 0 || args.entryLimit > 4)
+        throw new Error("Unsupported daily admission limit");
       let baseline = await ctx.db.query("executionDays").withIndex("by_env_and_account_and_day", q =>
         q.eq("env", args.env).eq("account", args.account).eq("day", day)).unique();
       if (!baseline) {
@@ -68,12 +94,13 @@ export const begin = mutation({
         if (trades.length === 201) throw new Error("Daily baseline incomplete");
         const today = trades.filter(t => researchDay(t.createdAt) === day);
         const baselineEntries = today.filter(t => t.side === "BUY" && t.ticker !== "VUAGl_EQ" && !t.dryRun && ["placed", "closed", "closed-estimated", "closed-unknown"].includes(t.status)).length;
-        const id = await ctx.db.insert("executionDays", { env: args.env, account: args.account, day, baselineEntries });
+        const id = await ctx.db.insert("executionDays", { env: args.env, account: args.account, day, baselineEntries, entryLimit: args.entryLimit });
         baseline = (await ctx.db.get("executionDays", id))!;
       }
+      if (baseline.entryLimit !== args.entryLimit) throw new Error("Daily admission policy changed; reconciliation required");
       const reservations = await ctx.db.query("executionEntries").withIndex("by_env_and_account_and_day_and_released", q =>
         q.eq("env", args.env).eq("account", args.account).eq("day", day).eq("released", false)).take(5);
-      if (baseline.baselineEntries + reservations.length >= 4) throw new Error("Daily entry cap reached");
+      if (baseline.baselineEntries + reservations.length >= baseline.entryLimit) throw new Error("Daily entry cap reached");
     }
     const data = { state: "sending", quantity: args.quantity, generation: args.generation,
       startedAt: now, attempt: (existing?.attempt ?? 0) + 1, retryableRejection: false };
@@ -134,9 +161,11 @@ export const drain = mutation({
   handler: async (ctx, args) => {
     authorize(args, false);
     const row = await ctx.db.query("executionAccounts").withIndex("by_env_and_account", q => q.eq("env", args.env).eq("account", args.account)).unique();
-    if (row) await ctx.db.patch("executionAccounts", row._id, { draining: args.draining });
+    const abandoned = !!row && await abandonExpiredReads(ctx, row, Date.now());
+    if (row) await ctx.db.patch("executionAccounts", row._id, { draining: args.draining,
+      ...(abandoned ? { activeReads: [], generation: row.generation + 1, owner: "", leaseUntil: 0 } : {}) });
     else await ctx.db.insert("executionAccounts", { env: args.env, account: args.account, owner: "", generation: 0, leaseUntil: 0, draining: args.draining, activeReads: [] });
-    return { quiescent: !row?.activeWrite && !row?.activeReads.length };
+    return { quiescent: !row?.activeWrite && (abandoned || !row?.activeReads.length) };
   },
 });
 

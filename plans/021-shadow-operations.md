@@ -173,7 +173,7 @@ positions or messages. A receipt from an actual unmentioned Slack message is sti
 before claiming delivery verification; absence of messages is not a successful test.
 
 After this slice, implement D's ownership, intent/reconciliation and daily reservations as a
-separate reviewed change. Lucien explicitly chose17Nov: unverifiable ownership blocks all
+separate reviewed change. Lucien explicitly chose on 17 Nov 2026: unverifiable ownership blocks all
 automatic orders, including SELLs; manual broker exits remain available. The admission
 foundation stays disabled until reconciliation, position generations and rollout proof
 complete D acceptance; its first slice stops after every order acknowledgement. Then implement the read-only afternoon

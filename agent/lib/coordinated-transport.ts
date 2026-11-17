@@ -1,7 +1,7 @@
 import { executionLease, executionScope } from "./execution-context.ts";
 import { parseQuantityPrecision } from "./execution.ts";
 import type { T212Env } from "./t212.ts";
-import { isDryRun } from "./state.ts";
+import { isDryRun, resolveLimits } from "./state.ts";
 import { executionSessionOpen } from "../../convex/executionCalendar.ts";
 import { researchDay, researchSession } from "../../convex/shadowCalendar.ts";
 
@@ -20,7 +20,7 @@ export async function coordinatedBrokerRequest<T>(args: { env: T212Env; method: 
   scope.signal?.throwIfAborted();
   const lease = await executionLease(scope);
   const { operationId, leaseUntil } = await scope.store.begin({ ...lease, key: `${lease.owner}/${scope.callId}/${args.method}/${args.path}/${ticker}`,
-    kind: read ? "read" : "write", ticker, quantity });
+    kind: read ? "read" : "write", ticker, quantity, entryLimit: resolveLimits().maxNewPositionsPerDay });
   const settle = (outcome: Parameters<typeof scope.store.settle>[0]["outcome"], extras = {}) =>
     scope.store.settle({ ...lease, operationId, outcome, ...extras });
   // Readmission can complete after a local pause. Recheck immediately before fetch;

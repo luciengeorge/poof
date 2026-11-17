@@ -58,13 +58,23 @@ one account/environment fence at the Trading 212 physical request boundary, pers
 POST (including 429 or an unreadable body). Only a definitive validation rejection permits
 one smaller precision retry. `DRY_RUN` also blocks direct physical writes in this mode.
 Concurrent snapshot GETs are allowed for one owner; writes require no active reads or write.
-Expired leases and process restarts never clear active I/O. Immediately before fetch,
+Expired leases and process restarts never clear write I/O. A GET with lost settlement
+can expire with its lease because it has no order side effect: mark it read-abandoned,
+bump ownership generation and reject any late result or settlement. Drain can perform
+the same read recovery, while any active write remains fenced. Immediately before fetch,
 recheck expiry, cancellation and market hours after any admission delay; proven non-sends
 release their reservation. Drain blocks new admission and
 only reports quiescence after settled requests; it cannot stop legacy workers.
 
-The atomic ET-day reservation includes serving-mode stock entries before the new mode's
-first reservation. Unknown/pending/filled acknowledgements all retain both account fence
+The atomic ET-day reservation includes serving-mode stock BUYs before the new mode's
+first reservation. This first disabled slice deliberately counts **all stock BUYs, including
+top-ups**, which is stricter than risk.ts's new-position count. It is not a completed
+implementation of that risk rule. Admission uses the application's resolved
+`maxNewPositionsPerDay` from `TRADING_MAX_NEW_POSITIONS_PER_DAY` (default four), accepts
+only integer limits zero through four, and freezes the limit with the first reservation.
+A larger limit or a different limit mid-day fails closed with an explicit configuration
+error. Reconciliation must supply confirmed holdings/generations before a later reviewed
+slice can exempt top-ups and claim parity with the new-position risk rule. Unknown/pending/filled acknowledgements all retain both account fence
 and reservation. Even a complete FILLED response is not returned into legacy bookkeeping:
 it proves neither flat position quantity nor reconciled P&L. The first slice intentionally
 has **no automatic fence-clear/reconciliation API**. Manual broker exits remain available.

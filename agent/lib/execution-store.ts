@@ -3,7 +3,7 @@ export interface ExecutionIdentity { env: Env; account: string; owner: string }
 export interface ExecutionLease extends ExecutionIdentity { generation: number }
 export interface ExecutionStore {
   claim(identity: ExecutionIdentity): Promise<{ generation: number }>;
-  begin(args: ExecutionLease & { key: string; kind: "read" | "write"; ticker: string; quantity: number }): Promise<{ operationId: string; leaseUntil: number }>;
+  begin(args: ExecutionLease & { key: string; kind: "read" | "write"; ticker: string; quantity: number; entryLimit: number }): Promise<{ operationId: string; leaseUntil: number }>;
   settle(args: ExecutionLease & { operationId: string; outcome: "read-completed" | "read-failed" | "not-sent" | "filled" | "rejected" | "pending" | "unknown";
     brokerOrderId?: number; retryableRejection?: boolean }): Promise<unknown>;
   release(identity: ExecutionIdentity): Promise<boolean>;

@@ -7,6 +7,8 @@ import { anyApi } from "convex/server";
 import { createExecutionStore } from "./execution-store.ts";
 import { runExecutionScope, withExecutionContext } from "./execution-context.ts";
 import { T212Client, T212Error } from "./t212.ts";
+import { Memory } from "./memory.ts";
+import ownerHook from "../hooks/execution-owner.ts";
 
 registerHooks({ resolve(specifier, context, next) {
   if (specifier.startsWith(".") && context.parentURL?.includes("/convex/")) {
@@ -25,7 +27,8 @@ const identity = { ...accountIdentity, owner: "session/turn" };
 
 function setup(t: TestContext) {
   for (const [key, value] of Object.entries({ APP_SHARED_SECRET: identity.token,
-    EXECUTION_COORDINATION_ENABLED: "true", EXECUTION_ACCOUNT_ID: identity.account, DRY_RUN: "false" })) {
+    EXECUTION_COORDINATION_ENABLED: "true", EXECUTION_ACCOUNT_ID: identity.account, DRY_RUN: "false",
+    TRADING_MAX_NEW_POSITIONS_PER_DAY: "4" })) {
     const old = process.env[key];
     t.after(() => { if (old === undefined) delete process.env[key]; else process.env[key] = old; });
     process.env[key] = value;
@@ -43,13 +46,13 @@ function setup(t: TestContext) {
       identity: { ...identity, owner }, callId, store,
     }, fn) };
 }
-const read = { key: "read", kind: "read" as const, ticker: "", quantity: 0 };
-const write = { key: "write", kind: "write" as const, ticker: "AAPL_US_EQ", quantity: 1 };
+const read = { key: "read", kind: "read" as const, ticker: "", quantity: 0, entryLimit: 4 };
+const write = { key: "write", kind: "write" as const, ticker: "AAPL_US_EQ", quantity: 1, entryLimit: 4 };
 const body = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
 const order = { id: 123, ticker: write.ticker, quantity: 1, filledQuantity: 1, side: "BUY", status: "FILLED" };
 function client(fetchImpl: typeof fetch) { return new T212Client({ apiKey: "fake", apiSecret: "fake", env: "demo", fetchImpl }); }
 
-test("account claim authenticates, isolates environments and never transfers active I/O after expiry", async t => {
+test("account claim authenticates, isolates environments and abandons expired GETs without accepting their late results", async t => {
   const { db, setTime } = setup(t);
   await assert.rejects(db.mutation(api.claim, { ...identity, token: "wrong" }), /Unauthenticated/);
   await assert.rejects(db.mutation(api.claim, { ...identity, account: "other" }), /unavailable/);
@@ -58,11 +61,9 @@ test("account claim authenticates, isolates environments and never transfers act
   await db.mutation(api.claim, { ...identity, env: "live", owner: "other" });
   const active = await db.mutation(api.begin, { ...lease, ...read });
   setTime(Date.now() + 60_001);
-  await assert.rejects(db.mutation(api.claim, { ...identity, owner: "other" }), /busy/);
-  await assert.rejects(db.mutation(api.claim, identity), /reconciliation/);
-  await db.mutation(api.settle, { ...lease, operationId: active.operationId, outcome: "read-completed" });
   const next = { ...identity, owner: "other", ...await db.mutation(api.claim, { ...identity, owner: "other" }) };
   assert.ok(next.generation > lease.generation);
+  assert.equal((await db.run(ctx => ctx.db.get(active.operationId)))!.state, "read-abandoned");
   await assert.rejects(db.mutation(api.begin, { ...lease, ...write }), /Stale/);
   await assert.rejects(db.mutation(api.settle, { ...lease, operationId: active.operationId, outcome: "read-completed" }), /Stale/);
 });
@@ -81,6 +82,57 @@ test("parallel same-owner reads block writes; drain permits settlement but block
   // Drain preparation and status work before the new mode is enabled; they do not fence legacy workers.
   process.env.EXECUTION_COORDINATION_ENABLED = "false";
   assert.equal((await db.query(api.status, accountIdentity)).draining, true);
+  await assert.rejects(db.mutation(api.claim, identity), /unavailable/);
+});
+
+test("a GET that completes after expiry cannot return its stale result or clear the next owner's write", async t => {
+  const { run, store, db, setTime } = setup(t);
+  let started!: () => void, finish!: (response: Response) => void;
+  const startedPromise = new Promise<void>(resolve => { started = resolve; });
+  const responsePromise = new Promise<Response>(resolve => { finish = resolve; });
+  const broker = client(async () => { started(); return responsePromise; });
+  const oldRead = run(() => broker.getPendingOrders());
+  const rejected = assert.rejects(oldRead, /Stale/);
+  await startedPromise;
+  setTime(Date.now() + 60_001);
+  const nextIdentity = { ...identity, owner: "next/turn" };
+  const lease = { ...nextIdentity, ...await store.claim(nextIdentity) };
+  const nextWrite = await store.begin({ ...lease, ...write });
+  finish(body([]));
+  await rejected;
+  const status = await db.query(api.status, accountIdentity);
+  assert.equal(status.activeReads, 0);
+  assert.equal(status.unresolvedWrite, true);
+  assert.equal((await db.run(ctx => ctx.db.query("executionOperations").take(3))).find(op => op._id === nextWrite.operationId)!.state, "sending");
+});
+
+test("drain can recover a lost GET settlement after expiry while rejecting any late completion", async t => {
+  const { db, setTime } = setup(t);
+  const lease = { ...identity, ...await db.mutation(api.claim, identity) };
+  const active = await db.mutation(api.begin, { ...lease, ...read });
+  await db.mutation(api.drain, { ...accountIdentity, draining: true });
+  setTime(Date.now() + 60_001);
+  assert.deepEqual(await db.mutation(api.drain, { ...accountIdentity, draining: true }), { quiescent: true });
+  await assert.rejects(db.mutation(api.settle, { ...lease, operationId: active.operationId, outcome: "read-completed" }), /Stale/);
+  await assert.rejects(db.mutation(api.claim, identity), /busy/);
+});
+
+test("account identity whitespace is normalized consistently for tool admission, backend auth and owner release", async t => {
+  const { store, db } = setup(t);
+  process.env.EXECUTION_ACCOUNT_ID = "  test-account\n";
+  for (const [key, value] of Object.entries({ CONVEX_URL: "https://test.convex.cloud", CONVEX_APP_SECRET: identity.token, TRADING212_ENV: "demo" })) {
+    const old = process.env[key];
+    t.after(() => { if (old === undefined) delete process.env[key]; else process.env[key] = old; });
+    process.env[key] = value;
+  }
+  t.mock.method(Memory.prototype, "executionStore", () => store);
+  const broker = client(async () => body([]));
+  await withExecutionContext({ session: { id: "session", turn: { id: "turn" } }, callId: "normalized" }, () => broker.getPendingOrders());
+  const release = ownerHook.events!["turn.settled"]!;
+  await release({ data: { turnId: "turn" } } as Parameters<typeof release>[0],
+    { session: { id: "session" } } as Parameters<typeof release>[1]);
+  assert.equal((await db.query(api.status, accountIdentity)).leaseUntil, 0);
+  process.env.EXECUTION_ACCOUNT_ID = " \n";
   await assert.rejects(db.mutation(api.claim, identity), /unavailable/);
 });
 
@@ -146,6 +198,29 @@ test("an incomplete daily baseline cannot authorize a send", async t => {
   const lease = { ...identity, ...await db.mutation(api.claim, identity) };
   await assert.rejects(db.mutation(api.begin, { ...lease, ...write }), /baseline incomplete/);
   assert.equal((await db.query(api.status, accountIdentity)).unresolvedWrite, false);
+});
+
+test("the temporary all-BUY admission limit honors lower risk limits, freezes its basis and rejects unsupported increases", async t => {
+  const { db } = setup(t);
+  const lease = { ...identity, ...await db.mutation(api.claim, identity) };
+  const admitted = await db.mutation(api.begin, { ...lease, ...write, entryLimit: 2 });
+  await db.mutation(api.settle, { ...lease, operationId: admitted.operationId, outcome: "rejected" });
+  await assert.rejects(db.mutation(api.begin, { ...lease, ...write, key: "changed", entryLimit: 4 }), /policy changed/);
+  await assert.rejects(db.mutation(api.begin, { ...lease, ...write, key: "raised", entryLimit: 6 }), /Unsupported/);
+  const day = await db.run(ctx => ctx.db.query("executionDays").take(1));
+  assert.equal(day[0].entryLimit, 2);
+  // Fixture a fully used two-slot baseline: the durable comparison must honor two,
+  // not silently retain the old hard-coded four.
+  await db.run(ctx => ctx.db.patch(day[0]._id, { baselineEntries: 2 }));
+  await assert.rejects(db.mutation(api.begin, { ...lease, ...write, key: "exhausted", entryLimit: 2 }), /cap/);
+});
+
+test("the transport carries the application's resolved entry limit into the durable reservation", async t => {
+  const { db, run } = setup(t);
+  process.env.TRADING_MAX_NEW_POSITIONS_PER_DAY = "2";
+  const broker = client(async () => body(order));
+  await assert.rejects(run(() => broker.placeMarketOrder({ ticker: write.ticker, quantity: 1 })), /reconciliation/);
+  assert.equal((await db.run(ctx => ctx.db.query("executionDays").take(1)))[0].entryLimit, 2);
 });
 
 test("stock and core dispatch respect distinct sessions, holidays, early closes and DST mismatch", () => {
