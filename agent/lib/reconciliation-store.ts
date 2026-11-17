@@ -9,7 +9,7 @@ export interface OrderEvidence {
 }
 export type ReconciliationLease = ExecutionLease & { operationId: string };
 export interface ReconciliationStore {
-  claim(identity: ExecutionIdentity): Promise<FencedOrder & { generation: number }>;
+  claim(identity: ExecutionIdentity & { handoff?: { owner: string; generation: number } }): Promise<FencedOrder & { generation: number }>;
   begin(args: ReconciliationLease & { kind: "pending" | "history" | "portfolio"; cursor?: number }): Promise<{ readId: string; path: string; leaseUntil: number }>;
   settle: ExecutionStore["settle"];
   finish(args: ReconciliationLease & { observedAt: number; evidence: OrderEvidence; fills?: BrokerFill[] }): Promise<{ receiptId: string; canClearFence: false }>;

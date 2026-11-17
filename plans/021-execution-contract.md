@@ -159,3 +159,26 @@ reviewed fence clear/manual recovery, and activation/drain/account verification 
 be integrated and tested. No current daily behavior changes. Neither a baseline nor a
 bookkeeping receipt grants dispatch or releases an account fence/daily reservation; APIs
 continue to report canDispatch/canClearFence=false. Do not enable the incomplete mode.
+
+
+## D in-cycle order resolution (17 Nov 2026)
+
+With the mode enabled, an order now completes end to end inside the cycle that sent it.
+Before the first order of a tool call the transport verifies that the API key belongs to
+`EXECUTION_ACCOUNT_ID` (`/equity/account/info`, GBP) and that the isolated ledger adopts, or
+exactly confirms, the broker holdings with zero pending orders. Any failure blocks every
+automatic order in that call, SELLs included; manual broker exits remain available.
+
+After an acknowledged POST the sending owner hands its live lease to a fresh `reconcile/…`
+owner (no expiry wait), the bounded GET plan seals evidence, the ledger books the sealed
+fills, and `resolve` releases the fence. `resolve` requires a complete matched history, the
+current generation, an unchanged fence and a booked receipt for that exact evidence. Only a
+full fill or a zero-fill end is terminal: a full fill keeps its daily slot, a zero-fill end
+releases it and surfaces to legacy code as a broker rejection (a skip). Pending, not yet
+listed, or incomplete history is retried a few times six seconds apart; a partial fill,
+mismatch or invalid response stays fenced for manual audit. A filled order returns to the
+existing order bookkeeping unchanged.
+
+A fence left by an earlier run is resolved before the next tool call touches the broker. If
+it cannot be, that call fails: no reads, no orders. An unacknowledged send (no broker ID)
+still requires manual audit and is never resent.

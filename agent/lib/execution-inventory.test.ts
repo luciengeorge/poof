@@ -60,8 +60,8 @@ function setup(t: TestContext) {
     }, ...(complete ? { fills } : {}) });
     return receipt.receiptId;
   }
-  // Fixture the later reviewed fence-clear protocol, which this slice DOES NOT implement.
-  // This lets the generation tests model another order without inventing a public bypass.
+  // Stands in for the fence-release protocol (covered in order-resolution.test.ts) so the
+  // generation tests can model another order without inventing a public bypass.
   async function nextOrderFixture() {
     await db.run(async ctx => { const a = (await ctx.db.query("executionAccounts").take(1))[0];
       await ctx.db.patch(a._id, { activeWrite: undefined, owner: "", leaseUntil: 0 }); });

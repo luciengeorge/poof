@@ -3,7 +3,7 @@ import { isDryRun } from "./state.ts";
 import { tradingEnv } from "./risk-runtime.ts";
 import { fakeT212Fetch } from "./t212-fake.ts";
 import { ACCOUNT_SNAPSHOT_READ_SKEW_TOLERANCE_MS } from "./execution.ts";
-import { coordinationEnabled } from "./execution-context.ts";
+import { coordinationEnabled, executionLease, executionScope } from "./execution-context.ts";
 import { coordinatedBrokerRequest } from "./coordinated-transport.ts";
 
 export type T212Env = "demo" | "live";
@@ -112,6 +112,8 @@ export class T212Client {
   private cashCache: CacheEntry<CashBalance> | null = null;
   private portfolioCache: CacheEntry<T212Position[]> | null = null;
   private snapshotCache: CacheEntry<BrokerAccountSnapshot> | null = null;
+  /** The key's account cannot change within a process; the info endpoint is heavily rate limited. */
+  private verifiedAccount: string | null = null;
 
   constructor(cfg: T212Config) {
     this.env = cfg.env;
@@ -147,6 +149,7 @@ export class T212Client {
     body?: unknown,
   ): Promise<T> {
     if (coordinationEnabled()) {
+      if (method !== "GET") await this.preflight();
       for (let attempt = 0; ; attempt++) {
         let responseHeaders: Headers | undefined;
         try {
@@ -160,7 +163,8 @@ export class T212Client {
               responseHeaders = response.headers;
               this.captureRateLimit(response.headers);
               return response;
-            }, error: (status, text) => new T212Error(status, text) });
+            }, error: (status, text) => new T212Error(status, text),
+            get: (readPath, signal) => this.fetchImpl(`${this.base}${readPath}`, { method: "GET", signal, headers: { Authorization: this.auth } }) });
         } catch (error) {
           // GETs can retry safely, but each physical attempt renews ownership and
           // obtains a new durable admission. No POST, including a 429, retries here.
@@ -191,6 +195,30 @@ export class T212Client {
       }
       throw new T212Error(res.status, text);
     }
+  }
+
+  /** Before the first order of a scope: the key must belong to the configured GBP account, and the
+   * isolated ledger must adopt (or exactly confirm) the broker's holdings with nothing pending.
+   * Any failure blocks every automatic order, SELLs included, for the rest of the scope. */
+  private preflight(): Promise<void> {
+    const scope = executionScope();
+    if (!scope.inventory) return Promise.resolve();
+    const inventory = scope.inventory;
+    return scope.preflight ??= (async () => {
+      if (this.verifiedAccount !== scope.identity.account) {
+        const info = await this.request<{ id?: unknown; currencyCode?: unknown } | null>("GET", "/equity/account/info");
+        if (typeof info?.id !== "number" || String(info.id) !== scope.identity.account || info.currencyCode !== "GBP")
+          throw new Error("Broker account identity unverified; automatic orders are blocked");
+        this.verifiedAccount = scope.identity.account;
+      }
+      const pending = await this.getPendingOrders();
+      const pendingReadAt = Date.now();
+      const positions = await this.getPortfolio({ fresh: true });
+      const positionsReadAt = Date.now();
+      await inventory.baseline({ ...await executionLease(scope), pendingReadAt, positionsReadAt,
+        pendingCount: Array.isArray(pending) ? pending.length : -1,
+        positions: positions.map(p => ({ ticker: p.ticker, quantity: p.quantity, averagePrice: p.averagePrice })) });
+    })();
   }
 
   async getCash(opts?: { fresh?: boolean }): Promise<CashBalance> {

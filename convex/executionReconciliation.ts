@@ -11,7 +11,7 @@ const lease = { ...identity, generation: v.number(), operationId: v.id("executio
 
 /** A separate read-only owner; never transfers or clears the original write intent. */
 export const claim = mutation({
-  args: identity,
+  args: { ...identity, handoff: v.optional(v.object({ owner: v.string(), generation: v.number() })) },
   handler: async (ctx, args) => {
     authorizeExecution(args);
     if (!args.owner.startsWith("reconcile/") || args.owner.length > 300) throw new Error("Invalid reconciliation owner");
@@ -25,7 +25,11 @@ export const claim = mutation({
         !["pending", "unknown", "filled"].includes(op.state) || !Number.isSafeInteger(op.brokerOrderId) || op.brokerOrderId! <= 0)
       throw new ConvexError({ code: "MANUAL_AUDIT_REQUIRED", message: "Unacknowledged order requires manual audit; no automatic resend" });
     const now = Date.now();
-    if (row.leaseUntil > now) throw new Error("Account execution busy");
+    // The live owner that sent the order may hand it straight to a reconciler; anyone else waits for expiry.
+    const handoff = args.handoff !== undefined;
+    if (handoff && (row.owner !== args.handoff!.owner || row.generation !== args.handoff!.generation || op.owner !== args.handoff!.owner ||
+        row.leaseUntil <= now || row.activeReads.length)) throw new Error("Stale reconciliation handoff");
+    if (!handoff && row.leaseUntil > now) throw new Error("Account execution busy");
     // Expired reconciliation GETs are safe to abandon. Keep the original write unchanged.
     for (const id of row.activeReads) {
       const read = await ctx.db.get("executionOperations", id);
