@@ -1,21 +1,12 @@
 import { mutation, query, type MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
 import type { Doc } from "./_generated/dataModel";
-import { assertSecret } from "./auth";
 import { shadowEnv } from "./shadowTypes";
 import { researchDay, researchSession } from "./shadowCalendar";
 import { executionSessionOpen } from "./executionCalendar";
-import { normalizeExecutionAccount } from "./executionConfig";
-declare const process: { env: Record<string, string | undefined> };
+import { authorizeExecution as authorize } from "./executionAuth";
 const identity = { token: v.string(), env: shadowEnv, account: v.string() };
 const owner = { ...identity, owner: v.string() };
-function authorize(args: { token: string; account: string }, requireEnabled = true) {
-  assertSecret(args.token);
-  const account = normalizeExecutionAccount(process.env.EXECUTION_ACCOUNT_ID);
-  if ((requireEnabled && process.env.EXECUTION_COORDINATION_ENABLED !== "true") || !account ||
-      args.account !== account) throw new Error("Execution coordination unavailable");
-}
-
 /** GETs have no order side effect. Bump the account generation when clearing them so
  * their eventual results cannot settle into, or be returned from, the new ownership. */
 async function abandonExpiredReads(ctx: MutationCtx, account: Doc<"executionAccounts">, now: number): Promise<boolean> {

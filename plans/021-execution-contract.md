@@ -86,3 +86,41 @@ without ticker/day-only exit keys; verify stable broker account identity; prove 
 workers are drained across deploys, exercise recovery and rollback, then review/activate
 separately. Never infer non-placement from an empty portfolio/history page or elapsed time.
 No additional live cadence or scheduled review is introduced by this first slice.
+
+
+## D read-only reconciliation stage
+
+The next disabled stage grants a separate `reconcile/…` owner GET access while retaining
+exactly the original unresolved write and daily reservation. It requires a known broker
+order ID in pending/filled/unknown state; a sending POST or an unknown result without an
+ID requires manual audit and never becomes retryable on elapsed time. The prior lease
+must expire before the read owner can claim. Reconciliation is allowed while writes are
+drained, but only pending orders, ticker-filtered history and portfolio GETs are admitted.
+Every physical GET/retry consumes one of eight durable read admissions; one read at a time,
+15-second timeout, at most three history pages of 50 items. Provider URLs are never followed;
+only a validated numeric cursor is used to construct a backend-approved path. Expired
+reconciliation GETs can be abandoned with generation fencing; late results cannot settle.
+
+Normalized receipts record order classification, observed residual quantity, coverage and
+counts only. Match the acknowledged ID, ticker, side, requested/filled quantity and creation
+time (at most ten seconds before local sending time to tolerate bounded clock skew). A
+filled SELL is still distinct from a flat, closed position generation. Empty history,
+missing pagination metadata or an absent portfolio ticker cannot prove non-placement.
+Do not derive P&L from these receipts or release any fence from them: `canClearFence=false`
+always, including after FILLED, zero-fill rejection and a flat portfolio. No raw broker
+payload, credential, chat or trading-memory row is stored by this stage.
+
+`scripts/reconcile-execution.ts` is an explicit operator entry point, not an agent tool or
+schedule. It refuses to run without the enabled execution mode and explicit verified account
+configuration. **Do not turn the mode on just to run it.** This implementation is tested with
+injected transports and convex-test only; no actual broker calls or production reconciliation
+runs are part of validation. Generation-aware holdings and idempotent fill/P&L bookkeeping,
+then a reviewed fence-clear/recovery protocol and activation/rollback proof remain pending.
+
+
+Operator command outcomes: `not-needed` exits0 when the authenticated backend reports no
+fenced order; `manual-audit-required` exits2; `broker-read-failed` and unexpected failures
+exit1; disabled/incomplete configuration exits2. Expected backend outcomes use structured
+codes, and CLI text is fixed rather than copied from exception payloads. Unknown errors
+remain generic; no stack, provider body, credential, account or broker payload is printed.
+These diagnostics never change fence state or authorize retries.
