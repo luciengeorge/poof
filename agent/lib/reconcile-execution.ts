@@ -2,6 +2,7 @@ import { classifyOrderEvidence, nextHistoryCursor } from "./order-evidence.ts";
 import { retryDelayMs, sleep } from "./http-backoff.ts";
 import type { ExecutionIdentity } from "./execution-store.ts";
 import type { OrderEvidence, ReconciliationLease, ReconciliationStore } from "./reconciliation-store.ts";
+import { brokerFillProofs } from "./broker-fill-proofs.ts";
 
 const hosts = { demo: "https://demo.trading212.com/api/v0", live: "https://live.trading212.com/api/v0" };
 export interface ReconciliationConfig {
@@ -74,6 +75,8 @@ export async function reconcileExecution(cfg: ReconciliationConfig): Promise<Ord
   }
   const portfolio = await read("portfolio");
   const evidence = classifyOrderEvidence(order, pending, rows, historyComplete, portfolio);
-  await cfg.store.finish({ ...lease, observedAt: Date.now(), evidence });
+  const observedAt = Date.now();
+  const fills = brokerFillProofs(order, rows, evidence, observedAt);
+  await cfg.store.finish({ ...lease, observedAt, evidence, ...(fills === undefined ? {} : { fills }) });
   return { ...evidence, canClearFence: false };
 }

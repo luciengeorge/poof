@@ -1,4 +1,5 @@
 import type { ExecutionIdentity, ExecutionLease, ExecutionStore } from "./execution-store.ts";
+import type { BrokerFill } from "./inventory-store.ts";
 
 export interface FencedOrder { operationId: string; brokerOrderId: number; ticker: string; quantity: number; startedAt: number }
 export interface OrderEvidence {
@@ -11,7 +12,7 @@ export interface ReconciliationStore {
   claim(identity: ExecutionIdentity): Promise<FencedOrder & { generation: number }>;
   begin(args: ReconciliationLease & { kind: "pending" | "history" | "portfolio"; cursor?: number }): Promise<{ readId: string; path: string; leaseUntil: number }>;
   settle: ExecutionStore["settle"];
-  finish(args: ReconciliationLease & { observedAt: number; evidence: OrderEvidence }): Promise<{ receiptId: string; canClearFence: false }>;
+  finish(args: ReconciliationLease & { observedAt: number; evidence: OrderEvidence; fills?: BrokerFill[] }): Promise<{ receiptId: string; canClearFence: false }>;
 }
 export function createReconciliationStore(mutate: (namespace: string, name: string, args: Record<string, unknown>) => Promise<unknown>): ReconciliationStore {
   return {

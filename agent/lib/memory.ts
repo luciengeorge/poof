@@ -1,6 +1,7 @@
 import { createShadowStore, type ShadowStore } from "./shadow/store.ts";
 import { createExecutionStore, type ExecutionStore } from "./execution-store.ts";
 import { createReconciliationStore, type ReconciliationStore } from "./reconciliation-store.ts";
+import { createInventoryStore, type InventoryStore } from "./inventory-store.ts";
 import { ConvexHttpClient } from "convex/browser";
 import type { Edit, MemoryRow } from "../../convex/memoryPolicy.ts";
 import { anyApi, type FunctionReference } from "convex/server";
@@ -349,6 +350,10 @@ export class Memory {
   }
   reconciliationStore(): ReconciliationStore {
     return createReconciliationStore((namespace, name, args) => this.mutation(name, args, namespace));
+  }
+  inventoryStore(): InventoryStore {
+    return createInventoryStore((name, args) => this.query(name, args, "executionInventory"),
+      (name, args) => this.mutation(name, args, "executionInventory"));
   }
 
   recordConfirmedSnapshot(args: { env: Env; observedAt: number;

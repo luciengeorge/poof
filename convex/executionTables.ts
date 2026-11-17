@@ -2,6 +2,7 @@ import { defineTable } from "convex/server";
 import { v } from "convex/values";
 import { shadowEnv } from "./shadowTypes";
 import { orderEvidence } from "./reconciliationTypes";
+import { reconciledFill } from "./inventoryTypes";
 
 export const executionTables = {
   executionAccounts: defineTable({ env: shadowEnv, account: v.string(), owner: v.string(), generation: v.number(),
@@ -9,6 +10,7 @@ export const executionTables = {
     activeWrite: v.optional(v.id("executionOperations")),
     reconciliationFor: v.optional(v.id("executionOperations")),
     reconciliationReads: v.optional(v.number()),
+    inventoryInitialized: v.optional(v.boolean()),
   }).index("by_env_and_account", ["env", "account"]),
   executionOperations: defineTable({ env: shadowEnv, account: v.string(), key: v.string(), owner: v.string(), generation: v.number(),
     kind: v.union(v.literal("read"), v.literal("write")), ticker: v.string(), quantity: v.number(),
@@ -22,6 +24,22 @@ export const executionTables = {
     .index("by_operationId", ["operationId"]),
   executionEvidence: defineTable({ env: shadowEnv, account: v.string(), owner: v.string(), generation: v.number(),
     operationId: v.id("executionOperations"), brokerOrderId: v.number(), observedAt: v.number(), recordedAt: v.number(),
-    readRequests: v.number(), evidence: orderEvidence,
+    readRequests: v.number(), evidence: orderEvidence, fills: v.optional(v.array(reconciledFill)),
   }).index("by_env_and_account_and_owner", ["env", "account", "owner"]),
+  positionGenerations: defineTable({ env: shadowEnv, account: v.string(), ticker: v.string(), generation: v.number(),
+    status: v.union(v.literal("open"), v.literal("closed")), quantity: v.number(), averagePrice: v.number(),
+    brokerAveragePrice: v.optional(v.number()),
+    instrumentCurrency: v.union(v.literal("USD"), v.literal("GBP")), realizedPnlGbp: v.number(),
+    origin: v.union(v.literal("broker-baseline"), v.literal("reconciled-buy")),
+    openedAt: v.optional(v.number()), closedAt: v.optional(v.number()), observedAt: v.number(),
+  }).index("by_env_and_account_and_ticker_and_generation", ["env", "account", "ticker", "generation"])
+    .index("by_env_and_account_and_status", ["env", "account", "status"]),
+  reconciledFills: defineTable({ env: shadowEnv, account: v.string(), operationId: v.id("executionOperations"),
+    positionGenerationId: v.id("positionGenerations"), fill: reconciledFill, fingerprint: v.string(),
+  }).index("by_env_and_account_and_fillId", ["env", "account", "fill.id"])
+    .index("by_operationId", ["operationId"]),
+  inventoryReceipts: defineTable({ env: shadowEnv, account: v.string(), evidenceId: v.id("executionEvidence"),
+    operationId: v.id("executionOperations"), positionGenerationId: v.optional(v.id("positionGenerations")),
+    fingerprint: v.string(), observedQuantity: v.number(), appliedFills: v.number(), recordedAt: v.number(),
+  }).index("by_evidenceId", ["evidenceId"]),
 };

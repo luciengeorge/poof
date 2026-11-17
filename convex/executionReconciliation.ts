@@ -4,6 +4,7 @@ import { shadowEnv } from "./shadowTypes";
 import { authorizeExecution } from "./executionAuth";
 import { orderEvidence } from "./reconciliationTypes";
 import { researchDay } from "./shadowCalendar";
+import { reconciledFill, validateFillProofs } from "./inventoryTypes";
 
 const identity = { token: v.string(), env: shadowEnv, account: v.string(), owner: v.string() };
 const lease = { ...identity, generation: v.number(), operationId: v.id("executionOperations") };
@@ -71,7 +72,7 @@ export const begin = mutation({
 
 /** Observation receipt only. It cannot release the write fence, reservation or position. */
 export const finish = mutation({
-  args: { ...lease, observedAt: v.number(), evidence: orderEvidence },
+  args: { ...lease, observedAt: v.number(), evidence: orderEvidence, fills: v.optional(v.array(reconciledFill)) },
   handler: async (ctx, args) => {
     authorizeExecution(args);
     const prior = await ctx.db.query("executionEvidence").withIndex("by_env_and_account_and_owner", q =>
@@ -92,9 +93,11 @@ export const finish = mutation({
         (e.positionQuantity !== undefined && (!Number.isFinite(e.positionQuantity) || e.positionQuantity < 0))) throw new Error("Invalid reconciliation evidence");
     if ((e.classification === "filled" && (e.filledQuantity === undefined || Math.abs(e.filledQuantity - Math.abs(op.quantity)) > 1e-9)) ||
         (e.classification === "rejected" && e.filledQuantity !== 0)) throw new Error("Inconsistent order evidence");
+    if (args.fills !== undefined) validateFillProofs(args.fills, op.quantity, op.startedAt, args.observedAt, e);
     const receiptId = await ctx.db.insert("executionEvidence", { env: args.env, account: args.account, owner: args.owner,
       generation: args.generation, operationId: op._id, brokerOrderId: op.brokerOrderId!, observedAt: args.observedAt,
-      recordedAt: now, readRequests: row.reconciliationReads ?? 0, evidence: e });
+      recordedAt: now, readRequests: row.reconciliationReads ?? 0, evidence: e,
+      ...(args.fills === undefined ? {} : { fills: args.fills }) });
     await ctx.db.patch("executionAccounts", row._id, { owner: "", leaseUntil: 0, reconciliationFor: undefined });
     return { receiptId, canClearFence: false };
   },
