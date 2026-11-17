@@ -36,7 +36,7 @@ export const recordAmbient = mutation({
       q.eq("env", args.env).eq("sessionId", args.sessionId).eq("turnId", args.turnId)).unique();
     const patch = args.phase === "received" ? { receivedAt: row?.receivedAt ?? Date.now() } :
       { settledAt: row?.settledAt ?? Date.now(), outcome: row?.outcome ?? args.outcome };
-    if (row) await ctx.db.patch(row._id, patch);
+    if (row) await ctx.db.patch("ambientReceipts", row._id, patch);
     else await ctx.db.insert("ambientReceipts", { env: args.env, sessionId: args.sessionId, turnId: args.turnId, ...patch });
     return null;
   },
