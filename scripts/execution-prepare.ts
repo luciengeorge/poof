@@ -26,6 +26,7 @@ async function main() {
   const memory = memoryFromEnv(undefined, { timeoutMs: 4_000 });
   const store = memory.executionStore(), inventory = memory.inventoryStore();
   const identity = { env, account, owner: `prepare/${randomUUID()}` };
+  const { inventoryInitialized } = await store.status({ env, account });
   try {
     await runExecutionScope({ identity, callId: "prepare", store, reconciliation: memory.reconciliationStore(), inventory },
       () => new T212Client({ env, apiKey, apiSecret }).prepareExecution());
@@ -33,7 +34,7 @@ async function main() {
     await store.release(identity).catch(() => {});
   }
   const { positions } = await inventory.positions({ env, account }) as { positions: { ticker: string; quantity: number }[] };
-  console.log(JSON.stringify({ verifiedAccount: true, openPositions: positions.length,
+  console.log(JSON.stringify({ verifiedAccount: true, baseline: inventoryInitialized ? "confirmed" : "adopted", openPositions: positions.length,
     tickers: positions.map(p => `${p.ticker}:${p.quantity}`) }));
 }
 main().catch(error => {

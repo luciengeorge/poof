@@ -190,8 +190,10 @@ still requires manual audit and is never resent.
 
 ## Activation and rollback runbook
 
-Operator steps, all outside the 14:30–16:30 UTC weekday cycle window and any protected
-deploy window. Broker access in steps 1 and 4 is read-only.
+Operator steps, all outside the 14:30–16:30 UTC weekday cycle window, the 18:00 UTC weekday
+catch-up cycle and any protected deploy window. Steps 4 and 5 must fall in the same quiet window:
+any serving-path order between them is missing from the baseline and fails the first live check.
+Broker access in steps 1 and 4 is read-only.
 
 1. `TRADING212_ENV=live … node scripts/execution-prepare.ts --account-id` prints the key's
    broker account ID and currency. It must be GBP.
@@ -206,4 +208,4 @@ deploy window. Broker access in steps 1 and 4 is read-only.
 Rollback: Vercel `EXECUTION_COORDINATION_ENABLED=false` and redeploy; the serving path resumes.
 Orders placed while rolled back are invisible to the ledger, so re-enabling after any trade
 fails the baseline confirmation (manual audit) by design. Drill before the first live cycle:
-off → redeploy → on → redeploy, then re-run step 4, which must confirm the unchanged baseline.
+off → redeploy → on → redeploy, then re-run step 4, which must print `"baseline":"confirmed"`.
