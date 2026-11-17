@@ -4,12 +4,32 @@ import type { T212Env } from "./t212.ts";
 import { isDryRun, resolveLimits } from "./state.ts";
 import { executionSessionOpen } from "../../convex/executionCalendar.ts";
 import { researchDay, researchSession } from "../../convex/shadowCalendar.ts";
+import { resolveFencedOrder } from "./order-resolution.ts";
+import type { BrokerGet } from "./reconcile-execution.ts";
+import type { ExecutionScope } from "./execution-context.ts";
+
+function resolutionStores(scope: ExecutionScope) {
+  return scope.reconciliation && scope.inventory
+    ? { coordination: scope.store, reconciliation: scope.reconciliation, inventory: scope.inventory } : undefined;
+}
+
+/** A fence left by an earlier run (crash, slow fill) must resolve before this scope touches the broker. */
+function recoverEarlierFence(scope: ExecutionScope, get: BrokerGet): Promise<void> {
+  const stores = resolutionStores(scope);
+  if (!stores) return Promise.resolve();
+  return scope.recovery ??= (async () => {
+    const { env, account } = scope.identity;
+    if (!(await scope.store.status({ env, account })).unresolvedWrite) return;
+    await resolveFencedOrder({ env, account, stores, get, signal: scope.signal, wait: scope.wait, attempts: 2, acceptFilled: false });
+  })();
+}
 
 /** One physical attempt; no retry crosses this boundary without durable readmission. */
 export async function coordinatedBrokerRequest<T>(args: { env: T212Env; method: string; path: string; body?: unknown;
-  send: (signal: AbortSignal) => Promise<Response>; error: (status: number, text: string) => Error }): Promise<T> {
+  send: (signal: AbortSignal) => Promise<Response>; error: (status: number, text: string) => Error; get: BrokerGet }): Promise<T> {
   const scope = executionScope();
   if (scope.identity.env !== args.env) throw new Error("Broker environment does not match execution owner");
+  await recoverEarlierFence(scope, args.get);
   const read = args.method === "GET";
   const body = args.body as { ticker?: unknown; quantity?: unknown } | undefined;
   const ticker = typeof body?.ticker === "string" ? body.ticker : "";
@@ -62,7 +82,11 @@ export async function coordinatedBrokerRequest<T>(args: { env: T212Env; method: 
   const filled = matches && order?.status === "FILLED" && typeof order.filledQuantity === "number" &&
     Math.abs(Math.abs(order.filledQuantity) - Math.abs(quantity)) < 1e-9;
   await settle(filled ? "filled" : matches ? "pending" : "unknown", id === undefined ? {} : { brokerOrderId: id });
-  // Do not pass even FILLED acknowledgements into legacy position/P&L bookkeeping.
-  // A filled SELL can leave a residual position; D reconciliation is a later reviewed slice.
-  throw new Error("Broker order requires reconciliation; no additional orders are admitted");
+  const stores = resolutionStores(scope);
+  if (!matches || !stores) throw new Error("Broker order requires reconciliation; no additional orders are admitted");
+  // Only a complete broker history, booked into the ledger, returns the order to the caller.
+  const resolved = await resolveFencedOrder({ env: scope.identity.env, account: scope.identity.account, stores,
+    get: args.get, signal: scope.signal, wait: scope.wait, handoff: lease, acceptFilled: true });
+  if (resolved.classification === "rejected") throw args.error(400, JSON.stringify({ detail: "Order ended at the broker without a fill" }));
+  return { ...order, status: "FILLED", filledQuantity: order!.quantity } as T;
 }

@@ -5,17 +5,22 @@ import type { OrderEvidence, ReconciliationLease, ReconciliationStore } from "./
 import { brokerFillProofs } from "./broker-fill-proofs.ts";
 
 const hosts = { demo: "https://demo.trading212.com/api/v0", live: "https://live.trading212.com/api/v0" };
+export type BrokerGet = (path: string, signal: AbortSignal) => Promise<Response>;
 export interface ReconciliationConfig {
-  identity: ExecutionIdentity; store: ReconciliationStore; apiKey: string; apiSecret: string;
-  fetchImpl?: typeof fetch; signal?: AbortSignal;
+  identity: ExecutionIdentity; store: ReconciliationStore; signal?: AbortSignal;
+  /** The live order owner hands its acknowledged order over without waiting for lease expiry. */
+  handoff?: { owner: string; generation: number };
+  get?: BrokerGet; apiKey?: string; apiSecret?: string; fetchImpl?: typeof fetch;
 }
 
 /** Operator-only, bounded GET plan. There is no order method or fence-clear capability. */
-export async function reconcileExecution(cfg: ReconciliationConfig): Promise<OrderEvidence & { canClearFence: false }> {
-  const order = await cfg.store.claim(cfg.identity); // Never touch the broker without durable admission.
+export async function reconcileExecution(cfg: ReconciliationConfig): Promise<OrderEvidence & { receiptId: string; canClearFence: false }> {
+  // Never touch the broker without durable admission.
+  const order = await cfg.store.claim({ ...cfg.identity, ...(cfg.handoff ? { handoff: cfg.handoff } : {}) });
   const lease: ReconciliationLease = { ...cfg.identity, generation: order.generation, operationId: order.operationId };
-  const send = cfg.fetchImpl ?? fetch;
   const auth = "Basic " + Buffer.from(`${cfg.apiKey}:${cfg.apiSecret}`).toString("base64");
+  const get: BrokerGet = cfg.get ?? ((path, signal) =>
+    (cfg.fetchImpl ?? fetch)(hosts[cfg.identity.env] + path, { method: "GET", headers: { Authorization: auth }, signal }));
   async function read(kind: "pending" | "history" | "portfolio", cursor?: number): Promise<unknown> {
     for (let attempt = 0; ; attempt++) {
       cfg.signal?.throwIfAborted();
@@ -28,7 +33,7 @@ export async function reconcileExecution(cfg: ReconciliationConfig): Promise<Ord
       const signal = AbortSignal.any([AbortSignal.timeout(15_000), ...(cfg.signal ? [cfg.signal] : [])]);
       let response: Response, text: string;
       try {
-        response = await send(hosts[cfg.identity.env] + admitted.path, { method: "GET", headers: { Authorization: auth }, signal });
+        response = await get(admitted.path, signal);
         text = await response.text();
       } catch {
         await settle("read-failed").catch(() => {});
@@ -77,6 +82,6 @@ export async function reconcileExecution(cfg: ReconciliationConfig): Promise<Ord
   const evidence = classifyOrderEvidence(order, pending, rows, historyComplete, portfolio);
   const observedAt = Date.now();
   const fills = brokerFillProofs(order, rows, evidence, observedAt);
-  await cfg.store.finish({ ...lease, observedAt, evidence, ...(fills === undefined ? {} : { fills }) });
-  return { ...evidence, canClearFence: false };
+  const { receiptId } = await cfg.store.finish({ ...lease, observedAt, evidence, ...(fills === undefined ? {} : { fills }) });
+  return { ...evidence, receiptId, canClearFence: false };
 }

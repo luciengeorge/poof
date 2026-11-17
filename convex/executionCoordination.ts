@@ -135,6 +135,37 @@ export const settle = mutation({
   },
 });
 
+/** Clears a write fence only after a complete broker history proved a terminal outcome and the
+ * isolated ledger booked that exact receipt. Partial, pending and unmatched orders stay fenced. */
+export const resolve = mutation({
+  args: { ...identity, evidenceId: v.id("executionEvidence") },
+  handler: async (ctx, args) => {
+    authorize(args);
+    const account = await ctx.db.query("executionAccounts").withIndex("by_env_and_account", q => q.eq("env", args.env).eq("account", args.account)).unique();
+    const evidence = await ctx.db.get("executionEvidence", args.evidenceId);
+    const op = evidence && await ctx.db.get("executionOperations", evidence.operationId);
+    if (!account || !evidence || !op || evidence.env !== args.env || evidence.account !== args.account || op.env !== args.env ||
+        op.account !== args.account || op.kind !== "write" || account.activeWrite !== op._id || account.activeReads.length ||
+        account.owner !== "" || account.leaseUntil !== 0 || account.reconciliationFor || account.generation !== evidence.generation ||
+        evidence.brokerOrderId !== op.brokerOrderId || !["filled", "pending", "unknown"].includes(op.state))
+      throw new Error("Fence release requires current reconciled evidence");
+    const receipt = await ctx.db.query("inventoryReceipts").withIndex("by_evidenceId", q => q.eq("evidenceId", evidence._id)).unique();
+    const e = evidence.evidence;
+    const filled = e.classification === "filled" && e.filledQuantity !== undefined && Math.abs(e.filledQuantity - Math.abs(op.quantity)) <= 1e-9;
+    const rejected = e.classification === "rejected" && e.filledQuantity === 0;
+    if (!receipt || receipt.operationId !== op._id || e.reason !== "matched-history" || !e.historyComplete || (!filled && !rejected))
+      throw new Error("Order outcome not terminal; account remains fenced");
+    const now = Date.now();
+    await ctx.db.patch("executionOperations", op._id, { state: filled ? "reconciled-filled" : "reconciled-rejected", finishedAt: now });
+    await ctx.db.patch("executionAccounts", account._id, { activeWrite: undefined });
+    if (rejected) {
+      const reservation = await ctx.db.query("executionEntries").withIndex("by_operationId", q => q.eq("operationId", op._id)).unique();
+      if (reservation) await ctx.db.patch("executionEntries", reservation._id, { released: true });
+    }
+    return { classification: filled ? "filled" as const : "rejected" as const, filledQuantity: e.filledQuantity! };
+  },
+});
+
 export const release = mutation({
   args: owner,
   handler: async (ctx, args) => {
@@ -166,6 +197,6 @@ export const status = query({
     authorize(args, false);
     const row = await ctx.db.query("executionAccounts").withIndex("by_env_and_account", q => q.eq("env", args.env).eq("account", args.account)).unique();
     return { draining: row?.draining ?? false, activeReads: row?.activeReads.length ?? 0,
-      unresolvedWrite: !!row?.activeWrite, leaseUntil: row?.leaseUntil ?? null };
+      unresolvedWrite: !!row?.activeWrite, leaseUntil: row?.leaseUntil ?? null, inventoryInitialized: row?.inventoryInitialized ?? false };
   },
 });
