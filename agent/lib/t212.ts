@@ -149,7 +149,7 @@ export class T212Client {
     body?: unknown,
   ): Promise<T> {
     if (coordinationEnabled()) {
-      if (method !== "GET") await this.preflight();
+      if (method !== "GET") await this.prepareExecution();
       for (let attempt = 0; ; attempt++) {
         let responseHeaders: Headers | undefined;
         try {
@@ -200,7 +200,7 @@ export class T212Client {
   /** Before the first order of a scope: the key must belong to the configured GBP account, and the
    * isolated ledger must adopt (or exactly confirm) the broker's holdings with nothing pending.
    * Any failure blocks every automatic order, SELLs included, for the rest of the scope. */
-  private preflight(): Promise<void> {
+  prepareExecution(): Promise<void> {
     const scope = executionScope();
     if (!scope.inventory) return Promise.resolve();
     const inventory = scope.inventory;

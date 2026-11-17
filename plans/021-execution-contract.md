@@ -186,3 +186,26 @@ the in-cycle budget, or claimed by another tool call between retries) stays fenc
 operator records the trade, then runs `scripts/reconcile-execution.ts --resolve --accept-filled`.
 Until then that tool call fails: no reads, no orders. An unacknowledged send (no broker ID)
 still requires manual audit and is never resent.
+
+
+## Activation and rollback runbook
+
+Operator steps, all outside the 14:30–16:30 UTC weekday cycle window, the 18:00 UTC weekday
+catch-up cycle and any protected deploy window. Steps 4 and 5 must fall in the same quiet window:
+any serving-path order between them is missing from the baseline and fails the first live check.
+Broker access in steps 1 and 4 is read-only.
+
+1. `TRADING212_ENV=live … node scripts/execution-prepare.ts --account-id` prints the key's
+   broker account ID and currency. It must be GBP.
+2. Set `EXECUTION_ACCOUNT_ID` to that ID on **both** Convex prod and Vercel prod.
+3. Convex prod: `EXECUTION_COORDINATION_ENABLED=true`. Vercel is still off, so the serving
+   path is unchanged; the Convex APIs still require the shared secret.
+4. Run `node scripts/execution-prepare.ts` against prod Convex. It verifies the account and
+   adopts the ledger baseline (zero pending orders required), then releases its owner.
+5. Vercel prod: `EXECUTION_COORDINATION_ENABLED=true`, redeploy, confirm the exact deployment
+   is READY. The next cycle uses the new path.
+
+Rollback: Vercel `EXECUTION_COORDINATION_ENABLED=false` and redeploy; the serving path resumes.
+Orders placed while rolled back are invisible to the ledger, so re-enabling after any trade
+fails the baseline confirmation (manual audit) by design. Drill before the first live cycle:
+off → redeploy → on → redeploy, then re-run step 4, which must print `"baseline":"confirmed"`.
