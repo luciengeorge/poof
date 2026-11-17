@@ -1,4 +1,5 @@
 import { createShadowStore, type ShadowStore } from "./shadow/store.ts";
+import { createExecutionStore, type ExecutionStore } from "./execution-store.ts";
 import { ConvexHttpClient } from "convex/browser";
 import type { Edit, MemoryRow } from "../../convex/memoryPolicy.ts";
 import { anyApi, type FunctionReference } from "convex/server";
@@ -340,6 +341,10 @@ export class Memory {
       (name, args) => this.query(name, args, "shadow"),
       (name, args) => this.mutation(name, args, "shadow"),
     );
+  }
+  executionStore(): ExecutionStore {
+    return createExecutionStore((name, args) => this.query(name, args, "executionCoordination"),
+      (name, args) => this.mutation(name, args, "executionCoordination"));
   }
 
   recordConfirmedSnapshot(args: { env: Env; observedAt: number;
