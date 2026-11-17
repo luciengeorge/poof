@@ -1,4 +1,5 @@
 import type { ToolDefinition } from "eve/tools";
+import { withExecutionContext } from "./execution-context.ts";
 
 interface CallerContext {
   session?: { auth: { current?: { attributes?: Record<string, unknown> } | null } };
@@ -12,6 +13,6 @@ export const AMBIENT_TOOLS = new Set(["get_funnel", "get_prices", "get_earnings_
 export function withAmbientReadOnly<I, O>(name: string, tool: ToolDefinition<I, O>): ToolDefinition<I, O> {
   return { ...tool, execute(input, ctx) {
     if (isAmbient(ctx) && !AMBIENT_TOOLS.has(name)) throw new Error("Ambient conversation cannot use this tool");
-    return tool.execute(input, ctx);
+    return withExecutionContext(ctx, () => tool.execute(input, ctx));
   } };
 }

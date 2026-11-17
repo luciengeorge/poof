@@ -1,6 +1,6 @@
 # Plan 021: execution contract for later D–F
 
-Design only. No runtime account ownership or extra live trading cadence is introduced by A–C.
+A–C introduced observation only. D is being implemented behind a disabled switch; no extra live trading cadence is active.
 
 One account owner must cover every physical broker caller: stock/core orders, mechanical
 exits, scheduled/manual cycles, catch-up, reconciliation and future second reviews. Acquiring
@@ -25,9 +25,11 @@ update only reconciled quantities and P&L, and preserve the generation until clo
 Re-entry creates a new generation. Do not reuse ticker/day-only exit keys. Do not close all
 BUY history merely because a single SELL was accepted.
 
-The current SELL path sends before intent bookkeeping and permits exits when bookkeeping
-fails. That fail-open rule conflicts with strict account ownership. D must resolve and test
-the policy explicitly before E/F; it is not silently changed by an observer feature.
+The serving SELL path sends before intent bookkeeping and permits exits when bookkeeping
+fails. **Explicit user decision, 17 Nov 2026:** in the new execution mode, unverifiable
+account ownership blocks ALL automatic orders, including SELLs. Manual exits in the broker
+remain available. The disabled mode must test this policy for every physical send. Existing
+serving behavior remains until the new mode passes D acceptance and is deliberately activated.
 
 VUAG funding and sweeps require a separate London-session resolver with UK holidays, early
 closes and US/UK DST mismatch weeks. An afternoon US review cannot sell/fund/sweep the core
@@ -46,3 +48,41 @@ ET reviews after D, with at most two scheduled starts and slot-aware catch-up/wa
 First measure incremental afternoon decisions with read-only capabilities. Both require a
 separate reviewed change, activation decision and rollback drill; no forecast gains authority
 to sell VUAG, open shorts or change risk limits.
+
+
+## D implementation stages (17 Nov 2026)
+
+The first disabled admission slice is deliberately **not activation-ready**. It installs
+one account/environment fence at the Trading 212 physical request boundary, persists
+`sending` before fetch, renews admission on each GET retry, and never retries an ambiguous
+POST (including 429 or an unreadable body). Only a definitive validation rejection permits
+one smaller precision retry. `DRY_RUN` also blocks direct physical writes in this mode.
+Concurrent snapshot GETs are allowed for one owner; writes require no active reads or write.
+Expired leases and process restarts never clear write I/O. A GET with lost settlement
+can expire with its lease because it has no order side effect: mark it read-abandoned,
+bump ownership generation and reject any late result or settlement. Drain can perform
+the same read recovery, while any active write remains fenced. Immediately before fetch,
+recheck expiry, cancellation and market hours after any admission delay; proven non-sends
+release their reservation. Drain blocks new admission and
+only reports quiescence after settled requests; it cannot stop legacy workers.
+
+The atomic ET-day reservation includes serving-mode stock BUYs before the new mode's
+first reservation. This first disabled slice deliberately counts **all stock BUYs, including
+top-ups**, which is stricter than risk.ts's new-position count. It is not a completed
+implementation of that risk rule. Admission uses the application's resolved
+`maxNewPositionsPerDay` from `TRADING_MAX_NEW_POSITIONS_PER_DAY` (default four), accepts
+only integer limits zero through four, and freezes the limit with the first reservation.
+A larger limit or a different limit mid-day fails closed with an explicit configuration
+error. Reconciliation must supply confirmed holdings/generations before a later reviewed
+slice can exempt top-ups and claim parity with the new-position risk rule. Unknown/pending/filled acknowledgements all retain both account fence
+and reservation. Even a complete FILLED response is not returned into legacy bookkeeping:
+it proves neither flat position quantity nor reconciled P&L. The first slice intentionally
+has **no automatic fence-clear/reconciliation API**. Manual broker exits remain available.
+It is for disabled implementation/testing, not an operational rollout.
+
+Before enabling: implement exclusive reconciliation reads and matching order/fill proof,
+partial/residual position generations and idempotent bookkeeping; handle same-day re-entry
+without ticker/day-only exit keys; verify stable broker account identity; prove serving
+workers are drained across deploys, exercise recovery and rollback, then review/activate
+separately. Never infer non-placement from an empty portfolio/history page or elapsed time.
+No additional live cadence or scheduled review is introduced by this first slice.

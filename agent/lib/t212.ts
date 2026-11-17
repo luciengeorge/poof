@@ -3,6 +3,8 @@ import { isDryRun } from "./state.ts";
 import { tradingEnv } from "./risk-runtime.ts";
 import { fakeT212Fetch } from "./t212-fake.ts";
 import { ACCOUNT_SNAPSHOT_READ_SKEW_TOLERANCE_MS } from "./execution.ts";
+import { coordinationEnabled } from "./execution-context.ts";
+import { coordinatedBrokerRequest } from "./coordinated-transport.ts";
 
 export type T212Env = "demo" | "live";
 export type TimeValidity = "DAY" | "GTC";
@@ -102,6 +104,7 @@ interface CacheEntry<T> {
 }
 
 export class T212Client {
+  private readonly env: T212Env;
   private readonly base: string;
   private readonly auth: string;
   private readonly fetchImpl: typeof fetch;
@@ -111,6 +114,7 @@ export class T212Client {
   private snapshotCache: CacheEntry<BrokerAccountSnapshot> | null = null;
 
   constructor(cfg: T212Config) {
+    this.env = cfg.env;
     this.base = HOSTS[cfg.env];
     this.auth = buildAuthHeader(cfg.apiKey, cfg.apiSecret);
     this.fetchImpl = cfg.fetchImpl ?? fetch;
@@ -142,6 +146,29 @@ export class T212Client {
     path: string,
     body?: unknown,
   ): Promise<T> {
+    if (coordinationEnabled()) {
+      for (let attempt = 0; ; attempt++) {
+        let responseHeaders: Headers | undefined;
+        try {
+          return await coordinatedBrokerRequest<T>({ env: this.env, method, path, body,
+            send: async signal => {
+              // Invalidate before every write attempt, including unknown outcomes.
+              if (method !== "GET") { this.cashCache = null; this.portfolioCache = null; this.snapshotCache = null; }
+              const response = await this.fetchImpl(`${this.base}${path}`, { method, signal,
+                headers: { Authorization: this.auth, ...(body !== undefined ? { "Content-Type": "application/json" } : {}) },
+                body: body !== undefined ? JSON.stringify(body) : undefined });
+              responseHeaders = response.headers;
+              this.captureRateLimit(response.headers);
+              return response;
+            }, error: (status, text) => new T212Error(status, text) });
+        } catch (error) {
+          // GETs can retry safely, but each physical attempt renews ownership and
+          // obtains a new durable admission. No POST, including a 429, retries here.
+          if (method !== "GET" || !(error instanceof T212Error) || error.status !== 429 || attempt >= 3) throw error;
+          await sleep(retryDelayMs(responseHeaders ?? new Headers(), attempt));
+        }
+      }
+    }
     // The T212 API is tightly rate-limited (some endpoints 1 req / few seconds). Back off
     // and retry on 429 honoring Retry-After / the reset window, so a cycle's several reads
     // don't fail on a transient limit.
