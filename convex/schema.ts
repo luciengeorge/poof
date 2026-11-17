@@ -1,12 +1,21 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 import { shadowTables } from "./shadowTables";
+import { confirmedPosition } from "./operationalTypes";
 
 // Durable memory for the trading agent. Every row is env-tagged ("demo" | "live")
 // so dry-run/demo data never mixes with live history. _id and _creationTime are
 // added automatically by Convex.
 export default defineSchema({
   ...shadowTables,
+  confirmedPositionSnapshots: defineTable({ env: v.union(v.literal("demo"), v.literal("live")),
+    observedAt: v.number(), recordedAt: v.number(), positions: v.array(confirmedPosition),
+    source: v.literal("cycle-broker-read"), pendingOrders: v.literal("unverified"),
+  }).index("by_env_and_observedAt", ["env", "observedAt"]),
+  ambientReceipts: defineTable({ env: v.union(v.literal("demo"), v.literal("live")),
+    sessionId: v.string(), turnId: v.string(), receivedAt: v.optional(v.number()), settledAt: v.optional(v.number()),
+    outcome: v.optional(v.union(v.literal("completed"), v.literal("failed"), v.literal("cancelled"))),
+  }).index("by_env_and_sessionId_and_turnId", ["env", "sessionId", "turnId"]).index("by_env", ["env"]),
   riskState: defineTable({
     env: v.string(),
     peakEquity: v.number(),

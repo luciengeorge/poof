@@ -10,6 +10,7 @@ import { tradingEnv } from "../lib/risk-runtime.ts";
 import { isDryRun } from "../lib/state.ts";
 import { CORE_TICKER } from "../lib/core.ts";
 import { coreOrderRecord, sweepCore } from "../lib/core-orders.ts";
+import { publishConfirmedSnapshot } from "../lib/confirmed-snapshot.ts";
 
 export default withAmbientReadOnly("record_cycle", defineTool({
   description:
@@ -55,6 +56,8 @@ export default withAmbientReadOnly("record_cycle", defineTool({
         watchlist,
         fx,
       }));
+      await publishConfirmedSnapshot(account, env, memoryFromEnv(undefined, { timeoutMs: 1_500 }),
+        isDryRun() || process.env.BROKER_FAKE === "true");
 
       // END-OF-CYCLE SWEEP of idle cash into the index core. It lives here, not in submit_orders,
       // because this is the one tool that runs LAST, after every order the cycle places; that runs

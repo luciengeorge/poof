@@ -342,6 +342,18 @@ export class Memory {
     );
   }
 
+  recordConfirmedSnapshot(args: { env: Env; observedAt: number;
+    positions: { ticker: string; quantity: number; averagePrice: number; currentPrice: number }[] }): Promise<unknown> {
+    return this.mutation("recordSnapshot", args, "operationalEvidence");
+  }
+  recordAmbientReceipt(args: { env: Env; sessionId: string; turnId: string; phase: "received" | "settled";
+    outcome?: "completed" | "failed" | "cancelled" }): Promise<unknown> {
+    return this.mutation("recordAmbient", args, "operationalEvidence");
+  }
+  operationalStatus(env: Env): Promise<unknown> {
+    return this.query("status", { env }, "operationalEvidence");
+  }
+
   recordTrade(t: TradeRecord): Promise<unknown> {
     return this.mutation("recordTrade", { ...t });
   }
