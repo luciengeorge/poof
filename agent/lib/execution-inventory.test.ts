@@ -166,6 +166,46 @@ test("a positive broker residual, however small, never closes the position gener
   const row = (await generations())[0]; assert.equal(row.status, "open"); assert.equal(row.quantity, 1e-10); assert.equal(row.closedAt, undefined);
 });
 
+test("fractional top-up refresh compares broker basis observations without replacing the fill-derived basis", async t => {
+  const { baseline, order, evidence, apply, generations, nextOrderFixture } = setup(t); await baseline();
+  const quantity = 0.333333333, residual = 1 + quantity, price = 120.1234567;
+  const target = await order(quantity);
+  await apply(await evidence(target, quantity, residual, [fill(80, quantity, 0, price)]));
+  const computed = (100 + quantity * price) / residual;
+  let row = (await generations())[0];
+  assert.equal(row.averagePrice, computed); assert.equal(row.brokerAveragePrice, undefined);
+  await nextOrderFixture();
+  const broker = { ticker, quantity: residual, averagePrice: 105.0309 };
+  assert.equal((await baseline([broker])).canDispatch, false);
+  await baseline([broker]);
+  row = (await generations())[0];
+  assert.equal(row.averagePrice, computed); assert.equal(row.brokerAveragePrice, broker.averagePrice);
+  assert.equal(row.generation, 1); assert.equal(row.realizedPnlGbp, 0); assert.equal(row.openedAt, undefined);
+  await assert.rejects(baseline([{ ...broker, quantity: residual + 1e-10 }]), /manual audit/);
+  await assert.rejects(baseline([{ ...broker, averagePrice: broker.averagePrice + 1 }]), /manual audit/);
+  assert.deepEqual((await generations())[0], row);
+});
+
+test("a new BUY's rounded broker basis is confirmed separately and survives a partial SELL", async t => {
+  const { baseline, order, evidence, apply, generations, nextOrderFixture } = setup(t); await baseline([]);
+  const target = await order(0.3), price = 101.123456;
+  await apply(await evidence(target, 0.3, 0.3, [fill(90, 0.3, 0, price)]));
+  await nextOrderFixture();
+  const broker = { ticker, quantity: 0.3, averagePrice: 101.1235 };
+  await baseline([broker]);
+  let row = (await generations())[0];
+  assert.equal(row.origin, "reconciled-buy"); assert.equal(row.averagePrice, price);
+  assert.equal(row.brokerAveragePrice, broker.averagePrice);
+  const sell = await order(-0.1);
+  await apply(await evidence(sell, 0.1, 0.2, [fill(91, 0.1, 1)]));
+  await nextOrderFixture();
+  await baseline([{ ...broker, quantity: 0.2 }]);
+  row = (await generations())[0];
+  assert.equal(row.status, "open"); assert.equal(row.generation, 1); assert.equal(row.quantity, 0.2);
+  assert.equal(row.averagePrice, price); assert.equal(row.brokerAveragePrice, broker.averagePrice);
+  assert.equal(row.realizedPnlGbp, 1);
+});
+
 test("realized loss uses the broker's GBP amount rather than a guessed native-price conversion", async t => {
   const { baseline, order, evidence, apply, generations } = setup(t); await baseline();
   const target = await order(-1), a = fill(60, 1, -7, 90);

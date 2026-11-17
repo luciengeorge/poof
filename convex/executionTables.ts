@@ -28,6 +28,7 @@ export const executionTables = {
   }).index("by_env_and_account_and_owner", ["env", "account", "owner"]),
   positionGenerations: defineTable({ env: shadowEnv, account: v.string(), ticker: v.string(), generation: v.number(),
     status: v.union(v.literal("open"), v.literal("closed")), quantity: v.number(), averagePrice: v.number(),
+    brokerAveragePrice: v.optional(v.number()),
     instrumentCurrency: v.union(v.literal("USD"), v.literal("GBP")), realizedPnlGbp: v.number(),
     origin: v.union(v.literal("broker-baseline"), v.literal("reconciled-buy")),
     openedAt: v.optional(v.number()), closedAt: v.optional(v.number()), observedAt: v.number(),

@@ -132,7 +132,11 @@ The disabled inventory stage adopts a fresh baseline only under the current acco
 with no active I/O, no unresolved order and a verified zero pending-order count. It never
 infers a baseline from a post-order portfolio. Baseline origin and observation time are
 recorded without inventing the original entry date; later baseline refreshes must match
-existing quantities/basis and cannot overwrite a manual change or corporate action.
+existing quantities exactly and compare an already confirmed broker basis against later
+broker observations. The fill-derived average is retained separately: after a BUY, the
+first quantity-matching refresh establishes a new broker basis without comparing broker
+rounding/fees with our weighted fill calculation. Later broker-basis changes require audit;
+refresh never overwrites the computed basis or infers a manual change/corporate-action repair.
 
 For an acknowledged order, the read-only collector can seal normalized GBP-wallet fills
 inside its immutable reconciliation receipt. Bookkeeping accepts only the receipt ID,

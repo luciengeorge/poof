@@ -34,8 +34,13 @@ export const baseline = mutation({
     if (account.inventoryInitialized) {
       if (open.some(g => args.positionsReadAt < g.observedAt)) throw new Error("Baseline observations precede reconciled inventory");
       if (open.length !== args.positions.length || args.positions.some(p => !open.some(g => g.ticker === p.ticker &&
-          close(g.quantity, p.quantity) && close(g.averagePrice, p.averagePrice)))) throw new Error("Broker inventory changed; manual audit required");
-      for (const g of open) await ctx.db.patch("positionGenerations", g._id, { observedAt: args.positionsReadAt });
+          g.quantity === p.quantity && (g.brokerAveragePrice === undefined || close(g.brokerAveragePrice, p.averagePrice)))))
+        throw new Error("Broker inventory changed; manual audit required");
+      // Broker rounding/fees need not match our fill-derived basis. Confirm a separate
+      // broker basis after a BUY; subsequent refreshes compare broker observations only.
+      for (const g of open) await ctx.db.patch("positionGenerations", g._id, {
+        observedAt: args.positionsReadAt, brokerAveragePrice: args.positions.find(p => p.ticker === g.ticker)!.averagePrice,
+      });
     } else {
       if (open.length) throw new Error("Inventory baseline already exists");
       for (const p of args.positions) {
@@ -43,7 +48,8 @@ export const baseline = mutation({
           q.eq("env", args.env).eq("account", args.account).eq("ticker", p.ticker)).order("desc").first();
         if (prior) throw new Error("Inventory history requires manual audit");
         await ctx.db.insert("positionGenerations", { env: args.env, account: args.account, ticker: p.ticker, generation: 1,
-          status: "open", quantity: p.quantity, averagePrice: p.averagePrice, instrumentCurrency: p.ticker === "VUAGl_EQ" ? "GBP" : "USD",
+          status: "open", quantity: p.quantity, averagePrice: p.averagePrice, brokerAveragePrice: p.averagePrice,
+          instrumentCurrency: p.ticker === "VUAGl_EQ" ? "GBP" : "USD",
           realizedPnlGbp: 0, origin: "broker-baseline", observedAt: args.positionsReadAt });
       }
       await ctx.db.patch("executionAccounts", account._id, { inventoryInitialized: true });
@@ -123,6 +129,7 @@ export const apply = mutation({
         if (!Number.isFinite(averagePrice) || averagePrice <= 0) throw new Error("Invalid inventory basis");
         await ctx.db.patch("positionGenerations", latest._id, { quantity: e.positionQuantity, averagePrice, realizedPnlGbp,
           status: e.positionQuantity === 0 ? "closed" : "open", observedAt: evidence.observedAt,
+          ...(op.quantity > 0 ? { brokerAveragePrice: undefined } : {}),
           ...(e.positionQuantity === 0 ? { closedAt: Math.max(...novel.map(r => r.fill.filledAt)) } : {}) });
       }
       for (const row of novel) await ctx.db.insert("reconciledFills", { env: args.env, account: args.account, operationId: op._id,
